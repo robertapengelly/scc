@@ -114,10 +114,13 @@ static void print_usage (void) {
         fprintf (stderr, "                                      <standard>.\n");
         fprintf (stderr, "                                          Currently only C89 and C90 are\n");
         fprintf (stderr, "                                          supported.\n");
-        fprintf (stderr, "    -mlong64                          Convert long to 64-bit.\n");
         fprintf (stderr, "    -masm=<syntax>                    Output <systax> compatible syntax.\n");
         fprintf (stderr, "                                          Defaults to MASM but also supports\n");
         fprintf (stderr, "                                          GNU AT&T, GNU INTEL and NASM.\n");
+        fprintf (stderr, "\n");
+        fprintf (stderr, "    -fno-leading-underscore           Don't prefix symbols with an underscore.\n");
+        fprintf (stderr, "    -mlong64                          Convert long to 64-bit.\n");
+        fprintf (stderr, "\n");
         fprintf (stderr, "    -P                                Don't print linemarkers.\n");
         fprintf (stderr, "    -o OBJFILE                        Name the object-file output OBJFILE.\n");
         
