@@ -8,20 +8,20 @@ CC                  :=  gcc
 CFLAGS              :=  -D_FILE_OFFSET_BITS=64 -O2 -Wall -Werror -Wextra -std=c90
 
 CC_SRC              :=  $(wildcard $(SRCDIR)/*.c)
-VERSION             :=  $(shell date '+%Y%m%d')
+#VERSION             :=  $(shell date '+%Y%m%d')
 
 ifeq ($(OS), Windows_NT)
 all: scc.exe
 
 scc.exe: $(CC_SRC)
 
-	$(CC) $(CFLAGS) -DVERSION=$(VERSION) -o $@ $^
+	$(CC) $(CFLAGS) -DVERSION="20260520" -o $@ $^
 else
 all: scc
 
 scc: $(CC_SRC)
 
-	$(CC) $(CFLAGS) -DVERSION=$(VERSION) -o $@ $^
+	$(CC) $(CFLAGS) -DVERSION="20260520" -o $@ $^
 endif
 
 clean:

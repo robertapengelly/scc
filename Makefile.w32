@@ -13,7 +13,7 @@ all: scc.exe
 
 scc.exe: $(CC_SRC)
 
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) -DVERSION="20260520" -o $@ $^
 
 clean:
 
