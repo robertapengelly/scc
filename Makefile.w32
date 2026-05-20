@@ -1,0 +1,21 @@
+#******************************************************************************
+# @file             Makefile.w32
+#******************************************************************************
+SRCDIR              ?=  $(CURDIR)
+VPATH               :=  $(SRCDIR)
+
+CC                  :=  gcc
+CFLAGS              :=  -D_FILE_OFFSET_BITS=64 -O2 -Wall -Werror -Wextra -std=c90
+
+CC_SRC              :=  $(wildcard $(SRCDIR)/*.c)
+
+all: scc.exe
+
+scc.exe: $(CC_SRC)
+
+	$(CC) $(CFLAGS) -o $@ $^
+
+clean:
+
+	if exist scc.exe ( del /q scc.exe )
+	if exist scc ( del /q scc )

@@ -1,0 +1,30 @@
+#******************************************************************************
+# @file             Makefile.unix
+#******************************************************************************
+SRCDIR              ?=  $(CURDIR)
+VPATH               :=  $(SRCDIR)
+
+CC                  :=  gcc
+CFLAGS              :=  -D_FILE_OFFSET_BITS=64 -O2 -Wall -Werror -Wextra -std=c90
+
+CC_SRC              :=  $(wildcard $(SRCDIR)/*.c)
+VERSION             :=  $(shell date '+%Y%m%d')
+
+ifeq ($(OS), Windows_NT)
+all: scc.exe
+
+scc.exe: $(CC_SRC)
+
+	$(CC) $(CFLAGS) -DVERSION=$(VERSION) -o $@ $^
+else
+all: scc
+
+scc: $(CC_SRC)
+
+	$(CC) $(CFLAGS) -DVERSION=$(VERSION) -o $@ $^
+endif
+
+clean:
+
+	if [ -f scc.exe ]; then rm -rf scc.exe; fi
+	if [ -f scc ]; then rm -rf scc; fi
