@@ -5,7 +5,7 @@ SRCDIR              ?=  $(CURDIR)
 VPATH               :=  $(SRCDIR)
 
 CC                  :=  gcc
-CFLAGS              :=  -D_FILE_OFFSET_BITS=64 -O2 -Wall -Werror -Wextra -std=c90
+CFLAGS              :=  -D_FILE_OFFSET_BITS=64 -O2 -Wall -Werror -Wextra
 
 CC_SRC              :=  $(wildcard $(SRCDIR)/*.c)
 #VERSION             :=  $(shell date '+%Y%m%d')

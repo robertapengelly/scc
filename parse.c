@@ -2314,7 +2314,7 @@ static long inline_s32 (long v) {
     unsigned long u = inline_u32 (v);
     
     if (u & 0x80000000UL) {
-        return (long) (u - 0x100000000UL);
+        return -((long) ((~u + 1UL) & 0xffffffffUL));
     }
     
     return (long) u;
