@@ -6103,18 +6103,24 @@ struct local_init {
 
 };
 
+static int old_size = -1;
+
 static void switch_section (int sec) {
 
+    old_size = -1;
+    
     if (!state->ofp || current_section == sec) {
         return;
     }
     
     if (sec == SECTION_TEXT) {
     
-        if (state->syntax & ASM_SYNTAX_NASM) {
+        if (state->syntax & ASM_SYNTAX_MASM) {
+            fprintf (state->ofp, "\n%s\n", ".code");
+        } else if (state->syntax & ASM_SYNTAX_NASM) {
             fprintf (state->ofp, "section .text\n");
         } else {
-            fprintf (state->ofp, "%s\n", (state->syntax & ASM_SYNTAX_MASM ? ".code" : ".text"));
+            fprintf (state->ofp, "%s\n", ".text");
         }
     
     } else if (sec == SECTION_DATA) {
@@ -33130,7 +33136,55 @@ static void emit_global_scalar (int64_s value, int size) {
     unsigned long high = value.high;
     unsigned long low = value.low;
     
-    if ((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) {
+    if (state->syntax & ASM_SYNTAX_MASM) {
+    
+        if (old_size != size) {
+        
+            if (old_size != -1) {
+                fprintf (state->ofp, "\n");
+            }
+            
+            old_size = size;
+            
+            if (size == (DATA_CHAR & 0x1f)) {
+                fprintf (state->ofp, "db %ld", low & 0xFFUL);
+            } else if (size == (DATA_SHORT & 0x1f)) {
+                fprintf (state->ofp, "dw %ld", low & 0xFFFFUL);
+            } else if (size == (DATA_LLONG & 0x1f) || size == (DATA_DOUBLE & 0x1f)) {
+            
+                if (high & U32_MASK) {
+                    fprintf (state->ofp, "dq %lu", high & U32_MASK);
+                }
+                
+                fprintf (state->ofp, "dq %lu", low & U32_MASK);
+            
+            } else {
+                fprintf (state->ofp, "dd %lu", low & U32_MASK);
+            }
+        
+        } else {
+        
+            fprintf (state->ofp, ", ");
+            
+            if (size == (DATA_CHAR & 0x1f)) {
+                fprintf (state->ofp, "%ld", low & 0xFFUL);
+            } else if (size == (DATA_SHORT & 0x1f)) {
+                fprintf (state->ofp, "%ld", low & 0xFFFFUL);
+            } else if (size == (DATA_LLONG & 0x1f) || size == (DATA_DOUBLE & 0x1f)) {
+            
+                if (high & U32_MASK) {
+                    fprintf (state->ofp, "%lu", high & U32_MASK);
+                }
+                
+                fprintf (state->ofp, "%lu", low & U32_MASK);
+            
+            } else {
+                fprintf (state->ofp, "%lu", low & U32_MASK);
+            }
+        
+        }
+    
+    } else if (state->syntax & ASM_SYNTAX_NASM) {
     
         if (size == (DATA_CHAR & 0x1f)) {
             fprintf (state->ofp, "    db %ld\n", low & 0xFFUL);
@@ -33187,7 +33241,7 @@ static void emit_global_address (const char *symbol, int size) {
     asm_symbol = asm_global_symbol_name (symbol);
     
     if (state->syntax & ASM_SYNTAX_MASM) {
-        fprintf (state->ofp, "    dd offset %s\n", asm_symbol);
+        fprintf (state->ofp, "dd offset %s", asm_symbol);
     } else if (state->syntax & ASM_SYNTAX_NASM) {
         fprintf (state->ofp, "    dd %s\n", asm_symbol);
     } else {
@@ -33286,10 +33340,20 @@ static void emit_global_label (const char *name, int is_static) {
     if (state->syntax & ASM_SYNTAX_MASM) {
     
         if (!is_static) {
+        
+            if (current_section != SECTION_TEXT) {
+                fprintf (state->ofp, "\n");
+            }
+            
             fprintf (state->ofp, "public %s\n", asm_name);
+        
         }
         
-        fprintf (state->ofp, "%s:\n", asm_name);
+        if (current_section == SECTION_TEXT) {
+            fprintf (state->ofp, "%s:\n", asm_name);
+        } else {
+            fprintf (state->ofp, "%s ", asm_name);
+        }
     
     } else if (state->syntax & ASM_SYNTAX_NASM) {
     
