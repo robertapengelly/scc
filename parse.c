@@ -33904,7 +33904,7 @@ void compile_translation_unit (void) {
         if (state->syntax & ASM_SYNTAX_MASM) {
         
             fprintf (state->ofp, ".386\n");
-            fprintf (state->ofp, ".model flat, c\n");
+            fprintf (state->ofp, ".model flat\n");
         
         } else if (state->syntax & ASM_SYNTAX_NASM) {
         
