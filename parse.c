@@ -6857,7 +6857,12 @@ static void parse_type_spec (void) {
         
         } else if (tok.kind == TOK_DOUBLE) {
         
-            if (parsed_type_size == DATA_DOUBLE) {
+            if (parsed_type_size == DATA_LONG) {
+            
+                parsed_type_size = DATA_DOUBLE;
+                saw_double = 1;
+            
+            } else if (parsed_type_size == DATA_DOUBLE) {
                 report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate 'double'");
             } else if (parsed_type_size != DATA_NONE) {
                 report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "multiple data types in declaration specifiers");
