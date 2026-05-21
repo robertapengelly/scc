@@ -33296,7 +33296,7 @@ static void emit_global_space (long bytes) {
     }
     
     if (state->syntax & ASM_SYNTAX_MASM) {
-        fprintf (state->ofp, "    db %ld dup (0)\n", bytes);
+        fprintf (state->ofp, "    db %ld dup (?)\n", bytes);
     } else if (state->syntax & ASM_SYNTAX_NASM) {
         fprintf (state->ofp, "    resb %ld\n", bytes);
     } else {
