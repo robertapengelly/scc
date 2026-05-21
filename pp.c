@@ -44,9 +44,10 @@ static int handler_if (char *start, char **pp) {
         cond->line_number = get_line_number ();
         
         vec_push (&vec_ifstack, cond);
-        ret = !eval (start, pp);
         
-        cond->need_else = !ret;
+        if ((ret = !eval (start, pp))) {
+            cond->need_else = 1;
+        }
     
     } else {
         iflevel++;
@@ -87,6 +88,10 @@ static int handler_ifdef (char *start, char **pp) {
             sname = xstrndup (caret, *pp - caret);
             ret = (find_macro (sname) == NULL);
             
+            if ((ret = (find_macro (sname) == NULL))) {
+                cond->need_else = 1;
+            }
+            
             free (sname);
         
         }
@@ -96,8 +101,6 @@ static int handler_ifdef (char *start, char **pp) {
         if (!is_end_of_line[(int) **pp]) {
             report_line_at (get_filename (), get_line_number (), REPORT_WARNING, start, *pp, "extra tokens at end of #ifdef directive");
         }
-        
-        cond->need_else = !ret;
     
     } else {
         iflevel++;
@@ -136,7 +139,10 @@ static int handler_ifndef (char *start, char **pp) {
             }
             
             sname = xstrndup (caret, *pp - caret);
-            ret = !(find_macro (sname) == NULL);
+            
+            if ((ret = !(find_macro (sname) == NULL))) {
+                cond->need_else = 1;
+            }
             
             free (sname);
         
@@ -147,8 +153,6 @@ static int handler_ifndef (char *start, char **pp) {
         if (!is_end_of_line[(int) **pp]) {
             report_line_at (get_filename (), get_line_number (), REPORT_WARNING, start, *pp, "extra tokens at end of #ifndef directive");
         }
-        
-        cond->need_else = !ret;
     
     } else {
         iflevel++;
@@ -163,7 +167,7 @@ static int handler_elif (char *start, char **pp) {
     struct cond *cond;
     int ret = 1;
     
-    if (!ignore_line) {
+    if (!iflevel) {
     
         if (vec_ifstack.length == 0) {
         
@@ -183,11 +187,13 @@ static int handler_elif (char *start, char **pp) {
         
         }
         
-        if (ignore_line) {
-            ret = !eval (start, pp);
+        if (!cond->need_else) {
+            return ret;
         }
         
-        cond->need_else = !ret || !ignore_line;
+        if (!(ret = !eval (start, pp))) {
+            cond->need_else = 0;
+        }
     
     }
     
@@ -200,7 +206,7 @@ static int handler_else (char *start, char **pp) {
     struct cond *cond;
     int ret = 1;
     
-    if (!ignore_line) {
+    if (!iflevel) {
     
         if (vec_ifstack.length == 0) {
         
@@ -228,7 +234,7 @@ static int handler_else (char *start, char **pp) {
             report_line_at (get_filename (), get_line_number (), REPORT_WARNING, start, *pp, "extra tokens at end of #else directive");
         }
         
-        ret = cond->need_else;
+        ret = !cond->need_else;
     
     }
     
