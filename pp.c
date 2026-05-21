@@ -163,7 +163,7 @@ static int handler_elif (char *start, char **pp) {
     struct cond *cond;
     int ret = 1;
     
-    if (!iflevel) {
+    if (!ignore_line) {
     
         if (vec_ifstack.length == 0) {
         
@@ -200,7 +200,7 @@ static int handler_else (char *start, char **pp) {
     struct cond *cond;
     int ret = 1;
     
-    if (!iflevel) {
+    if (!ignore_line) {
     
         if (vec_ifstack.length == 0) {
         
