@@ -6375,9 +6375,12 @@ static int parse_deref_cast_type_name (int *out_size) {
         
             parse_declarator (&name);
             
-            if (declarator_is_pointer) {
-                size = DATA_PTR;
-            }
+            /*
+             * This parser is called after a leading unary '*', for forms such
+             * as *(long long *)p.  The '*' outside the cast performs the
+             * dereference, so the size needed by the caller is the pointed-at
+             * object size, not DATA_PTR.
+             */
         
         }
         
@@ -12480,6 +12483,11 @@ static void emit_copy_reg_now (const char *dst, const char *src) {
 
 }
 
+static void emit_load_assignment_rhs_to_reg (const char *reg);
+
+static int expression_text_has_pluseq_before_delim_now (const char *p);
+static int emit_parse_va_arg_address_to_reg_now (const char *reg, int size);
+
 static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
 
     if (_accept (TOK_LPAREN)) {
@@ -12691,6 +12699,51 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
         name_start = tok.start;
         name_caret = tok.caret;
         name_line = get_line_number ();
+        
+        if (tok.kind == TOK_LPAREN) {
+        
+            int cast_deref_size = DATA_INT & 0x1f;
+            
+            const char *addr_reg = (strcmp (lo, "ecx") != 0 && strcmp (hi, "ecx") != 0) ? "ecx" : "esi";
+            int handled_va_arg = 0;
+            
+            get_token ();
+            
+            if (is_type_start (tok.kind) && parse_deref_cast_type_name (&cast_deref_size)) {
+            
+                if (expression_text_has_pluseq_before_delim_now (tok.start)) {
+                    handled_va_arg = emit_parse_va_arg_address_to_reg_now (lo, cast_deref_size);
+                }
+                
+                if (!handled_va_arg) {
+                    emit_load_assignment_rhs_to_reg (lo);
+                }
+                
+                if ((cast_deref_size & 0x1f) == (DATA_LLONG & 0x1f)) {
+                
+                    emit_copy_reg_now (addr_reg, lo);
+                    emit_load_pair_from_deref_reg_now (lo, hi, addr_reg);
+                
+                } else {
+                
+                    emit_load_deref_reg_now (lo, cast_deref_size);
+                    emit_extend_pair_high_from_low (lo, hi, cast_deref_size, 1);
+                
+                }
+                
+                return;
+            
+            }
+            
+            emit_load_assignment_rhs_expression_to_reg (lo);
+            expect (TOK_RPAREN, ")");
+            
+            emit_load_deref_reg_now (lo, DATA_INT & 0x1f);
+            emit_extend_pair_high_from_low (lo, hi, DATA_INT & 0x1f, 1);
+            
+            return;
+        
+        }
         
         if (tok.kind != TOK_IDENT || !tok.ident) {
         
@@ -16275,8 +16328,6 @@ static int emit_parse_postfix_copy_source_address_now (const char *reg, struct l
     return have_address;
 
 }
-
-static void emit_load_assignment_rhs_to_reg (const char *reg);
 
 static void emit_load_floating_deref_reg_now (const char *reg, int size) {
 
