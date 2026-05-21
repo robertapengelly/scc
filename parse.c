@@ -6103,10 +6103,12 @@ struct local_init {
 
 };
 
+static int scalar_count = 0;
 static int old_size = -1;
 
 static void switch_section (int sec) {
 
+    scalar_count = 0;
     old_size = -1;
     
     if (!state->ofp || current_section == sec) {
@@ -33172,14 +33174,37 @@ static void emit_global_scalar (int64_s value, int size) {
         
         } else {
         
-            fprintf (state->ofp, ", ");
+            if (scalar_count > 8) {
+            
+                fprintf (state->ofp, "\n    ");
+                scalar_count = 0;
+            
+            } else {
+                fprintf (state->ofp, ", ");
+            }
             
             if (size == (DATA_CHAR & 0x1f)) {
+            
+                if (!scalar_count) {
+                    fprintf (state->ofp, "db ");
+                }
+                
                 fprintf (state->ofp, "%ld", low & 0xFFUL);
+            
             } else if (size == (DATA_SHORT & 0x1f)) {
+            
+                if (!scalar_count) {
+                    fprintf (state->ofp, "dw ");
+                }
+                
                 fprintf (state->ofp, "%ld", low & 0xFFFFUL);
+            
             } else if (size == (DATA_LLONG & 0x1f) || size == (DATA_DOUBLE & 0x1f)) {
             
+                if (!scalar_count) {
+                    fprintf (state->ofp, "dq ");
+                }
+                
                 if (high & U32_MASK) {
                     fprintf (state->ofp, "%lu", high & U32_MASK);
                 }
@@ -33187,10 +33212,18 @@ static void emit_global_scalar (int64_s value, int size) {
                 fprintf (state->ofp, "%lu", low & U32_MASK);
             
             } else {
+            
+                if (!scalar_count) {
+                    fprintf (state->ofp, "dd ");
+                }
+                
                 fprintf (state->ofp, "%lu", low & U32_MASK);
+            
             }
         
         }
+        
+        ++scalar_count;
     
     } else if (state->syntax & ASM_SYNTAX_NASM) {
     
@@ -33512,9 +33545,9 @@ static char *emit_string_literal_global (void) {
     int value_count = 0, i;
     
     if ((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) {
-        sprintf (label, "L%d", anon_label++);
+        sprintf (label, "LC%d", anon_label++);
     } else {
-        sprintf (label, ".L%d", anon_label++);
+        sprintf (label, ".LC%d", anon_label++);
     }
     
     parse_string_initializer_values (values, MAX_AGG_FIELDS, &value_count);
