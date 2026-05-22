@@ -1065,6 +1065,8 @@ static int find_kind (const char *start, const char *caret, const char *p) {
     static struct keyword kws[] = {
     
         /* Compiler Specific keywords */
+        {   "__dllexport",      0,          VERSION,    TOK_DLLEXPORT   },
+        
         {   "__asm__",          0,          VERSION,    TOK_ASM         },
         {   "__inline__",       0,          VERSION,    TOK_INLINE      },
         {   "__restrict__",     0,          VERSION,    TOK_RESTRICT    },

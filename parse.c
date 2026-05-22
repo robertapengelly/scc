@@ -12,6 +12,9 @@
 #include    "report.h"
 #include    "token.h"
 
+static struct vector vec_dllexports = { 0 };
+static int parsed_dllexport = 0;
+
 #define     SECTION_NONE                0
 #define     SECTION_TEXT                1
 #define     SECTION_DATA                2
@@ -6169,7 +6172,7 @@ static int is_type_start (enum token_kind k) {
     switch (k) {
     
         case TOK_AUTO:          case TOK_REGISTER:      case TOK_STATIC:
-        case TOK_EXTERN:        case TOK_TYPEDEF:       case TOK_INLINE:
+        case TOK_DLLEXPORT:     case TOK_EXTERN:        case TOK_TYPEDEF:       case TOK_INLINE:
         case TOK_CONST:         case TOK_VOLATILE:      case TOK_RESTRICT:
         case TOK_SIGNED:        case TOK_UNSIGNED:
         case TOK_SHORT:         case TOK_LONG:
@@ -6756,7 +6759,7 @@ static void parse_type_spec (void) {
            tok.kind == TOK_SHORT || tok.kind == TOK_LONG || tok.kind == TOK_CHAR ||
            tok.kind == TOK_INT || tok.kind == TOK_VOID || tok.kind == TOK_FLOAT ||
            tok.kind == TOK_DOUBLE || tok.kind == TOK_INLINE || tok.kind == TOK_RESTRICT ||
-           token_is_ms_int_type_name ()) {
+           tok.kind == TOK_DLLEXPORT || token_is_ms_int_type_name ()) {
         
         saw = 1;
         
@@ -6767,7 +6770,15 @@ static void parse_type_spec (void) {
             saw_real_type = 1;
         }
         
-        if (tok.kind == TOK_EXTERN) {
+        if (tok.kind == TOK_DLLEXPORT) {
+        
+            if (parsed_dllexport) {
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate '__dllexport'");
+            } else {
+                parsed_dllexport = 1;
+            }
+        
+        } else if (tok.kind == TOK_EXTERN) {
         
             if (parsed_storage_class == STORAGE_EXTERN) {
                 report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate 'extern'");
@@ -32515,6 +32526,13 @@ static int parse_possible_knr_function (void) {
     
         parse_function_body (name, STORAGE_NONE, 0, 0, 0, 0, DATA_INT & 0x1f, name_line, name_start, name_caret);
         
+        if (parsed_dllexport) {
+        
+            vec_push (&vec_dllexports, xstrdup (name));
+            parsed_dllexport = 0;
+        
+        }
+        
         free (name);
         return 1;
     
@@ -33848,6 +33866,13 @@ static void parse_external_after_type (void) {
         
         if (name && tok.kind == TOK_LBRACE) {
         
+            if (parsed_dllexport) {
+            
+                vec_push (&vec_dllexports, xstrdup (name));
+                parsed_dllexport = 0;
+            
+            }
+            
             parse_function_body (name, declaration_storage, declaration_is_inline,
                 (parsed_type_is_void && !declarator_is_pointer),
                     (declarator_is_pointer ? 0 : parsed_type_is_floating),
@@ -34106,6 +34131,36 @@ void compile_translation_unit (void) {
     }
     
     emit_pending_extern_symbols ();
+    
+    if (vec_dllexports.length) {
+    
+        char *p = strrchr (state->ofile, '.'), *tmp;
+        
+        const char *name;
+        long i;
+        
+        FILE *fp;
+        
+        tmp = xmalloc (p - state->ofile + 4);
+        sprintf (tmp, "%.*s.def", (int) (p - state->ofile), state->ofile);
+        
+        if ((fp = fopen (tmp, "w"))) {
+        
+            fprintf (fp, "EXPORTS\n");
+            
+            for (i = 0; i < vec_dllexports.length; i++) {
+            
+                if ((name = asm_global_symbol_name (vec_dllexports.data[i]))) {
+                    fprintf (fp, "    %s\n", name);
+                }
+            
+            }
+            
+            fclose (fp);
+            
+        }
+    
+    }
     
     if (state->ofp) {
     

@@ -74,6 +74,7 @@ enum token_kind {
     TOK_CONST,
     TOK_CONTINUE,
     TOK_DEFAULT,
+    TOK_DLLEXPORT,
     TOK_DO,
     TOK_DOUBLE,
     TOK_ELSE,
