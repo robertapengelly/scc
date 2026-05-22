@@ -130,6 +130,7 @@ static int declarator_pointer_depth = 0;
 static int declarator_has_array = 0;
 
 static int global_initializer_accept_symbol_addresses = 0;
+static void masm_flush_data_line (void);
 
 static long declarator_array_count = 1;
 static long declarator_last_array_count = 1;
@@ -6106,20 +6107,14 @@ struct local_init {
 
 };
 
-static int scalar_count = 0;
-static int old_size = -1;
-
 static void switch_section (int sec) {
 
-    scalar_count = 0;
-    old_size = -1;
-    
     if (!state->ofp || current_section == sec) {
         return;
     }
     
     if (state->syntax & ASM_SYNTAX_MASM) {
-        fprintf (state->ofp, "\n");
+        masm_flush_data_line ();
     }
     
     if (sec == SECTION_TEXT) {
@@ -7812,6 +7807,8 @@ static void emit_function_start (const char *name, int is_static) {
     
     if (state->syntax & ASM_SYNTAX_MASM) {
     
+        masm_flush_data_line ();
+        
         if (!is_static) {
             fprintf (state->ofp, "public %s\n", asm_name);
         }
@@ -10945,14 +10942,22 @@ static void emit_load_indexed_sized_to_reg_now (const char *base_reg, const char
             emit_load_indexed_char_to_reg_now (base_reg, index_reg, dst_reg);
         } else if (scale == 1) {
         
-            if (elem_size == (DATA_SHORT & 0x1f)) {
-
+            if (strcmp (atype, "byte") == 0) {
+            
+                if (state->syntax & ASM_SYNTAX_NASM) {
+                    fprintf (state->ofp, "    movzx %s, byte [%s + %s]\n", dst_reg, base_reg, index_reg);
+                } else {
+                    fprintf (state->ofp, "    movzx %s, byte ptr [%s + %s]\n", dst_reg, base_reg, index_reg);
+                }
+            
+            } else if (elem_size == (DATA_SHORT & 0x1f)) {
+            
                 if (state->syntax & ASM_SYNTAX_NASM) {
                     fprintf (state->ofp, "    movzx %s, word [%s + %s]\n", dst_reg, base_reg, index_reg);
                 } else {
                     fprintf (state->ofp, "    movzx %s, word ptr [%s + %s]\n", dst_reg, base_reg, index_reg);
                 }
-
+            
             } else if (state->syntax & ASM_SYNTAX_NASM) {
                 fprintf (state->ofp, "    mov %s, %s [%s + %s]\n", dst_reg, atype, base_reg, index_reg);
             } else {
@@ -10961,7 +10966,15 @@ static void emit_load_indexed_sized_to_reg_now (const char *base_reg, const char
         
         } else {
         
-            if (elem_size == (DATA_SHORT & 0x1f)) {
+            if (strcmp (atype, "byte") == 0) {
+            
+                if (state->syntax & ASM_SYNTAX_NASM) {
+                    fprintf (state->ofp, "    movzx %s, byte [%s + %s * %d]\n", dst_reg, base_reg, index_reg, scale);
+                } else {
+                    fprintf (state->ofp, "    movzx %s, byte ptr [%s + %s * %d]\n", dst_reg, base_reg, index_reg, scale);
+                }
+            
+            } else if (elem_size == (DATA_SHORT & 0x1f)) {
 
                 if (state->syntax & ASM_SYNTAX_NASM) {
                     fprintf (state->ofp, "    movzx %s, word [%s + %s * %d]\n", dst_reg, base_reg, index_reg, scale);
@@ -12773,6 +12786,45 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
         name = xstrdup (tok.ident);
         get_token ();
         
+        src = find_local_symbol (name);
+        global_index = find_global_symbol (name);
+        
+        if (!src && global_index >= 0 && tok.kind == TOK_LPAREN &&
+            get_global_symbol_kind (name) == GLOBAL_SYMBOL_FUNCTION) {
+        
+            const char *addr_reg = (strcmp (lo, "ecx") != 0 && strcmp (hi, "ecx") != 0) ? "ecx" : "esi";
+            int fptr_depth = get_global_symbol_pointer_depth (name);
+            int fpointed_size = get_global_symbol_pointed_size (name);
+            
+            if (get_global_symbol_returns_void (name)) {
+                report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret, "void function '%s' used as a value", name);
+            }
+            
+            emit_call_identifier_to_reg_now (name, lo, name_start, name_caret, name_line);
+            
+            if (fptr_depth > 1) {
+                deref_size = DATA_PTR & 0x1f;
+            } else if (fptr_depth == 1 && fpointed_size > 0) {
+                deref_size = fpointed_size & 0x1f;
+            }
+            
+            if (deref_size == (DATA_LLONG & 0x1f)) {
+            
+                emit_copy_reg_now (addr_reg, lo);
+                emit_load_pair_from_deref_reg_now (lo, hi, addr_reg);
+            
+            } else {
+            
+                emit_load_deref_reg_now (lo, deref_size);
+                emit_extend_pair_high_from_low (lo, hi, deref_size, 1);
+            
+            }
+            
+            free (name);
+            return;
+        
+        }
+        
         if (tok.kind == TOK_INCR || tok.kind == TOK_DECR) {
         
             postfix_incdec = 1;
@@ -12781,9 +12833,6 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
             get_token ();
         
         }
-        
-        src = find_local_symbol (name);
-        global_index = find_global_symbol (name);
         
         if (src) {
         
@@ -16362,6 +16411,20 @@ static void emit_load_floating_deref_reg_now (const char *reg, int size) {
             fprintf (state->ofp, "    fldl (%%%s)\n", reg);
         }
 
+    }
+
+}
+
+static void emit_add_const_to_reg_now (const char *reg, int offset) {
+
+    if (!state->ofp || !reg || offset == 0) {
+        return;
+    }
+    
+    if (state->syntax & ASM_SYNTAX_INTEL) {
+        fprintf (state->ofp, "    add %s, %d\n", reg, offset);
+    } else {
+        fprintf (state->ofp, "    addl $%d, %%%s\n", offset, reg);
     }
 
 }
@@ -21423,6 +21486,37 @@ static void emit_floating_compare_to_eax_now (enum token_kind op) {
 
 }
 
+static void emit_fild_eax_now (void) {
+
+    if (state->syntax & ASM_SYNTAX_INTEL) {
+    
+        fprintf (state->ofp, "    sub esp, 4\n");
+        
+        if (state->syntax & ASM_SYNTAX_NASM) {
+        
+            fprintf (state->ofp, "    mov dword [esp], eax\n");
+            fprintf (state->ofp, "    fild dword [esp]\n");
+        
+        } else {
+        
+            fprintf (state->ofp, "    mov dword ptr [esp], eax\n");
+            fprintf (state->ofp, "    fild dword ptr [esp]\n");
+        
+        }
+        
+        fprintf (state->ofp, "    add esp, 4\n");
+    
+    } else {
+    
+        fprintf (state->ofp, "    subl $4, %%esp\n");
+        fprintf (state->ofp, "    movl %%eax, (%%esp)\n");
+        fprintf (state->ofp, "    fildl (%%esp)\n");
+        fprintf (state->ofp, "    addl $4, %%esp\n");
+    
+    }
+
+}
+
 static void emit_load_floating_rhs_operand_now (int result_size) {
 
     if (tok.kind == TOK_PLUS || tok.kind == TOK_MINUS) {
@@ -21650,6 +21744,70 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
         
         }
         
+        if (tok.kind == TOK_LBRACK && (src || find_global_symbol (name) >= 0)) {
+        
+            int elem_size;
+            int pointer_depth;
+            int pointed_size;
+            
+            if (src) {
+            
+                elem_size = src->is_array ?
+                    (src->pointer_depth ? DATA_PTR : (src->array_element_size > 0 ? src->array_element_size : src->pointed_size)) :
+                    (src->pointer_depth > 1 ? DATA_PTR : src->pointed_size);
+                
+                pointer_depth = src->pointer_depth;
+                pointed_size = src->pointed_size;
+                
+                if (src->is_array) {
+                
+                    if (src->is_static && src->static_label) {
+                        emit_load_symbol_address_to_reg_now ("eax", src->static_label, 0, 0);
+                    } else {
+                        emit_load_symbol_address_to_reg_now ("eax", 0, src->offset, 1);
+                    }
+                
+                } else if (src->is_static && src->static_label) {
+                    emit_load_global_to_reg ("eax", src->static_label, DATA_PTR);
+                } else {
+                    emit_load_local_to_reg ("eax", src->offset, DATA_PTR);
+                }
+            
+            } else {
+            
+                elem_size = get_global_symbol_array (name) ?
+                    (get_global_symbol_pointer_depth (name) ? DATA_PTR :
+                        (get_global_symbol_array_element_size (name) > 0 ? get_global_symbol_array_element_size (name) : get_global_symbol_pointed_size (name))) :
+                    (get_global_symbol_pointer_depth (name) > 1 ? DATA_PTR : get_global_symbol_pointed_size (name));
+                
+                pointer_depth = get_global_symbol_pointer_depth (name);
+                pointed_size = get_global_symbol_pointed_size (name);
+                
+                if (get_global_symbol_array (name)) {
+                    emit_load_symbol_address_to_reg_now ("eax", name, 0, 0);
+                } else {
+                    emit_load_global_to_reg ("eax", name, DATA_PTR);
+                }
+            
+            }
+            
+            if (elem_size <= 0) {
+                elem_size = DATA_INT & 0x1f;
+            }
+            
+            emit_parse_postfix_subscripts_to_reg_now ("eax", elem_size, pointer_depth, pointed_size);
+            
+            if ((elem_size & 0x1f) > DATA_PTR) {
+                emit_load_floating_deref_reg_now ("eax", elem_size);
+            } else {
+                emit_fild_eax_now ();
+            }
+            
+            free (name);
+            return;
+        
+        }
+        
         if (tok.kind == TOK_ARROW && (src || find_global_symbol (name) >= 0)) {
         
             char *member;
@@ -21744,11 +21902,29 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
             
             const char *member_start;
             const char *member_caret;
+            const char *current_tag_name;
             
             unsigned long member_line;
             
             int member_offset = 0;
             int member_size = result_size;
+            int member_elem_size = result_size;
+            int member_pointer_depth = 0;
+            int member_is_array = 0;
+            int member_is_floating = 0;
+            int current_size;
+            
+            if (src) {
+            
+                current_size = src->size;
+                current_tag_name = src->tag_name;
+            
+            } else {
+            
+                current_size = get_global_symbol_size (name);
+                current_tag_name = get_global_symbol_tag_name (name);
+            
+            }
             
             get_token ();
             
@@ -21768,7 +21944,7 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
             member = xstrdup (tok.ident);
             get_token ();
             
-            if (!find_member_info (member, &member_offset, &member_size)) {
+            if (!find_member_info_ex_bounded (member, current_size, current_tag_name, &member_offset, &member_size, &member_elem_size, &member_pointer_depth, &member_is_array, &member_is_floating)) {
             
                 report_line_at (get_filename (), member_line, REPORT_ERROR, member_start, member_caret, "unknown member '%s'", member);
                 
@@ -21781,23 +21957,82 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
             
             free (member);
             
-            if (member_size == (DATA_FLOAT & 0x1f) || member_size == (DATA_DOUBLE & 0x1f)) {
-                emit_load_floating_member_symbol_now (src, name, member_offset, member_size);
-            } else {
+            if (tok.kind != TOK_DOT && tok.kind != TOK_ARROW && member_is_floating) {
             
-                if (src) {
+                emit_load_floating_member_symbol_now (src, name, member_offset, member_size);
                 
-                    if (src->is_static && src->static_label) {
-                        emit_load_global_to_reg ("eax", src->static_label, src->size);
-                    } else {
-                        emit_load_local_to_reg ("eax", src->offset, src->size);
-                    }
+                free (name);
+                return;
+            
+            }
+            
+            emit_load_symbol_address_for_copy_now ("eax", src, name);
+            emit_add_const_to_reg_now ("eax", member_offset);
+            
+            current_tag_name = last_found_member_tag_name;
+            
+            if (member_pointer_depth > 0 || member_is_array) {
+                current_size = member_elem_size;
+            } else {
+                current_size = member_size;
+            }
+            
+            while (tok.kind == TOK_DOT || tok.kind == TOK_ARROW) {
+            
+                enum token_kind member_op = tok.kind;
                 
-                } else {
-                    emit_load_global_to_reg ("eax", name, get_global_symbol_size (name));
+                get_token ();
+                
+                member_start = tok.start;
+                member_caret = tok.caret;
+                member_line = get_line_number ();
+                
+                if (tok.kind != TOK_IDENT) {
+                
+                    report_line_at (get_filename (), member_line, REPORT_ERROR, member_start, member_caret, "expected member name after %s", member_op == TOK_ARROW ? "->" : ".");
+                    
+                    free (name);
+                    return;
+                
                 }
                 
-                emit_apply_postfix_member_access_to_reg_now ("eax");
+                member = xstrdup (tok.ident);
+                get_token ();
+                
+                if (!find_member_info_ex_bounded (member, current_size, current_tag_name, &member_offset, &member_size, &member_elem_size, &member_pointer_depth, &member_is_array, &member_is_floating)) {
+                
+                    report_line_at (get_filename (), member_line, REPORT_ERROR, member_start, member_caret, "unknown member '%s'", member);
+                    
+                    free (member);
+                    free (name);
+                    
+                    return;
+                
+                }
+                
+                free (member);
+                
+                if (member_op == TOK_ARROW) {
+                    emit_load_deref_reg_now ("eax", DATA_PTR & 0x1f);
+                }
+                
+                emit_add_const_to_reg_now ("eax", member_offset);
+                
+                current_tag_name = last_found_member_tag_name;
+                
+                if (member_pointer_depth > 0 || member_is_array) {
+                    current_size = member_elem_size;
+                } else {
+                    current_size = member_size;
+                }
+            
+            }
+            
+            if (member_is_floating) {
+                emit_load_floating_member_from_addr_reg_now ("eax", 0, member_size);
+            } else {
+            
+                emit_load_deref_reg_now ("eax", member_size);
                 emit_eax_bool_to_floating_stack_now ();
             
             }
@@ -23244,7 +23479,7 @@ struct switch_context {
 };
 
 static struct switch_context *current_switch_context = 0;
-static int statement_ends_control_flow;
+static int statement_ends_control_flow = 0;
 
 static void reset_goto_labels (void) {
 
@@ -24769,6 +25004,17 @@ static int parse_prefix_incdec_statement (void) {
     
     int deref_size = DATA_INT & 0x1f;
     int indirect = 0;
+    
+    if (tok.kind == TOK_INCR || tok.kind == TOK_DECR) {
+    
+        if (emit_load_prefix_incdec_member_to_reg_now ("eax")) {
+        
+            expect_semi_or_recover ();
+            return 1;
+        
+        }
+    
+    }
     
     if (emit_load_prefix_incdec_parenthesized_deref_to_reg_now ("eax")) {
     
@@ -29100,6 +29346,122 @@ static int token_is_statement_compare_operator (enum token_kind k) {
     return k == TOK_LESS || k == TOK_LTEQ || k == TOK_GREATER || k == TOK_GTEQ || k == TOK_EQEQ || k == TOK_NOTEQ;
 }
 
+static void emit_statement_cmp_eax_edx_jump_if_false (enum token_kind op, int is_unsigned, int label);
+static int statement_condition_emit_logical_tail (int label);
+
+static int source_condition_ident_enum_compare_now (const char *p) {
+
+    char word[128];
+    int name_len, i;
+    
+    int64_s ignored;
+    
+    if (tok.kind != TOK_IDENT || !tok.ident || !p) {
+        return 0;
+    }
+    
+    /*
+     * Some callers have tok.caret positioned after the identifier, while
+     * others have only tok.start available.  Accept either form here.
+     * Without this, a simple condition such as
+     *
+     *     if (op == TOK_STAR)
+     *
+     * can miss this fast path and fall through to the constant-expression
+     * folder, which then tries to evaluate the local variable `op' as an
+     * integer constant expression.
+     */
+    name_len = (int) strlen (tok.ident);
+    
+    if (strncmp (p, tok.ident, (unsigned long) name_len) == 0 && !ident_char_now ((unsigned char) p[name_len])) {
+    
+        p += name_len;
+        
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+    
+    }
+    
+    if (*p == '(' || *p == '.' || (p[0] == '-' && p[1] == '>')) {
+        return 0;
+    }
+    
+    if ((p[0] == '=' && p[1] == '=') || (p[0] == '!' && p[1] == '=') ||
+        (p[0] == '<' && p[1] == '=') || (p[0] == '>' && p[1] == '=')) {
+        p += 2;
+    } else if (*p == '<' || *p == '>') {
+        p++;
+    } else {
+        return 0;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
+        return 0;
+    }
+    
+    i = 0;
+    
+    while (((p[i] >= 'A' && p[i] <= 'Z') || (p[i] >= 'a' && p[i] <= 'z') || (p[i] >= '0' && p[i] <= '9') || p[i] == '_') && i + 1 < (int) sizeof (word)) {
+        i++;
+    }
+    
+    memcpy (word, p, (unsigned long) i);
+    word[i] = 0;
+    
+    p += i;
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    if (*p != ')') {
+        return 0;
+    }
+    
+    return resolve_enum_constant (word, &ignored);
+
+}
+
+static int emit_statement_ident_enum_compare_jump_if_false_now (int label) {
+
+    enum token_kind op;
+    int is_unsigned;
+    
+    int64_s rhs;
+    
+    if (!source_condition_ident_enum_compare_now (tok.caret) && !source_condition_ident_enum_compare_now (tok.start)) {
+        return 0;
+    }
+    
+    is_unsigned = rhs_current_operand_is_unsigned_now ();
+    emit_load_assignment_rhs_to_reg ("eax");
+    
+    if (!token_is_statement_compare_operator (tok.kind)) {
+        return 0;
+    }
+    
+    op = tok.kind;
+    get_token ();
+    
+    if (tok.kind != TOK_IDENT || !resolve_enum_constant (tok.ident, &rhs)) {
+        return 0;
+    }
+    
+    get_token ();
+    
+    emit_load_const32_to_reg_now ("edx", rhs);
+    emit_statement_cmp_eax_edx_jump_if_false (op, is_unsigned, label);
+    
+    statement_condition_emit_logical_tail (label);
+    return 1;
+
+}
+
 static int statement_condition_ident_call_at (const char *p) {
 
     int len;
@@ -29619,7 +29981,6 @@ static void emit_statement_test_pair_jump_if_false (const char *lo, const char *
 
 static int statement_condition_constant_known = 0;
 static int statement_condition_constant_value = 0;
-static int statement_ends_control_flow = 0;
 
 static void parse_statement (void);
 static void parse_statement_suppressed (void);
@@ -30815,6 +31176,10 @@ static void emit_statement_jump_if_false (int label) {
     statement_condition_constant_known = 0;
     statement_condition_constant_value = 0;
     
+    if (emit_statement_ident_enum_compare_jump_if_false_now (label)) {
+        return;
+    }
+    
     if (tok.kind == TOK_LPAREN && source_parenthesized_condition_has_logical_now ()) {
     
         /*
@@ -30924,8 +31289,8 @@ static void emit_statement_jump_if_false (int label) {
             
             emit_load_assignment_rhs_expression_to_reg ("edx");
             emit_statement_cmp_eax_edx_jump_if_false (op, is_unsigned, label);
-            statement_condition_emit_logical_tail (label);
             
+            statement_condition_emit_logical_tail (label);
             return;
         
         }
@@ -31298,8 +31663,8 @@ static void emit_statement_jump_if_false (int label) {
         
         emit_load_assignment_rhs_expression_to_reg ("edx");
         emit_statement_cmp_eax_edx_jump_if_false (op, is_unsigned, label);
-        statement_condition_emit_logical_tail (label);
         
+        statement_condition_emit_logical_tail (label);
         return;
     
     }
@@ -33215,6 +33580,83 @@ static int int64_is_zero_value (int64_s value) {
     return value.low == 0 && value.high == 0;
 }
 
+static char masm_pending_data_label[512];
+static char masm_open_data_directive[8];
+
+static int masm_has_pending_data_label = 0;
+static int masm_data_line_open = 0;
+
+static void masm_set_pending_data_label (const char *name) {
+
+    const char *asm_name = asm_global_symbol_name (name);
+    unsigned long len;
+    
+    if (!asm_name) {
+    
+        masm_has_pending_data_label = 0;
+        masm_pending_data_label[0] = 0;
+        
+        return;
+    
+    }
+    
+    len = strlen (asm_name);
+    
+    if (len >= sizeof (masm_pending_data_label)) {
+        len = sizeof (masm_pending_data_label) - 1;
+    }
+    
+    memcpy (masm_pending_data_label, asm_name, len);
+    
+    masm_pending_data_label[len] = 0;
+    masm_has_pending_data_label = 1;
+
+}
+
+static void masm_flush_data_line (void) {
+
+    if (masm_data_line_open) {
+    
+        fprintf (state->ofp, "\n");
+        
+        masm_data_line_open = 0;
+        masm_open_data_directive[0] = 0;
+    
+    }
+
+}
+
+static void masm_emit_data_prefix (const char *directive) {
+
+    if (masm_has_pending_data_label) {
+    
+        masm_flush_data_line ();
+        fprintf (state->ofp, "%s %s ", masm_pending_data_label, directive);
+        
+        masm_has_pending_data_label = 0;
+        masm_pending_data_label[0] = 0;
+        
+        strncpy (masm_open_data_directive, directive, sizeof (masm_open_data_directive) - 1);
+        
+        masm_open_data_directive[sizeof (masm_open_data_directive) - 1] = 0;
+        masm_data_line_open = 1;
+    
+    } else if (masm_data_line_open && strcmp (masm_open_data_directive, directive) == 0) {
+        fprintf (state->ofp, ", ");
+    } else {
+    
+        masm_flush_data_line ();
+        
+        fprintf (state->ofp, "    %s ", directive);
+        strncpy (masm_open_data_directive, directive, sizeof (masm_open_data_directive) - 1);
+        
+        masm_open_data_directive[sizeof (masm_open_data_directive) - 1] = 0;
+        masm_data_line_open = 1;
+    
+    }
+
+}
+
 static void emit_global_scalar (int64_s value, int size) {
 
     unsigned long high = value.high;
@@ -33222,82 +33664,32 @@ static void emit_global_scalar (int64_s value, int size) {
     
     if (state->syntax & ASM_SYNTAX_MASM) {
     
-        if (old_size != size) {
+        if (size == (DATA_CHAR & 0x1f)) {
         
-            if (old_size != -1) {
-                fprintf (state->ofp, "\n");
-            }
+            masm_emit_data_prefix ("db");
+            fprintf (state->ofp, "%ld", low & 0xFFUL);
+        
+        } else if (size == (DATA_SHORT & 0x1f)) {
+        
+            masm_emit_data_prefix ("dw");
+            fprintf (state->ofp, "%ld", low & 0xFFFFUL);
+        
+        } else if (size == (DATA_LLONG & 0x1f) || size == (DATA_DOUBLE & 0x1f)) {
+        
+            masm_emit_data_prefix ("dq");
             
-            old_size = size;
-            
-            if (size == (DATA_CHAR & 0x1f)) {
-                fprintf (state->ofp, " db %ld", low & 0xFFUL);
-            } else if (size == (DATA_SHORT & 0x1f)) {
-                fprintf (state->ofp, " dw %ld", low & 0xFFFFUL);
-            } else if (size == (DATA_LLONG & 0x1f) || size == (DATA_DOUBLE & 0x1f)) {
-            
-                if (high & U32_MASK) {
-                    fprintf (state->ofp, " dq %lu%lu", high & U32_MASK, low & U32_MASK);
-                } else {
-                    fprintf (state->ofp, " dq %lu", low & U32_MASK);
-                }
-            
+            if (high & U32_MASK) {
+                fprintf (state->ofp, "%lu%lu", high & U32_MASK, low & U32_MASK);
             } else {
-                fprintf (state->ofp, " dd %lu", low & U32_MASK);
+                fprintf (state->ofp, "%lu", low & U32_MASK);
             }
         
         } else {
         
-            if (scalar_count > 8) {
-            
-                fprintf (state->ofp, "\n    ");
-                scalar_count = 0;
-            
-            } else {
-                fprintf (state->ofp, ", ");
-            }
-            
-            if (size == (DATA_CHAR & 0x1f)) {
-            
-                if (!scalar_count) {
-                    fprintf (state->ofp, "db ");
-                }
-                
-                fprintf (state->ofp, "%ld", low & 0xFFUL);
-            
-            } else if (size == (DATA_SHORT & 0x1f)) {
-            
-                if (!scalar_count) {
-                    fprintf (state->ofp, "dw ");
-                }
-                
-                fprintf (state->ofp, "%ld", low & 0xFFFFUL);
-            
-            } else if (size == (DATA_LLONG & 0x1f) || size == (DATA_DOUBLE & 0x1f)) {
-            
-                if (!scalar_count) {
-                    fprintf (state->ofp, "dq ");
-                }
-                
-                if (high & U32_MASK) {
-                    fprintf (state->ofp, "%lu", high & U32_MASK);
-                }
-                
-                fprintf (state->ofp, "%lu", low & U32_MASK);
-            
-            } else {
-            
-                if (!scalar_count) {
-                    fprintf (state->ofp, "dd ");
-                }
-                
-                fprintf (state->ofp, "%lu", low & U32_MASK);
-            
-            }
+            masm_emit_data_prefix ("dd");
+            fprintf (state->ofp, "%lu", low & U32_MASK);
         
         }
-        
-        ++scalar_count;
     
     } else if (state->syntax & ASM_SYNTAX_NASM) {
     
@@ -33356,7 +33748,10 @@ static void emit_global_address (const char *symbol, int size) {
     asm_symbol = asm_global_symbol_name (symbol);
     
     if (state->syntax & ASM_SYNTAX_MASM) {
-        fprintf (state->ofp, " dd offset %s\n", asm_symbol);
+    
+        masm_emit_data_prefix ("dd");
+        fprintf (state->ofp, "offset %s", asm_symbol);
+    
     } else if (state->syntax & ASM_SYNTAX_NASM) {
         fprintf (state->ofp, "    dd %s\n", asm_symbol);
     } else {
@@ -33403,7 +33798,10 @@ static void emit_global_space (long bytes) {
     }
     
     if (state->syntax & ASM_SYNTAX_MASM) {
-        fprintf (state->ofp, "    db %ld dup (?)\n", bytes);
+    
+        masm_emit_data_prefix ("db");
+        fprintf (state->ofp, "%ld dup (?)", bytes);
+    
     } else if (state->syntax & ASM_SYNTAX_NASM) {
         fprintf (state->ofp, "    resb %ld\n", bytes);
     } else {
@@ -33454,19 +33852,11 @@ static void emit_global_label (const char *name, int is_static) {
     
     if (state->syntax & ASM_SYNTAX_MASM) {
     
-        if (current_section != SECTION_TEXT) {
-            fprintf (state->ofp, "\n");
-        }
-        
         if (!is_static) {
             fprintf (state->ofp, "public %s\n", asm_name);
         }
         
-        if (current_section == SECTION_TEXT) {
-            fprintf (state->ofp, "%s:\n", asm_name);
-        } else {
-            fprintf (state->ofp, "%s", asm_name);
-        }
+        fprintf (state->ofp, "%s:\n", asm_name);
     
     } else if (state->syntax & ASM_SYNTAX_NASM) {
     
@@ -33484,6 +33874,26 @@ static void emit_global_label (const char *name, int is_static) {
         
         fprintf (state->ofp, "%s:\n", asm_name);
     
+    }
+
+}
+
+static void emit_global_data_label (const char *name, int is_static) {
+
+    const char *asm_name = asm_global_symbol_name (name);
+    
+    if (state->syntax & ASM_SYNTAX_MASM) {
+    
+        masm_flush_data_line ();
+        
+        if (!is_static) {
+            fprintf (state->ofp, "public %s\n", asm_name);
+        }
+        
+        masm_set_pending_data_label (name);
+    
+    } else {
+        emit_global_label (name, is_static);
     }
 
 }
@@ -33517,7 +33927,7 @@ static void emit_global_object (const char *name, int size, int is_array, long a
     
         switch_section (SECTION_BSS);
         
-        emit_global_label (name, is_static);
+        emit_global_data_label (name, is_static);
         emit_global_space (total);
         
         return;
@@ -33525,7 +33935,7 @@ static void emit_global_object (const char *name, int size, int is_array, long a
     }
     
     switch_section (SECTION_DATA);
-    emit_global_label (name, is_static);
+    emit_global_data_label (name, is_static);
     
     value_index = 0;
     emitted = 0;
@@ -33651,7 +34061,7 @@ static char *emit_string_literal_global (void) {
         fprintf (state->ofp, "    jmp %s\n", skip_label);
         
         switch_section (SECTION_DATA);
-        emit_global_label (label, 1);
+        emit_global_data_label (label, 1);
         
         for (i = 0; i < value_count; i++) {
             emit_global_scalar (values[i], DATA_CHAR & 0x1f);
@@ -33665,7 +34075,7 @@ static char *emit_string_literal_global (void) {
     }
     
     switch_section (SECTION_DATA);
-    emit_global_label (label, 1);
+    emit_global_data_label (label, 1);
     
     for (i = 0; i < value_count; i++) {
         emit_global_scalar (values[i], DATA_CHAR & 0x1f);
@@ -34130,6 +34540,10 @@ void compile_translation_unit (void) {
     
     }
     
+    if (state->syntax & ASM_SYNTAX_MASM) {
+        masm_flush_data_line ();
+    }
+    
     emit_pending_extern_symbols ();
     
     if (vec_dllexports.length) {
@@ -34165,7 +34579,10 @@ void compile_translation_unit (void) {
     if (state->ofp) {
     
         if (state->syntax & ASM_SYNTAX_MASM) {
+        
+            masm_flush_data_line ();
             fprintf (state->ofp, "end\n");
+        
         }
     
     }

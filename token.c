@@ -1569,10 +1569,18 @@ static void parse_number (struct token *tok) {
             }
             
             exp_val = exp_val * s;
+            d = (long double) bn[3];
             
-            d = (long double) bn[3] * 79228162514264337593543950336.0L + (long double) bn[2] * 18446744073709551616.0L + (long double) bn[1] * 4294967296.0L + (long double) bn[0];
+            d = ldexp (d, 32);
+            d += (long double) bn[2];
+            
+            d = ldexp (d, 32);
+            d += (long double) bn[1];
+            
+            d = ldexp (d, 32);
+            d += (long double) bn[0];
+            
             d = ldexp (d, exp_val - frac_bits);
-            
             t = toupper ((int) ch);
             
             if (t == 'F') {
