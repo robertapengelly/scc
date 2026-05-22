@@ -33585,6 +33585,7 @@ static char masm_open_data_directive[8];
 
 static int masm_has_pending_data_label = 0;
 static int masm_data_line_open = 0;
+static int masm_data_line_values = 0;
 
 static void masm_set_pending_data_label (const char *name) {
 
@@ -33620,6 +33621,8 @@ static void masm_flush_data_line (void) {
         fprintf (state->ofp, "\n");
         
         masm_data_line_open = 0;
+        masm_data_line_values = 0;
+        
         masm_open_data_directive[0] = 0;
     
     }
@@ -33640,9 +33643,19 @@ static void masm_emit_data_prefix (const char *directive) {
         
         masm_open_data_directive[sizeof (masm_open_data_directive) - 1] = 0;
         masm_data_line_open = 1;
+        masm_data_line_values = 0;
     
     } else if (masm_data_line_open && strcmp (masm_open_data_directive, directive) == 0) {
-        fprintf (state->ofp, ", ");
+    
+        if (strcmp (directive, "db") == 0 && masm_data_line_values >= 8) {
+        
+            fprintf (state->ofp, "\n    %s ", directive);
+            masm_data_line_values = 0;
+        
+        } else {
+            fprintf (state->ofp, ", ");
+        }
+    
     } else {
     
         masm_flush_data_line ();
@@ -33652,8 +33665,11 @@ static void masm_emit_data_prefix (const char *directive) {
         
         masm_open_data_directive[sizeof (masm_open_data_directive) - 1] = 0;
         masm_data_line_open = 1;
+        masm_data_line_values = 0;
     
     }
+    
+    masm_data_line_values++;
 
 }
 
