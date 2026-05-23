@@ -10710,9 +10710,10 @@ static int is_assignment_operator (enum token_kind k) {
 
 }
 
-static void emit_load_local_to_reg (const char *reg, long offset, int size) {
+static void emit_load_local_to_reg_ex (const char *reg, long offset, int size, int is_unsigned) {
 
     char memref[64];
+    size &= 0x1f;
     
     if (!state->ofp || !reg) {
         return;
@@ -10723,9 +10724,9 @@ static void emit_load_local_to_reg (const char *reg, long offset, int size) {
         format_intel_ebp_offset (memref, sizeof (memref), offset);
         
         if (size == (DATA_CHAR & 0x1f)) {
-            fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    movzx %s, byte %s\n" : "    movzx %s, byte ptr %s\n"), reg, memref);
+            fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    %s %s, byte %s\n" : "    %s %s, byte ptr %s\n"), is_unsigned ? "movzx" : "movsx", reg, memref);
         } else if (size == (DATA_SHORT & 0x1f)) {
-            fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    movzx %s, word %s\n" : "    movzx %s, word ptr %s\n"), reg, memref);
+            fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    %s %s, word %s\n" : "    %s %s, word ptr %s\n"), is_unsigned ? "movzx" : "movsx", reg, memref);
         } else {
             fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    mov %s, dword %s\n" : "    mov %s, dword ptr %s\n"), reg, memref);
         }
@@ -10733,9 +10734,9 @@ static void emit_load_local_to_reg (const char *reg, long offset, int size) {
     } else {
     
         if (size == (DATA_CHAR & 0x1f)) {
-            fprintf (state->ofp, "    movzbl %ld(%%ebp), %%%s\n", offset, reg);
+            fprintf (state->ofp, "    %s %ld(%%ebp), %%%s\n", is_unsigned ? "movzbl" : "movsbl", offset, reg);
         } else if (size == (DATA_SHORT & 0x1f)) {
-            fprintf (state->ofp, "    movzwl %ld(%%ebp), %%%s\n", offset, reg);
+            fprintf (state->ofp, "    %s %ld(%%ebp), %%%s\n", is_unsigned ? "movzwl" : "movswl", offset, reg);
         } else {
             fprintf (state->ofp, "    movl %ld(%%ebp), %%%s\n", offset, reg);
         }
@@ -10744,9 +10745,14 @@ static void emit_load_local_to_reg (const char *reg, long offset, int size) {
 
 }
 
-static void emit_load_global_to_reg (const char *reg, const char *symbol, int size) {
+static void emit_load_local_to_reg (const char *reg, long offset, int size) {
+    emit_load_local_to_reg_ex (reg, offset, size, 0);
+}
+
+static void emit_load_global_to_reg_ex (const char *reg, const char *symbol, int size, int is_unsigned) {
 
     const char *asm_symbol;
+    size &= 0x1f;
     
     if (!state->ofp || !reg || !symbol) {
         return;
@@ -10758,9 +10764,9 @@ static void emit_load_global_to_reg (const char *reg, const char *symbol, int si
     if (state->syntax & ASM_SYNTAX_INTEL) {
     
         if (size == (DATA_CHAR & 0x1f)) {
-            fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    movzx %s, byte [%s]\n" : "    movzx %s, byte ptr %s\n"), reg, asm_symbol);
+            fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    %s %s, byte [%s]\n" : "    %s %s, byte ptr %s\n"), is_unsigned ? "movzx" : "movsx", reg, asm_symbol);
         } else if (size == (DATA_SHORT & 0x1f)) {
-            fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    movzx %s, word [%s]\n" : "    movzx %s, word ptr %s\n"), reg, asm_symbol);
+            fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    %s %s, word [%s]\n" : "    %s %s, word ptr %s\n"), is_unsigned ? "movzx" : "movsx", reg, asm_symbol);
         } else {
             fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    mov %s, dword [%s]\n" : "    mov %s, dword ptr %s\n"), reg, asm_symbol);
         }
@@ -10768,15 +10774,19 @@ static void emit_load_global_to_reg (const char *reg, const char *symbol, int si
     } else {
     
         if (size == (DATA_CHAR & 0x1f)) {
-            fprintf (state->ofp, "    movzbl %s, %%%s\n", asm_symbol, reg);
+            fprintf (state->ofp, "    %s %s, %%%s\n", is_unsigned ? "movzbl" : "movsbl", asm_symbol, reg);
         } else if (size == (DATA_SHORT & 0x1f)) {
-            fprintf (state->ofp, "    movzwl %s, %%%s\n", asm_symbol, reg);
+            fprintf (state->ofp, "    %s %s, %%%s\n", is_unsigned ? "movzwl" : "movswl", asm_symbol, reg);
         } else {
             fprintf (state->ofp, "    movl %s, %%%s\n", asm_symbol, reg);
         }
     
     }
 
+}
+
+static void emit_load_global_to_reg (const char *reg, const char *symbol, int size) {
+    emit_load_global_to_reg_ex (reg, symbol, size, 0);
 }
 
 static void emit_store_reg_to_local (long offset, int size, const char *reg) {
@@ -11123,13 +11133,13 @@ static void emit_load_indexed_char_to_reg_now (const char *base_reg, const char 
     if (state->syntax & ASM_SYNTAX_INTEL) {
     
         if (state->syntax & ASM_SYNTAX_NASM) {
-            fprintf (state->ofp, "    movzx %s, byte [%s + %s]\n", dst_reg, base_reg, index_reg);
+            fprintf (state->ofp, "    movsx %s, byte [%s + %s]\n", dst_reg, base_reg, index_reg);
         } else {
-            fprintf (state->ofp, "    movzx %s, byte ptr [%s + %s]\n", dst_reg, base_reg, index_reg);
+            fprintf (state->ofp, "    movsx %s, byte ptr [%s + %s]\n", dst_reg, base_reg, index_reg);
         }
     
     } else {
-        fprintf (state->ofp, "    movzbl (%%%s,%%%s), %%%s\n", base_reg, index_reg, dst_reg);
+        fprintf (state->ofp, "    movsbl (%%%s,%%%s), %%%s\n", base_reg, index_reg, dst_reg);
     }
 
 }
@@ -11139,7 +11149,7 @@ static void emit_load_indexed_sized_to_reg_now (const char *base_reg, const char
     int scale = 1;
     
     const char *atype = "byte";
-    const char *gasop = "movzbl";
+    const char *gasop = "movsbl";
     
     if (!state->ofp || !base_reg || !index_reg || !dst_reg) {
         return;
@@ -11152,7 +11162,7 @@ static void emit_load_indexed_sized_to_reg_now (const char *base_reg, const char
         scale = 2;
         
         atype = "word";
-        gasop = "movzwl";
+        gasop = "movswl";
     
     } else if (elem_size == (DATA_INT & 0x1f) || elem_size == (DATA_LONG & 0x1f) || elem_size == DATA_PTR) {
     
@@ -11172,17 +11182,17 @@ static void emit_load_indexed_sized_to_reg_now (const char *base_reg, const char
             if (strcmp (atype, "byte") == 0) {
             
                 if (state->syntax & ASM_SYNTAX_NASM) {
-                    fprintf (state->ofp, "    movzx %s, byte [%s + %s]\n", dst_reg, base_reg, index_reg);
+                    fprintf (state->ofp, "    movsx %s, byte [%s + %s]\n", dst_reg, base_reg, index_reg);
                 } else {
-                    fprintf (state->ofp, "    movzx %s, byte ptr [%s + %s]\n", dst_reg, base_reg, index_reg);
+                    fprintf (state->ofp, "    movsx %s, byte ptr [%s + %s]\n", dst_reg, base_reg, index_reg);
                 }
             
             } else if (elem_size == (DATA_SHORT & 0x1f)) {
             
                 if (state->syntax & ASM_SYNTAX_NASM) {
-                    fprintf (state->ofp, "    movzx %s, word [%s + %s]\n", dst_reg, base_reg, index_reg);
+                    fprintf (state->ofp, "    movsx %s, word [%s + %s]\n", dst_reg, base_reg, index_reg);
                 } else {
-                    fprintf (state->ofp, "    movzx %s, word ptr [%s + %s]\n", dst_reg, base_reg, index_reg);
+                    fprintf (state->ofp, "    movsx %s, word ptr [%s + %s]\n", dst_reg, base_reg, index_reg);
                 }
             
             } else if (state->syntax & ASM_SYNTAX_NASM) {
@@ -11196,17 +11206,17 @@ static void emit_load_indexed_sized_to_reg_now (const char *base_reg, const char
             if (strcmp (atype, "byte") == 0) {
             
                 if (state->syntax & ASM_SYNTAX_NASM) {
-                    fprintf (state->ofp, "    movzx %s, byte [%s + %s * %d]\n", dst_reg, base_reg, index_reg, scale);
+                    fprintf (state->ofp, "    movsx %s, byte [%s + %s * %d]\n", dst_reg, base_reg, index_reg, scale);
                 } else {
-                    fprintf (state->ofp, "    movzx %s, byte ptr [%s + %s * %d]\n", dst_reg, base_reg, index_reg, scale);
+                    fprintf (state->ofp, "    movsx %s, byte ptr [%s + %s * %d]\n", dst_reg, base_reg, index_reg, scale);
                 }
             
             } else if (elem_size == (DATA_SHORT & 0x1f)) {
 
                 if (state->syntax & ASM_SYNTAX_NASM) {
-                    fprintf (state->ofp, "    movzx %s, word [%s + %s * %d]\n", dst_reg, base_reg, index_reg, scale);
+                    fprintf (state->ofp, "    movsx %s, word [%s + %s * %d]\n", dst_reg, base_reg, index_reg, scale);
                 } else {
-                    fprintf (state->ofp, "    movzx %s, word ptr [%s + %s * %d]\n", dst_reg, base_reg, index_reg, scale);
+                    fprintf (state->ofp, "    movsx %s, word ptr [%s + %s * %d]\n", dst_reg, base_reg, index_reg, scale);
                 }
 
             } else if (state->syntax & ASM_SYNTAX_NASM) {
@@ -11883,13 +11893,13 @@ static int emit_load_prefix_incdec_to_reg_now (const char *reg) {
     if (sym) {
     
         if (sym->is_static && sym->static_label) {
-            emit_load_global_to_reg (reg, sym->static_label, sym->size);
+            emit_load_global_to_reg_ex (reg, sym->static_label, sym->size, sym->is_unsigned);
         } else {
-            emit_load_local_to_reg (reg, sym->offset, sym->size);
+            emit_load_local_to_reg_ex (reg, sym->offset, sym->size, sym->is_unsigned);
         }
     
     } else if (find_global_symbol (name) >= 0) {
-        emit_load_global_to_reg (reg, name, get_global_symbol_size (name));
+        emit_load_global_to_reg_ex (reg, name, get_global_symbol_size (name), get_global_symbol_unsigned (name));
     }
     
     free (name);
@@ -12024,13 +12034,13 @@ static int emit_load_prefix_incdec_member_to_reg_now (const char *reg) {
         if (sym) {
         
             if (sym->is_static && sym->static_label) {
-                emit_load_global_to_reg (reg, sym->static_label, sym->size);
+                emit_load_global_to_reg_ex (reg, sym->static_label, sym->size, sym->is_unsigned);
             } else {
-                emit_load_local_to_reg (reg, sym->offset, sym->size);
+                emit_load_local_to_reg_ex (reg, sym->offset, sym->size, sym->is_unsigned);
             }
         
         } else if (find_global_symbol (name) >= 0) {
-            emit_load_global_to_reg (reg, name, get_global_symbol_size (name));
+            emit_load_global_to_reg_ex (reg, name, get_global_symbol_size (name), get_global_symbol_unsigned (name));
         }
         
         free (name);
@@ -12190,9 +12200,9 @@ static int emit_load_prefix_incdec_to_pair_now (const char *lo, const char *hi) 
         } else {
         
             if (sym->is_static && sym->static_label) {
-                emit_load_global_to_reg (lo, sym->static_label, sym->size);
+                emit_load_global_to_reg_ex (lo, sym->static_label, sym->size, sym->is_unsigned);
             } else {
-                emit_load_local_to_reg (lo, sym->offset, sym->size);
+                emit_load_local_to_reg_ex (lo, sym->offset, sym->size, sym->is_unsigned);
             }
             
             if (state->ofp) {
@@ -12213,7 +12223,7 @@ static int emit_load_prefix_incdec_to_pair_now (const char *lo, const char *hi) 
             emit_load_global64_to_pair (lo, hi, name);
         } else {
         
-            emit_load_global_to_reg (lo, name, get_global_symbol_size (name));
+            emit_load_global_to_reg_ex (lo, name, get_global_symbol_size (name), get_global_symbol_unsigned (name));
             
             if (state->ofp) {
             
@@ -12470,16 +12480,107 @@ static void emit_apply_integer_cast_to_reg_now (const char *reg, int size, int i
 
 }
 
-static int const_integer_expr_text_is_foldable_now (const char *p) {
+static int fold_text_starts_with_type_name_only_before_rparen (const char *p) {
 
-    int depth = 0;
-    int saw_token = 0;
-    int ch;
+    int saw_type = 0;
     char word[64];
     int i;
     
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    for (;;) {
+    
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+        
+        if (*p == '*') {
+        
+            saw_type = 1;
+            
+            p++;
+            continue;
+        
+        }
+        
+        if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
+            break;
+        }
+        
+        i = 0;
+        
+        while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_') {
+        
+            if (i + 1 < (int) sizeof (word)) {
+                word[i++] = *p;
+            }
+            
+            p++;
+        
+        }
+        
+        word[i] = 0;
+        
+        if (strcmp (word, "char") != 0 &&
+            strcmp (word, "short") != 0 &&
+            strcmp (word, "int") != 0 &&
+            strcmp (word, "long") != 0 &&
+            strcmp (word, "signed") != 0 &&
+            strcmp (word, "unsigned") != 0 &&
+            strcmp (word, "void") != 0) {
+            return 0;
+        }
+        
+        saw_type = 1;
+    
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    return saw_type && *p == ')';
+
+}
+
+static int const_integer_expr_text_is_foldable_now (const char *p) {
+
+    int saw_value_token = 0;
+    int saw_token = 0;
+    
+    char word[64];
+    int depth = 0, ch, i;
+    
     if (!p) {
         return 0;
+    }
+    
+    {
+    
+        const char *q = p;
+        int parens = 0;
+        
+        while (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n') {
+            q++;
+        }
+        
+        while (*q == '(') {
+        
+            parens = 1;
+            q++;
+            
+            while (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n') {
+                q++;
+            }
+        
+        }
+        
+        if (fold_text_starts_with_type_name_only_before_rparen (p) || (parens && fold_text_starts_with_type_name_only_before_rparen (q))) {
+            return 0;
+        }
+    
     }
     
     while (*p) {
@@ -12548,7 +12649,23 @@ static int const_integer_expr_text_is_foldable_now (const char *p) {
         if (*p == ')') {
         
             if (depth == 0) {
+            
+                /*
+                 * If the caller asks about text that starts inside a cast, the
+                 * scanner can see only the type-name prefix, for example:
+                 *
+                 *     unsigned char) ch
+                 *
+                 * That is not an integer constant expression.  Returning true
+                 * here sends the parser down expr_const64(), which then reports
+                 * "integer constant expression expected" at the cast.
+                 */
+                if (!saw_value_token) {
+                    return 0;
+                }
+                
                 break;
+            
             }
             
             depth--;
@@ -12560,7 +12677,9 @@ static int const_integer_expr_text_is_foldable_now (const char *p) {
         
         if (*p >= '0' && *p <= '9') {
         
+            saw_value_token = 1;
             saw_token = 1;
+            
             p++;
             
             while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_') {
@@ -12573,7 +12692,9 @@ static int const_integer_expr_text_is_foldable_now (const char *p) {
         
         if (*p == '\'') {
         
+            saw_value_token = 1;
             saw_token = 1;
+            
             p++;
             
             while (*p && *p != '\'') {
@@ -12610,6 +12731,10 @@ static int const_integer_expr_text_is_foldable_now (const char *p) {
             
             word[i] = 0;
             
+            if (strcmp (word, "sizeof") == 0) {
+                saw_value_token = 1;
+            }
+            
             if (strcmp (word, "sizeof") != 0 &&
                 strcmp (word, "char") != 0 &&
                 strcmp (word, "short") != 0 &&
@@ -12640,6 +12765,71 @@ static int const_integer_expr_text_is_foldable_now (const char *p) {
     }
     
     return saw_token;
+
+}
+
+static int token_kind_is_integer_constant_now (enum token_kind kind) {
+
+    return kind == TOK_CCHAR || kind == TOK_LCHAR ||
+           kind == TOK_CINT || kind == TOK_CUINT ||
+           kind == TOK_CLONG || kind == TOK_CULONG ||
+           kind == TOK_CLLONG || kind == TOK_CULLONG;
+
+}
+
+static int token_kind_is_binary_expression_operator_now (enum token_kind kind) {
+
+    return kind == TOK_PLUS || kind == TOK_MINUS || kind == TOK_STAR ||
+           kind == TOK_FSLASH || kind == TOK_MOD ||
+           kind == TOK_AMPER || kind == TOK_PIPE || kind == TOK_CARET ||
+           kind == TOK_LSH || kind == TOK_RSH ||
+           kind == TOK_LESS || kind == TOK_LTEQ ||
+           kind == TOK_GREATER || kind == TOK_GTEQ ||
+           kind == TOK_EQEQ || kind == TOK_NOTEQ ||
+           kind == TOK_LOGAND || kind == TOK_LOGOR;
+
+}
+
+static int current_integer_expr_is_foldable_now (void) {
+
+    struct token *saved_tok;
+    
+    enum token_kind first_kind;
+    enum token_kind next_kind;
+    
+    if (!const_integer_expr_text_is_foldable_now (tok.start)) {
+        return 0;
+    }
+    
+    /*
+     * Macro-expanded integer tokens can have tok.start/tok.caret pointing at
+     * only the replacement text (for example "16") rather than the complete
+     * source expression that follows it.  Do not hand such a prefix to
+     * expr_const64() as though it described the whole expression when the real
+     * token stream continues with a binary operator:
+     *
+     *     MEMMGR_ALIGN - (size_t)buffer % MEMMGR_ALIGN
+     *
+     * The normal expression parser can still handle this; this guard only
+     * disables the whole-expression constant-folder for that unsafe prefix.
+     */
+    if (!token_kind_is_integer_constant_now (tok.kind)) {
+        return 1;
+    }
+    
+    first_kind = tok.kind;
+    
+    saved_tok = clone_current_token_now ();
+    get_token ();
+    
+    next_kind = tok.kind;
+    unget_token (saved_tok);
+    
+    if (token_kind_is_integer_constant_now (first_kind) && token_kind_is_binary_expression_operator_now (next_kind)) {
+        return 0;
+    }
+    
+    return 1;
 
 }
 
@@ -12821,12 +13011,8 @@ static void emit_copy_reg_now (const char *dst, const char *src) {
 
 }
 
+static int emit_parse_builtin_va_arg_address_to_reg_now (const char *reg, int *out_size, int *out_unsigned, int *out_pointer, int *out_floating);
 static void emit_load_assignment_rhs_to_reg (const char *reg);
-
-static int expression_text_has_pluseq_before_delim_now (const char *p);
-static int emit_parse_va_arg_address_to_reg_now (const char *reg, int size);
-
-static int last_va_arg_object_size = 0;
 
 static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
 
@@ -12884,7 +13070,7 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
         
         }
         
-        if (const_integer_expr_text_is_foldable_now (tok.caret)) {
+        if (tok.kind != TOK_LPAREN && current_integer_expr_is_foldable_now ()) {
         
             int64_s v = const64_from_current_foldable_expr ();
             expect (TOK_RPAREN, ")");
@@ -13042,26 +13228,14 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
         
         if (tok.kind == TOK_LPAREN) {
         
-            int cast_deref_size = DATA_INT & 0x1f;
-            
             const char *addr_reg = (strcmp (lo, "ecx") != 0 && strcmp (hi, "ecx") != 0) ? "ecx" : "esi";
-            int handled_va_arg = 0;
+            int cast_deref_size = DATA_INT & 0x1f;
             
             get_token ();
             
             if (is_type_start (tok.kind) && parse_deref_cast_type_name (&cast_deref_size)) {
             
-                if (expression_text_has_pluseq_before_delim_now (tok.start)) {
-                    handled_va_arg = emit_parse_va_arg_address_to_reg_now (lo, cast_deref_size);
-                }
-                
-                if (handled_va_arg && last_va_arg_object_size > (cast_deref_size & 0x1f)) {
-                    cast_deref_size = last_va_arg_object_size;
-                }
-                
-                if (!handled_va_arg) {
-                    emit_load_assignment_rhs_to_reg (lo);
-                }
+                emit_load_assignment_rhs_to_reg (lo);
                 
                 if ((cast_deref_size & 0x1f) == (DATA_LLONG & 0x1f)) {
                 
@@ -13264,6 +13438,30 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
         return;
     
     }
+    
+    if (tok.kind == TOK_SCC_BUILTIN_VA_ARG) {
+    
+        int va_size = DATA_INT & 0x1f;
+        int va_unsigned = 1;
+        int va_pointer = 0;
+        int va_floating = 0;
+        
+        const char *addr_reg = (strcmp (lo, "ecx") != 0 && strcmp (hi, "ecx") != 0) ? "ecx" : "esi";
+        
+        get_token ();
+        emit_parse_builtin_va_arg_address_to_reg_now (addr_reg, &va_size, &va_unsigned, &va_pointer, &va_floating);
+        
+        if (va_size == (DATA_LLONG & 0x1f) && !va_floating && va_pointer == 0) {
+            emit_load_pair_from_deref_reg_now (lo, hi, addr_reg);
+        } else {
+            emit_copy_reg_now (lo, addr_reg);
+            emit_load_deref_reg_now (lo, va_size);
+            emit_extend_pair_high_from_low (lo, hi, va_size, va_unsigned);
+        }
+        
+        return;
+    
+    }
 
     if (tok.kind == TOK_IDENT) {
     
@@ -13279,6 +13477,31 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
         int64_s enum_value;
         
         get_token ();
+        
+        if (strcmp (name, "__scc_builtin_va_arg") == 0 && tok.kind == TOK_LPAREN) {
+        
+            int va_size = DATA_INT & 0x1f;
+            int va_unsigned = 1;
+            int va_pointer = 0;
+            int va_floating = 0;
+            
+            const char *addr_reg = (strcmp (lo, "ecx") != 0 && strcmp (hi, "ecx") != 0) ? "ecx" : "esi";
+            emit_parse_builtin_va_arg_address_to_reg_now (addr_reg, &va_size, &va_unsigned, &va_pointer, &va_floating);
+            
+            if (va_size == (DATA_LLONG & 0x1f) && !va_floating && va_pointer == 0) {
+                emit_load_pair_from_deref_reg_now (lo, hi, addr_reg);
+            } else {
+            
+                emit_copy_reg_now (lo, addr_reg);
+                emit_load_deref_reg_now (lo, va_size);
+                emit_extend_pair_high_from_low (lo, hi, va_size, va_unsigned);
+            
+            }
+            
+            free (name);
+            return;
+        
+        }
         
         if (!find_local_symbol (name) && find_global_symbol (name) < 0 && resolve_enum_constant (name, &enum_value)) {
         
@@ -13455,9 +13678,9 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
             } else {
             
                 if (src->is_static && src->static_label) {
-                    emit_load_global_to_reg (lo, src->static_label, src->size);
+                    emit_load_global_to_reg_ex (lo, src->static_label, src->size, src->is_unsigned);
                 } else {
-                    emit_load_local_to_reg (lo, src->offset, src->size);
+                    emit_load_local_to_reg_ex (lo, src->offset, src->size, src->is_unsigned);
                 }
                 
                 emit_extend_pair_high_from_low (lo, hi, src->size, src->is_unsigned);
@@ -13512,7 +13735,7 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
                 emit_load_global64_to_pair (lo, hi, name);
             } else {
             
-                emit_load_global_to_reg (lo, name, get_global_symbol_size (name));
+                emit_load_global_to_reg_ex (lo, name, get_global_symbol_size (name), get_global_symbol_unsigned (name));
                 emit_extend_pair_high_from_low (lo, hi, get_global_symbol_size (name), get_global_symbol_unsigned (name));
             
             }
@@ -15087,9 +15310,9 @@ static void emit_load_deref_reg_now (const char *reg, int size) {
         if (state->syntax & ASM_SYNTAX_NASM) {
         
             if (size == (DATA_CHAR & 0x1f)) {
-                fprintf (state->ofp, "    movzx %s, byte [%s]\n", reg, reg);
+                fprintf (state->ofp, "    movsx %s, byte [%s]\n", reg, reg);
             } else if (size == (DATA_SHORT & 0x1f)) {
-                fprintf (state->ofp, "    movzx %s, word [%s]\n", reg, reg);
+                fprintf (state->ofp, "    movsx %s, word [%s]\n", reg, reg);
             } else {
                 fprintf (state->ofp, "    mov %s, dword [%s]\n", reg, reg);
             }
@@ -15097,9 +15320,9 @@ static void emit_load_deref_reg_now (const char *reg, int size) {
         } else {
         
             if (size == (DATA_CHAR & 0x1f)) {
-                fprintf (state->ofp, "    movzx %s, byte ptr [%s]\n", reg, reg);
+                fprintf (state->ofp, "    movsx %s, byte ptr [%s]\n", reg, reg);
             } else if (size == (DATA_SHORT & 0x1f)) {
-                fprintf (state->ofp, "    movzx %s, word ptr [%s]\n", reg, reg);
+                fprintf (state->ofp, "    movsx %s, word ptr [%s]\n", reg, reg);
             } else {
                 fprintf (state->ofp, "    mov %s, dword ptr [%s]\n", reg, reg);
             }
@@ -15109,9 +15332,9 @@ static void emit_load_deref_reg_now (const char *reg, int size) {
     } else {
     
         if (size == (DATA_CHAR & 0x1f)) {
-            fprintf (state->ofp, "    movzbl (%%%s), %%%s\n", reg, reg);
+            fprintf (state->ofp, "    movsbl (%%%s), %%%s\n", reg, reg);
         } else if (size == (DATA_SHORT & 0x1f)) {
-            fprintf (state->ofp, "    movzwl (%%%s), %%%s\n", reg, reg);
+            fprintf (state->ofp, "    movswl (%%%s), %%%s\n", reg, reg);
         } else {
             fprintf (state->ofp, "    movl (%%%s), %%%s\n", reg, reg);
         }
@@ -15240,9 +15463,9 @@ static void emit_load_member_from_addr_reg_now (const char *dst_reg, const char 
         if (state->syntax & ASM_SYNTAX_NASM) {
         
             if (size == (DATA_CHAR & 0x1f)) {
-                fprintf (state->ofp, "    movzx %s, byte [%s + %d]\n", dst_reg, addr_reg, offset);
+                fprintf (state->ofp, "    movsx %s, byte [%s + %d]\n", dst_reg, addr_reg, offset);
             } else if (size == (DATA_SHORT & 0x1f)) {
-                fprintf (state->ofp, "    movzx %s, word [%s + %d]\n", dst_reg, addr_reg, offset);
+                fprintf (state->ofp, "    movsx %s, word [%s + %d]\n", dst_reg, addr_reg, offset);
             } else {
                 fprintf (state->ofp, "    mov %s, dword [%s + %d]\n", dst_reg, addr_reg, offset);
             }
@@ -15250,9 +15473,9 @@ static void emit_load_member_from_addr_reg_now (const char *dst_reg, const char 
         } else {
         
             if (size == (DATA_CHAR & 0x1f)) {
-                fprintf (state->ofp, "    movzx %s, byte ptr [%s + %d]\n", dst_reg, addr_reg, offset);
+                fprintf (state->ofp, "    movsx %s, byte ptr [%s + %d]\n", dst_reg, addr_reg, offset);
             } else if (size == (DATA_SHORT & 0x1f)) {
-                fprintf (state->ofp, "    movzx %s, word ptr [%s + %d]\n", dst_reg, addr_reg, offset);
+                fprintf (state->ofp, "    movsx %s, word ptr [%s + %d]\n", dst_reg, addr_reg, offset);
             } else {
                 fprintf (state->ofp, "    mov %s, dword ptr [%s + %d]\n", dst_reg, addr_reg, offset);
             }
@@ -15262,9 +15485,9 @@ static void emit_load_member_from_addr_reg_now (const char *dst_reg, const char 
     } else {
     
         if (size == (DATA_CHAR & 0x1f)) {
-            fprintf (state->ofp, "    movzbl %d(%%%s), %%%s\n", offset, addr_reg, dst_reg);
+            fprintf (state->ofp, "    movsbl %d(%%%s), %%%s\n", offset, addr_reg, dst_reg);
         } else if (size == (DATA_SHORT & 0x1f)) {
-            fprintf (state->ofp, "    movzwl %d(%%%s), %%%s\n", offset, addr_reg, dst_reg);
+            fprintf (state->ofp, "    movswl %d(%%%s), %%%s\n", offset, addr_reg, dst_reg);
         } else {
             fprintf (state->ofp, "    movl %d(%%%s), %%%s\n", offset, addr_reg, dst_reg);
         }
@@ -16787,157 +17010,273 @@ static void emit_load_floating_member_from_addr_reg_now (const char *reg, int of
 
 }
 
-static int expression_text_has_pluseq_before_delim_now (const char *p) {
+static void save_parse_type_state_now (
 
-    int depth = 0;
-    int quote;
+    int *saved_type_size,
+    int *saved_storage_class,
+    int *saved_is_aggregate,
+    int *saved_is_void,
+    int *saved_is_unsigned,
+    int *saved_is_floating,
+    int *saved_has_tag,
+    int *saved_is_inline,
+    int *saved_field_count,
+    int saved_fields[MAX_AGG_FIELDS],
+    int *saved_declarator_is_pointer,
+    int *saved_declarator_pointer_depth,
+    int *saved_declarator_has_array,
+    int *saved_declarator_has_function,
+    int *saved_declarator_array_unsized,
+    int *saved_declarator_array_dimensions,
+    long *saved_declarator_array_count,
+    long *saved_declarator_first_array_count) {
+
+    int i;
     
-    if (!p) {
-        return 0;
+    *saved_type_size = parsed_type_size;
+    *saved_storage_class = parsed_storage_class;
+    *saved_is_aggregate = parsed_type_is_aggregate;
+    *saved_is_void = parsed_type_is_void;
+    *saved_is_unsigned = parsed_type_is_unsigned;
+    *saved_is_floating = parsed_type_is_floating;
+    *saved_has_tag = parsed_type_has_tag;
+    *saved_is_inline = parsed_type_is_inline;
+    *saved_field_count = parsed_field_count;
+    
+    for (i = 0; i < *saved_field_count && i < MAX_AGG_FIELDS; i++) {
+        saved_fields[i] = parsed_field_sizes[i];
     }
     
-    while (*p) {
-    
-        if (depth == 0 && (*p == ',' || *p == ')' || *p == ';' || *p == ']' || *p == '}')) {
-            return 0;
-        }
-        
-        if (*p == '\'' || *p == '"') {
-        
-            quote = *p++;
-            
-            while (*p && *p != quote) {
-            
-                if (*p == '\\' && p[1]) {
-                    p += 2;
-                } else {
-                    p++;
-                }
-            
-            }
-            
-            if (*p == quote) {
-                p++;
-            }
-            
-            continue;
-        
-        }
-        
-        if (p[0] == '+' && p[1] == '=') {
-            return 1;
-        }
-        
-        if (*p == '(' || *p == '[' || *p == '{') {
-            depth++;
-        } else if (*p == ')' || *p == ']' || *p == '}') {
-        
-            if (depth > 0) {
-                depth--;
-            }
-        
-        }
-        
-        p++;
-    
-    }
-    
-    return 0;
+    *saved_declarator_is_pointer = declarator_is_pointer;
+    *saved_declarator_pointer_depth = declarator_pointer_depth;
+    *saved_declarator_has_array = declarator_has_array;
+    *saved_declarator_has_function = declarator_has_function;
+    *saved_declarator_array_unsized = declarator_array_unsized;
+    *saved_declarator_array_dimensions = declarator_array_dimensions;
+    *saved_declarator_array_count = declarator_array_count;
+    *saved_declarator_first_array_count = declarator_first_array_count;
 
 }
 
-static int emit_parse_va_arg_address_to_reg_now (const char *reg, int size) {
+static void restore_parse_type_state_now (
+    int saved_type_size,
+    int saved_storage_class,
+    int saved_is_aggregate,
+    int saved_is_void,
+    int saved_is_unsigned,
+    int saved_is_floating,
+    int saved_has_tag,
+    int saved_is_inline,
+    int saved_field_count,
+    int saved_fields[MAX_AGG_FIELDS],
+    int saved_declarator_is_pointer,
+    int saved_declarator_pointer_depth,
+    int saved_declarator_has_array,
+    int saved_declarator_has_function,
+    int saved_declarator_array_unsized,
+    int saved_declarator_array_dimensions,
+    long saved_declarator_array_count,
+    long saved_declarator_first_array_count) {
+
+    int i;
+    
+    parsed_type_size = saved_type_size;
+    parsed_storage_class = saved_storage_class;
+    parsed_type_is_aggregate = saved_is_aggregate;
+    parsed_type_is_void = saved_is_void;
+    parsed_type_is_unsigned = saved_is_unsigned;
+    parsed_type_is_floating = saved_is_floating;
+    parsed_type_has_tag = saved_has_tag;
+    parsed_type_is_inline = saved_is_inline;
+    
+    clear_parsed_fields ();
+    
+    for (i = 0; i < saved_field_count && i < MAX_AGG_FIELDS; i++) {
+        parsed_field_sizes[i] = saved_fields[i];
+    }
+    
+    parsed_field_count = saved_field_count;
+    declarator_is_pointer = saved_declarator_is_pointer;
+    declarator_pointer_depth = saved_declarator_pointer_depth;
+    declarator_has_array = saved_declarator_has_array;
+    declarator_has_function = saved_declarator_has_function;
+    declarator_array_unsized = saved_declarator_array_unsized;
+    declarator_array_dimensions = saved_declarator_array_dimensions;
+    declarator_array_count = saved_declarator_array_count;
+    declarator_first_array_count = saved_declarator_first_array_count;
+
+}
+
+static int parse_builtin_va_arg_type_now (int *out_size, int *out_unsigned, int *out_pointer, int *out_floating) {
+
+    int saved_type_size;
+    int saved_storage_class;
+    int saved_is_aggregate;
+    int saved_is_void;
+    int saved_is_unsigned;
+    int saved_is_floating;
+    int saved_has_tag;
+    int saved_is_inline;
+    int saved_field_count;
+    int saved_fields[MAX_AGG_FIELDS];
+    int saved_declarator_is_pointer;
+    int saved_declarator_pointer_depth;
+    int saved_declarator_has_array;
+    int saved_declarator_has_function;
+    int saved_declarator_array_unsized;
+    int saved_declarator_array_dimensions;
+    
+    long saved_declarator_array_count;
+    long saved_declarator_first_array_count;
+    
+    char *type_name = 0;
+    
+    int base_size;
+    int pointer_depth;
+    int is_unsigned;
+    int is_floating;
+    
+    save_parse_type_state_now (&saved_type_size, &saved_storage_class,
+        &saved_is_aggregate, &saved_is_void, &saved_is_unsigned,
+        &saved_is_floating, &saved_has_tag, &saved_is_inline,
+        &saved_field_count, saved_fields, &saved_declarator_is_pointer,
+        &saved_declarator_pointer_depth, &saved_declarator_has_array,
+        &saved_declarator_has_function, &saved_declarator_array_unsized,
+        &saved_declarator_array_dimensions, &saved_declarator_array_count,
+        &saved_declarator_first_array_count);
+    
+    declarator_is_pointer = 0;
+    declarator_pointer_depth = 0;
+    declarator_has_array = 0;
+    declarator_has_function = 0;
+    declarator_array_unsized = 0;
+    declarator_array_count = 0;
+    declarator_first_array_count = 1;
+    declarator_array_dimensions = 0;
+    
+    parse_type_spec ();
+    base_size = parsed_type_size & 0x1f;
+    
+    is_unsigned = parsed_type_is_unsigned;
+    is_floating = parsed_type_is_floating;
+    
+    if (tok.kind != TOK_RPAREN) {
+        parse_declarator (&type_name);
+    }
+    
+    pointer_depth = declarator_is_pointer ? (declarator_pointer_depth > 0 ? declarator_pointer_depth : 1) : 0;
+    
+    if (type_name) {
+        free (type_name);
+    }
+    
+    if (out_pointer) {
+        *out_pointer = pointer_depth;
+    }
+    
+    if (out_unsigned) {
+        *out_unsigned = is_unsigned;
+    }
+    
+    if (out_floating) {
+        *out_floating = is_floating;
+    }
+    
+    if (out_size) {
+        *out_size = pointer_depth > 0 ? (DATA_PTR & 0x1f) : base_size;
+    }
+    
+    restore_parse_type_state_now (saved_type_size, saved_storage_class,
+        saved_is_aggregate, saved_is_void, saved_is_unsigned,
+        saved_is_floating, saved_has_tag, saved_is_inline,
+        saved_field_count, saved_fields, saved_declarator_is_pointer,
+        saved_declarator_pointer_depth, saved_declarator_has_array,
+        saved_declarator_has_function, saved_declarator_array_unsized,
+        saved_declarator_array_dimensions, saved_declarator_array_count,
+        saved_declarator_first_array_count);
+    
+    return 1;
+
+}
+
+static int emit_parse_builtin_va_arg_address_to_reg_now (const char *reg, int *out_size, int *out_unsigned, int *out_pointer, int *out_floating) {
 
     char *name;
     
     const char *name_start;
     const char *name_caret;
+    const char *scratch_reg;
     
     unsigned long name_line;
+    unsigned long inc;
+    
     struct local_symbol *src;
     
     int global_index;
-    int64_s inc;
-    
-    int outer_paren = 0;
+    int size = DATA_INT & 0x1f;
+    int is_unsigned = 1;
+    int pointer_depth = 0;
+    int is_floating = 0;
     int deref_lvalue = 0;
+    int paren_lvalue = 0;
     
-    last_va_arg_object_size = 0;
-    
-    if (tok.kind == TOK_LPAREN) {
-    
-        outer_paren = 1;
-        get_token ();
-    
-    }
-    
-    if (tok.kind == TOK_LPAREN) {
-    
-        get_token ();
-        
-        if (tok.kind == TOK_STAR) {
-        
-            deref_lvalue = 1;
-            get_token ();
-        
-        }
-        
-        if (tok.kind != TOK_IDENT) {
-            return 0;
-        }
-        
-        name = xstrdup (tok.ident);
-        name_start = tok.start;
-        name_caret = tok.caret;
-        name_line = get_line_number ();
-        
-        get_token ();
-        expect (TOK_RPAREN, ")");
-    
-    } else {
-    
-        if (tok.kind == TOK_STAR) {
-        
-            deref_lvalue = 1;
-            get_token ();
-        
-        }
-        
-        if (tok.kind != TOK_IDENT) {
-            return 0;
-        }
-        
-        name = xstrdup (tok.ident);
-        name_start = tok.start;
-        name_caret = tok.caret;
-        name_line = get_line_number ();
-        
-        get_token ();
-    
-    }
-    
-    if (tok.kind != TOK_PLUSEQ) {
-    
-        free (name);
+    if (tok.kind != TOK_LPAREN) {
         return 0;
-    
     }
     
     get_token ();
     
-    if (token_is_sizeof_keyword ()) {
+    if (tok.kind == TOK_LPAREN) {
     
-        inc = sizeof_from_current_token ();
-        last_va_arg_object_size = (int) (inc.low & U32_MASK);
-    
-    } else {
-    
-        inc.low = (unsigned long) size;
-        inc.high = 0;
-        
-        emit_load_assignment_rhs_to_reg (reg);
+        paren_lvalue = 1;
+        get_token ();
     
     }
+    
+    if (tok.kind == TOK_STAR) {
+    
+        deref_lvalue = 1;
+        get_token ();
+    
+    }
+    
+    name_start = tok.start;
+    name_caret = tok.caret;
+    name_line = get_line_number ();
+    
+    if (tok.kind != TOK_IDENT || !tok.ident) {
+    
+        report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret, "expected va_list object in __scc_builtin_va_arg");
+        return 1;
+    
+    }
+    
+    name = xstrdup (tok.ident);
+    get_token ();
+    
+    if (paren_lvalue) {
+        expect (TOK_RPAREN, ")");
+    }
+    
+    expect (TOK_COMMA, ",");
+    
+    if (!is_type_start (tok.kind)) {
+    
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "expected type name in __scc_builtin_va_arg");
+        
+        free (name);
+        return 1;
+    
+    }
+    
+    parse_builtin_va_arg_type_now (&size, &is_unsigned, &pointer_depth, &is_floating);
+    expect (TOK_RPAREN, ")");
+    
+    if (size <= 0) {
+        size = DATA_INT & 0x1f;
+    }
+    
+    inc = (unsigned long) size;
     
     src = find_local_symbol (name);
     global_index = find_global_symbol (name);
@@ -16953,39 +17292,38 @@ static int emit_parse_va_arg_address_to_reg_now (const char *reg, int size) {
     
     if (deref_lvalue) {
     
+        scratch_reg = strcmp (reg, "edx") == 0 ? "ecx" : "edx";
+        
         if (src) {
         
             if (src->is_static && src->static_label) {
-                emit_load_global_to_reg ("edx", src->static_label, DATA_PTR);
+                emit_load_global_to_reg (scratch_reg, src->static_label, DATA_PTR);
             } else {
-                emit_load_local_to_reg ("edx", src->offset, DATA_PTR);
+                emit_load_local_to_reg (scratch_reg, src->offset, DATA_PTR);
             }
         
         } else {
-            emit_load_global_to_reg ("edx", name, DATA_PTR);
-        }
-        
-        if (state->ofp) {
-        
-            if (state->syntax & ASM_SYNTAX_INTEL) {
-                fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov %s, dword [edx]\n" : "    mov %s, dword ptr [edx]\n", reg);
-            } else {
-                fprintf (state->ofp, "    movl (%%edx), %%%s\n", reg);
-            }
-        
+            emit_load_global_to_reg (scratch_reg, name, DATA_PTR);
         }
         
         if (state->ofp) {
         
             if (state->syntax & ASM_SYNTAX_INTEL) {
             
-                fprintf (state->ofp, "    add %s, %lu\n", reg, inc.low & U32_MASK);
-                fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov dword [edx], %s\n" : "    mov dword ptr [edx], %s\n", reg);
+                fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov %s, dword [%s]\n" : "    mov %s, dword ptr [%s]\n", reg, scratch_reg);
+                fprintf (state->ofp, "    push %s\n", reg);
+                fprintf (state->ofp, "    add %s, %lu\n", reg, inc);
+                fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov dword [%s], %s\n" : "    mov dword ptr [%s], %s\n", scratch_reg, reg);
+                fprintf (state->ofp, "    pop %s\n", reg);
             
             } else {
             
-                fprintf (state->ofp, "    addl $%lu, %%%s\n", inc.low & U32_MASK, reg);
-                fprintf (state->ofp, "    movl %%%s, (%%edx)\n", reg);
+                fprintf (state->ofp, "    movl (%%%s), %%%s\n", scratch_reg, reg);
+                fprintf (state->ofp, "    pushl %%%s\n", reg);
+                fprintf (state->ofp, "    addl $%lu, %%%s\n", inc, reg);
+                fprintf (state->ofp, "    movl %%%s, (%%%s)\n", reg, scratch_reg);
+                fprintf (state->ofp, "    subl $%lu, %%%s\n", inc, reg);
+                fprintf (state->ofp, "    popl %%%s\n", reg);
             
             }
         
@@ -17008,9 +17346,15 @@ static int emit_parse_va_arg_address_to_reg_now (const char *reg, int size) {
         if (state->ofp) {
         
             if (state->syntax & ASM_SYNTAX_INTEL) {
-                fprintf (state->ofp, "    add %s, %lu\n", reg, inc.low & U32_MASK);
+            
+                fprintf (state->ofp, "    push %s\n", reg);
+                fprintf (state->ofp, "    add %s, %lu\n", reg, inc);
+            
             } else {
-                fprintf (state->ofp, "    addl $%lu, %%%s\n", inc.low & U32_MASK, reg);
+            
+                fprintf (state->ofp, "    pushl %%%s\n", reg);
+                fprintf (state->ofp, "    addl $%lu, %%%s\n", inc, reg);
+            
             }
         
         }
@@ -17026,63 +17370,33 @@ static int emit_parse_va_arg_address_to_reg_now (const char *reg, int size) {
         } else {
             emit_store_reg_to_global (name, DATA_PTR, reg);
         }
-    
-    }
-    
-    if (tok.kind == TOK_COMMA) {
-    
-        get_token ();
         
-        if (_accept (TOK_LPAREN)) {
+        if (state->ofp) {
         
-            if (tok.kind == TOK_STAR) {
-                get_token ();
-            }
-            
-            if (tok.kind == TOK_IDENT) {
-                get_token ();
-            }
-            
-            expect (TOK_RPAREN, ")");
-        
-        } else {
-        
-            if (tok.kind == TOK_STAR) {
-                get_token ();
-            }
-            
-            if (tok.kind == TOK_IDENT) {
-                get_token ();
-            }
-        
-        }
-        
-        if (tok.kind == TOK_MINUS) {
-        
-            get_token ();
-            
-            if (token_is_sizeof_keyword ()) {
-                (void) sizeof_from_current_token ();
+            if (state->syntax & ASM_SYNTAX_INTEL) {
+                fprintf (state->ofp, "    pop %s\n", reg);
             } else {
-                skip_balanced_until (outer_paren ? TOK_RPAREN : TOK_SEMI, TOK_COMMA, TOK_EOF);
+                fprintf (state->ofp, "    popl %%%s\n", reg);
             }
         
         }
     
     }
     
-    if (outer_paren) {
-        expect (TOK_RPAREN, ")");
+    if (out_size) {
+        *out_size = size;
     }
     
-    if (state->ofp) {
+    if (out_unsigned) {
+        *out_unsigned = is_unsigned;
+    }
     
-        if (state->syntax & ASM_SYNTAX_INTEL) {
-            fprintf (state->ofp, "    sub %s, %lu\n", reg, inc.low & U32_MASK);
-        } else {
-            fprintf (state->ofp, "    subl $%lu, %%%s\n", inc.low & U32_MASK, reg);
-        }
+    if (out_pointer) {
+        *out_pointer = pointer_depth;
+    }
     
+    if (out_floating) {
+        *out_floating = is_floating;
     }
     
     free (name);
@@ -18546,7 +18860,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         
         }
         
-        if (const_integer_expr_text_is_foldable_now (tok.caret)) {
+        if (tok.kind != TOK_LPAREN && current_integer_expr_is_foldable_now ()) {
         
             int64_s v = const64_from_current_foldable_expr ();
             expect (TOK_RPAREN, ")");
@@ -19622,33 +19936,6 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             
                 if (parse_deref_cast_type_name (&deref_size)) {
                 
-                    int handled_va_arg = 0;
-                    
-                    if (expression_text_has_pluseq_before_delim_now (tok.start)) {
-                        handled_va_arg = emit_parse_va_arg_address_to_reg_now (reg, deref_size);
-                    }
-                    
-                    if (handled_va_arg && last_va_arg_object_size > (deref_size & 0x1f)) {
-                        deref_size = last_va_arg_object_size;
-                    }
-                    
-                    if (!handled_va_arg) {
-                    
-                        /*
-                         * This is the address operand of a casted dereference,
-                         * e.g. *(size_t *)ptr.  Do not parse a full binary
-                         * expression here: in
-                         *
-                         *     *(size_t *)ptr + sizeof(size_t)
-                         *
-                         * the + belongs to the outer expression after the
-                         * dereference, not to the address being dereferenced.
-                         */
-                        emit_load_assignment_rhs_to_reg (reg);
-                    
-                    }
-                    
-                     
                     /*
                      * parse_deref_cast_type_name() consumes the cast parentheses
                      * only.  Do not consume a following ')' here: in expressions
@@ -19674,6 +19961,18 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                     
                     }
                     
+                    /*
+                     * parse_deref_cast_type_name() consumes only the cast type
+                     * parentheses.  The operand being cast is still the current
+                     * token, e.g. the ptr in:
+                     *
+                     *     *(size_t *)ptr + sizeof(size_t)
+                     *
+                     * Load that address expression before applying the outer
+                     * unary '*'.  Otherwise the caller sees the unconsumed
+                     * identifier/operator and reports a false "expected )".
+                     */
+                    emit_load_assignment_rhs_to_reg (reg);
                     goto dereference_loaded_address;
                 
                 }
@@ -20298,6 +20597,31 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
     
     }
     
+    if (tok.kind == TOK_SCC_BUILTIN_VA_ARG) {
+    
+        int va_size = DATA_INT & 0x1f;
+        int va_unsigned = 1;
+        int va_pointer = 0;
+        int va_floating = 0;
+        
+        get_token ();
+        
+        emit_parse_builtin_va_arg_address_to_reg_now (reg, &va_size, &va_unsigned, &va_pointer, &va_floating);
+        emit_load_deref_reg_now (reg, va_size);
+        
+        if (va_pointer > 0) {
+            set_rhs_last_pointer_info (va_pointer, DATA_INT & 0x1f);
+        } else {
+        
+            emit_apply_integer_cast_to_reg_now (reg, va_size, va_unsigned);
+            clear_rhs_last_pointer_info ();
+        
+        }
+        
+        return;
+    
+    }
+    
     if (tok.kind == TOK_IDENT) {
     
         enum token_kind postfix_op = TOK_EOF;
@@ -20310,6 +20634,30 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         int postfix_incdec = 0;
         
         get_token ();
+        
+        if (strcmp (name, "__scc_builtin_va_arg") == 0 && tok.kind == TOK_LPAREN) {
+        
+            int va_size = DATA_INT & 0x1f;
+            int va_unsigned = 1;
+            int va_pointer = 0;
+            int va_floating = 0;
+            
+            emit_parse_builtin_va_arg_address_to_reg_now (reg, &va_size, &va_unsigned, &va_pointer, &va_floating);
+            emit_load_deref_reg_now (reg, va_size);
+            
+            if (va_pointer > 0) {
+                set_rhs_last_pointer_info (va_pointer, DATA_INT & 0x1f);
+            } else {
+            
+                emit_apply_integer_cast_to_reg_now (reg, va_size, va_unsigned);
+                clear_rhs_last_pointer_info ();
+            
+            }
+            
+            free (name);
+            return;
+        
+        }
         
         {
         
@@ -20640,13 +20988,13 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                 if (dst) {
                 
                     if (dst->is_static && dst->static_label) {
-                        emit_load_global_to_reg (reg, dst->static_label, dst->size);
+                        emit_load_global_to_reg_ex (reg, dst->static_label, dst->size, dst->is_unsigned);
                     } else {
-                        emit_load_local_to_reg (reg, dst->offset, dst->size);
+                        emit_load_local_to_reg_ex (reg, dst->offset, dst->size, dst->is_unsigned);
                     }
                 
                 } else {
-                    emit_load_global_to_reg (reg, name, dst_size);
+                    emit_load_global_to_reg_ex (reg, name, dst_size, get_global_symbol_unsigned (name));
                 }
                 
                 emit_load_assignment_rhs_expression_to_reg ("edx");
@@ -20846,9 +21194,9 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                 }
             
             } else if (src->is_static && src->static_label) {
-                emit_load_global_to_reg (reg, src->static_label, src->size);
+                emit_load_global_to_reg_ex (reg, src->static_label, src->size, src->is_unsigned);
             } else {
-                emit_load_local_to_reg (reg, src->offset, src->size);
+                emit_load_local_to_reg_ex (reg, src->offset, src->size, src->is_unsigned);
             }
             
             if (src->pointer_depth > 0) {
@@ -20938,7 +21286,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                 tok.kind == TOK_DOT) {
                 emit_load_address_to_reg_now (reg, name);
             } else {
-                emit_load_global_to_reg (reg, name, get_global_symbol_size (name));
+                emit_load_global_to_reg_ex (reg, name, get_global_symbol_size (name), get_global_symbol_unsigned (name));
             }
             
             if (tok.kind == TOK_ARROW && get_global_symbol_pointer_depth (name) > 0) {
@@ -21880,13 +22228,13 @@ static void emit_load_any_symbol_as_floating_now (struct local_symbol *src, cons
     if (src) {
     
         if (src->is_static && src->static_label) {
-            emit_load_global_to_reg ("eax", src->static_label, src->size);
+            emit_load_global_to_reg_ex ("eax", src->static_label, src->size, src->is_unsigned);
         } else {
-            emit_load_local_to_reg ("eax", src->offset, src->size);
+            emit_load_local_to_reg_ex ("eax", src->offset, src->size, src->is_unsigned);
         }
     
     } else {
-        emit_load_global_to_reg ("eax", name, size);
+        emit_load_global_to_reg_ex ("eax", name, size, get_global_symbol_unsigned (name));
     }
     
     if (state->syntax & ASM_SYNTAX_INTEL) {
@@ -22150,13 +22498,6 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
             
             if (is_type_start (tok.kind) && parse_deref_cast_type_name (&deref_size)) {
             
-                if (!expression_text_has_pluseq_before_delim_now (tok.start) ||
-                    !emit_parse_va_arg_address_to_reg_now ("eax", deref_size)) {
-                    emit_load_assignment_rhs_to_reg ("eax");
-                } else if (last_va_arg_object_size > (deref_size & 0x1f)) {
-                    deref_size = last_va_arg_object_size;
-                }
-                
                 emit_load_floating_deref_reg_now ("eax", deref_size);
                 return;
             
@@ -22244,6 +22585,22 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
     
     }
     
+    if (tok.kind == TOK_SCC_BUILTIN_VA_ARG) {
+    
+        int va_size = DATA_DOUBLE & 0x1f;
+        int va_unsigned = 0;
+        int va_pointer = 0;
+        int va_floating = 0;
+        
+        get_token ();
+        
+        emit_parse_builtin_va_arg_address_to_reg_now ("eax", &va_size, &va_unsigned, &va_pointer, &va_floating);
+        emit_load_floating_deref_reg_now ("eax", va_size);
+        
+        return;
+    
+    }
+    
     if (tok.kind == TOK_IDENT) {
     
         char *name = xstrdup (tok.ident);
@@ -22253,6 +22610,21 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
         
         struct local_symbol *src = find_local_symbol (name);
         get_token ();
+        
+        if (strcmp (name, "__scc_builtin_va_arg") == 0 && tok.kind == TOK_LPAREN) {
+        
+            int va_size = DATA_DOUBLE & 0x1f;
+            int va_unsigned = 0;
+            int va_pointer = 0;
+            int va_floating = 0;
+            
+            emit_parse_builtin_va_arg_address_to_reg_now ("eax", &va_size, &va_unsigned, &va_pointer, &va_floating);
+            emit_load_floating_deref_reg_now ("eax", va_size);
+            
+            free (name);
+            return;
+        
+        }
         
         if (is_assignment_operator (tok.kind)) {
         
@@ -22656,9 +23028,9 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
             } else {
             
                 if (src->is_static && src->static_label) {
-                    emit_load_global_to_reg ("eax", src->static_label, src->size);
+                    emit_load_global_to_reg_ex ("eax", src->static_label, src->size, src->is_unsigned);
                 } else {
-                    emit_load_local_to_reg ("eax", src->offset, src->size);
+                    emit_load_local_to_reg_ex ("eax", src->offset, src->size, src->is_unsigned);
                 }
                 
                 if (state->syntax & ASM_SYNTAX_INTEL) {
@@ -22710,7 +23082,7 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
                 emit_load_floating_symbol_now (0, name, get_global_symbol_size (name));
             } else {
             
-                emit_load_global_to_reg ("eax", name, get_global_symbol_size (name));
+                emit_load_global_to_reg_ex ("eax", name, get_global_symbol_size (name), get_global_symbol_unsigned (name));
                 
                 if (state->syntax & ASM_SYNTAX_INTEL) {
                 
@@ -24808,7 +25180,7 @@ static int emit_load_assignment_binary_expression_prec_to_reg (const char *reg, 
 
 static void emit_load_assignment_binary_expression_to_reg (const char *reg) {
 
-    if (const_integer_expr_text_is_foldable_now (tok.caret)) {
+    if (current_integer_expr_is_foldable_now ()) {
     
         int64_s v = const64_from_current_foldable_expr ();
         emit_load_const32_to_reg_now (reg, v);
@@ -24979,7 +25351,7 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
         if (logop == TOK_LOGAND) {
         
             emit_test_reg_jump_zero_now (reg, false_label);
-            emit_load_assignment_rhs_expression_to_reg (reg);
+            emit_load_assignment_compare_expression_to_reg (reg);
             emit_test_reg_jump_zero_now (reg, false_label);
             emit_mov_imm_to_reg_now (reg, 1);
             emit_statement_jump (end_label);
@@ -24990,7 +25362,7 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
         } else {
         
             emit_test_reg_jump_nonzero_now (reg, true_label);
-            emit_load_assignment_rhs_expression_to_reg (reg);
+            emit_load_assignment_compare_expression_to_reg (reg);
             emit_test_reg_jump_nonzero_now (reg, true_label);
             emit_mov_imm_to_reg_now (reg, 0);
             emit_statement_jump (end_label);
@@ -25195,7 +25567,7 @@ static void emit_load_assignment_rhs_expression_to_pair (const char *lo, const c
     int result_pair_is_eax_edx = (strcmp (lo, "eax") == 0 && strcmp (hi, "edx") == 0);
     int current_pair_is_eax_edx = result_pair_is_eax_edx;
     
-    if (const_integer_expr_text_is_foldable_now (tok.start)) {
+    if (current_integer_expr_is_foldable_now ()) {
     
         int64_s v = const64_from_current_foldable_expr ();
         emit_load_const64_to_pair_now (lo, hi, v);
@@ -26672,6 +27044,93 @@ static int parse_cast_indirect_assignment_statement (void) {
 
 }
 
+static int lparen_expression_starts_with_star_now (void) {
+
+    const char *p;
+    
+    if (tok.kind != TOK_LPAREN || !tok.caret) {
+        return 0;
+    }
+    
+    p = tok.caret + 1;
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    return *p == '*';
+
+}
+
+static int parse_parenthesized_indirect_assignment_statement (void) {
+
+    enum token_kind op;
+    
+    int pointer_depth;
+    int pointed_size;
+    int deref_size = DATA_INT & 0x1f;
+    
+    if (tok.kind != TOK_LPAREN) {
+        return 0;
+    }
+    
+    get_token ();
+    emit_load_assignment_rhs_expression_to_reg ("edx");
+    
+    pointer_depth = rhs_last_pointer_depth;
+    pointed_size = rhs_last_pointed_size;
+    
+    if (pointer_depth > 1) {
+        deref_size = DATA_PTR & 0x1f;
+    } else if (pointer_depth == 1 && pointed_size > 0) {
+        deref_size = pointed_size & 0x1f;
+    }
+    
+    if (deref_size <= 0) {
+        deref_size = DATA_INT & 0x1f;
+    }
+    
+    expect (TOK_RPAREN, ")");
+    
+    if (!is_assignment_operator (tok.kind)) {
+    
+        expect_semi_or_recover ();
+        return 1;
+    
+    }
+    
+    op = tok.kind;
+    get_token ();
+    
+    if (op == TOK_ASSIGN) {
+    
+        emit_push_reg_now ("edx");
+        
+        emit_load_assignment_rhs_expression_to_reg ("eax");
+        emit_pop_reg_now ("edx");
+    
+    } else {
+    
+        emit_push_reg_now ("edx");
+        
+        emit_load_deref_reg_now ("eax", deref_size);
+        emit_push_reg_now ("eax");
+        
+        emit_load_assignment_rhs_expression_to_reg ("edx");
+        emit_pop_reg_now ("eax");
+        
+        emit_assignment_binary_op (op, 0);
+        emit_pop_reg_now ("edx");
+    
+    }
+    
+    emit_store_reg_to_deref_reg_now ("edx", "eax", deref_size);
+    expect_semi_or_recover ();
+    
+    return 1;
+
+}
+
 static int parse_indirect_assignment_statement (void) {
 
     char *name;
@@ -26827,7 +27286,11 @@ static int parse_indirect_assignment_statement (void) {
                 return parse_cast_indirect_assignment_statement ();
             }
             
-            return parse_parenthesized_pointer_member_indirect_assignment_statement ();
+            if (lparen_expression_starts_with_star_now ()) {
+                return parse_parenthesized_pointer_member_indirect_assignment_statement ();
+            }
+            
+            return parse_parenthesized_indirect_assignment_statement ();
         
         }
         
@@ -28044,7 +28507,7 @@ static int parse_identifier_assignment_statement (void) {
                     
                     emit_load_const32_to_reg_now ("edx", rhs_const);
                 
-                } else if (const_integer_expr_text_is_foldable_now (tok.start) || const_integer_expr_text_is_foldable_now (tok.caret)) {
+                } else if (current_integer_expr_is_foldable_now ()) {
                 
                     int64_s rhs_const = const64_from_current_foldable_expr ();
                     emit_load_const32_to_reg_now ("edx", rhs_const);
@@ -28735,9 +29198,9 @@ static int parse_identifier_assignment_statement (void) {
                 if (lhs) {
                 
                     if (lhs->is_static && lhs->static_label) {
-                        emit_load_global_to_reg ("eax", lhs->static_label, lhs->size);
+                        emit_load_global_to_reg_ex ("eax", lhs->static_label, lhs->size, lhs->is_unsigned);
                     } else {
-                        emit_load_local_to_reg ("eax", lhs->offset, lhs->size);
+                        emit_load_local_to_reg_ex ("eax", lhs->offset, lhs->size, lhs->is_unsigned);
                     }
                 
                 } else {
@@ -30864,9 +31327,9 @@ static void parse_for_header_expression_until (enum token_kind end_token) {
                 if (lhs) {
                 
                     if (lhs->is_static && lhs->static_label) {
-                        emit_load_global_to_reg ("eax", lhs->static_label, lhs->size);
+                        emit_load_global_to_reg_ex ("eax", lhs->static_label, lhs->size, lhs->is_unsigned);
                     } else {
-                        emit_load_local_to_reg ("eax", lhs->offset, lhs->size);
+                        emit_load_local_to_reg_ex ("eax", lhs->offset, lhs->size, lhs->is_unsigned);
                     }
                 
                 } else {
@@ -31587,7 +32050,7 @@ static int emit_load_parenthesized_assignment_expression_to_reg_now (const char 
                     
                     emit_load_const32_to_reg_now ("edx", rhs_const);
                 
-                } else if (const_integer_expr_text_is_foldable_now (tok.start) || const_integer_expr_text_is_foldable_now (tok.caret)) {
+                } else if (current_integer_expr_is_foldable_now ()) {
                 
                     int64_s rhs_const = const64_from_current_foldable_expr ();
                     emit_load_const32_to_reg_now ("edx", rhs_const);
@@ -31723,9 +32186,9 @@ static int emit_load_parenthesized_assignment_expression_to_reg_now (const char 
                 if (lhs) {
                 
                     if (lhs->is_static && lhs->static_label) {
-                        emit_load_global_to_reg (reg, lhs->static_label, lhs->size);
+                        emit_load_global_to_reg_ex (reg, lhs->static_label, lhs->size, lhs->is_unsigned);
                     } else {
-                        emit_load_local_to_reg (reg, lhs->offset, lhs->size);
+                        emit_load_local_to_reg_ex (reg, lhs->offset, lhs->size, lhs->is_unsigned);
                     }
                 
                 } else {
@@ -32010,9 +32473,9 @@ static void emit_statement_jump_if_false (int label) {
     
     }
     
-    if (token_is_const_condition_operand_now () || const_integer_expr_text_is_foldable_now (tok.caret) || const_integer_expr_text_is_foldable_now (tok.start)) {
+    if (token_is_const_condition_operand_now () || const_integer_expr_text_is_foldable_now (tok.caret) || current_integer_expr_is_foldable_now ()) {
     
-        int fold_whole_expr = const_integer_expr_text_is_foldable_now (tok.caret) || const_integer_expr_text_is_foldable_now (tok.start);
+        int fold_whole_expr = const_integer_expr_text_is_foldable_now (tok.caret) || current_integer_expr_is_foldable_now ();
         int left_unsigned = rhs_current_operand_is_unsigned_now ();
         
         int64_s left;
@@ -32103,7 +32566,7 @@ static void emit_statement_jump_if_false (int label) {
             
                 int64_s right;
                 
-                if (const_integer_expr_text_is_foldable_now (tok.start)) {
+                if (current_integer_expr_is_foldable_now ()) {
                     right = const64_from_current_foldable_expr ();
                 } else {
                     right = const64_from_current_operand ();
@@ -34681,9 +35144,6 @@ static char *emit_string_literal_global (void) {
     
     int elem_size = DATA_CHAR & 0x1f;
     int value_count = 0, i;
-    
-    memset (label, 0, sizeof (label));
-    memset (skip_label, 0, sizeof (skip_label));
     
     if ((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) {
         sprintf (label, "LC%d", anon_label++);

@@ -1136,8 +1136,8 @@ struct vector *preprocess_line (char **line, char *real_start, char *real_caret,
                 tok = xmalloc (sizeof (*tok));
                 tok->kind = (ch == '"' ? TOK_LSTR : TOK_LCHAR);
                 
-                tok->start = (in_macro == 2) ? *line : (real_start ? real_start : *line);
-                tok->caret = (in_macro == 2) ? start : (real_caret ? real_caret : start);
+                tok->start = in_macro ? *line : (real_start ? real_start : *line);
+                tok->caret = in_macro ? start : (real_caret ? real_caret : start);
                 
                 tok->ident = temp;
                 tok->len = (caret - start);
@@ -1162,8 +1162,8 @@ struct vector *preprocess_line (char **line, char *real_start, char *real_caret,
             tok = xmalloc (sizeof (*tok));
             tok->kind = (ch == '"' ? TOK_LSTR : TOK_LCHAR);
             
-            tok->start = (in_macro == 2) ? *line : (real_start ? real_start : *line);
-            tok->caret = (in_macro == 2) ? start : (real_caret ? real_caret : start);
+            tok->start = in_macro ? *line : (real_start ? real_start : *line);
+            tok->caret = in_macro ? start : (real_caret ? real_caret : start);
             
             tok->ident = xstrndup (start, (int) (caret - start));
             tok->len = (caret - start);
@@ -1217,8 +1217,8 @@ struct vector *preprocess_line (char **line, char *real_start, char *real_caret,
                 tok = xmalloc (sizeof (*tok));
                 tok->kind = (ch == '"' ? TOK_PPSTR : TOK_CCHAR);
                 
-                tok->start = (in_macro == 2) ? *line : (real_start ? real_start : *line);
-                tok->caret = (in_macro == 2) ? start : (real_caret ? real_caret : start);
+                tok->start = in_macro ? *line : (real_start ? real_start : *line);
+                tok->caret = in_macro ? start : (real_caret ? real_caret : start);
                 
                 tok->ident = temp;
                 tok->len = (caret - start);
@@ -1243,8 +1243,8 @@ struct vector *preprocess_line (char **line, char *real_start, char *real_caret,
             tok = xmalloc (sizeof (*tok));
             tok->kind = (ch == '"' ? TOK_PPSTR : TOK_CCHAR);
             
-            tok->start = (in_macro == 2) ? *line : (real_start ? real_start : *line);
-            tok->caret = (in_macro == 2) ? start : (real_caret ? real_caret : start);
+            tok->start = in_macro ? *line : (real_start ? real_start : *line);
+            tok->caret = in_macro ? start : (real_caret ? real_caret : start);
             
             tok->ident = xstrndup (start, (int) (caret - start));
             tok->len = (caret - start);
@@ -1371,8 +1371,8 @@ struct vector *preprocess_line (char **line, char *real_start, char *real_caret,
             tok = xmalloc (sizeof (*tok));
             tok->kind = TOK_IDENT;
             
-            tok->start = (in_macro == 2) ? *line : (real_start ? real_start : *line);
-            tok->caret = (in_macro == 2) ? start : (real_caret ? real_caret : start);
+            tok->start = in_macro ? *line : (real_start ? real_start : *line);
+            tok->caret = in_macro ? start : (real_caret ? real_caret : start);
             
             tok->ident = xstrndup (start, (int) (caret - start));
             tok->len = (caret - start);
@@ -1429,8 +1429,8 @@ struct vector *preprocess_line (char **line, char *real_start, char *real_caret,
             tok = xmalloc (sizeof (*tok));
             tok->kind = TOK_PPNUM;
             
-            tok->start = (in_macro == 2) ? *line : (real_start ? real_start : *line);
-            tok->caret = (in_macro == 2) ? start : (real_caret ? real_caret : start);
+            tok->start = in_macro ? *line : (real_start ? real_start : *line);
+            tok->caret = in_macro ? start : (real_caret ? real_caret : start);
             
             tok->ident = xstrndup (start, (int) (caret - start));
             tok->len = (caret - start);
@@ -1541,8 +1541,8 @@ struct vector *preprocess_line (char **line, char *real_start, char *real_caret,
             tok = xmalloc (sizeof (*tok));
             tok->kind = TOK_PPNUM;
             
-            tok->start = (in_macro == 2) ? *line : (real_start ? real_start : *line);
-            tok->caret = (in_macro == 2) ? start : (real_caret ? real_caret : start);
+            tok->start = in_macro ? *line : (real_start ? real_start : *line);
+            tok->caret = in_macro ? start : (real_caret ? real_caret : start);
             
             tok->ident = xstrndup (start, (int) (caret - start));
             tok->len = (caret - start);
@@ -1601,8 +1601,8 @@ struct vector *preprocess_line (char **line, char *real_start, char *real_caret,
             
             }
             
-            tok->start = (in_macro == 2) ? *line : (real_start ? real_start : *line);
-            tok->caret = (in_macro == 2) ? start : (real_caret ? real_caret : start);
+            tok->start = in_macro ? *line : (real_start ? real_start : *line);
+            tok->caret = in_macro ? start : (real_caret ? real_caret : start);
             
             vec_push (&vector_tokens, tok);
             continue;

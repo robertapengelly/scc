@@ -23,7 +23,7 @@ static int hex_value (int ch) {
         return ch - '0';
     }
     
-    ch = tolower ((unsigned char) ch);
+    ch = tolower ((int) ch);
     
     if (ch >= 'a' && ch <= 'f') {
         return ch - 'a' + 10;
@@ -145,7 +145,7 @@ static uint64_t eval_char_constant (char *start, char **pp) {
                     
                     (*pp)++;
                     
-                    while ((h = hex_value ((unsigned char) **pp)) >= 0) {
+                    while ((h = hex_value ((int) **pp)) >= 0) {
                     
                         ch = (ch * 16) + h;
                         
@@ -172,7 +172,7 @@ static uint64_t eval_char_constant (char *start, char **pp) {
                 
                     report_line_at (get_filename (), get_line_number (), REPORT_ERROR, start, *pp, "unknown escape sequence");
                     
-                    ch = (unsigned char) **pp;
+                    ch = (int) **pp;
                     (*pp)++;
                     
                     break;
@@ -180,7 +180,7 @@ static uint64_t eval_char_constant (char *start, char **pp) {
             }
         
         } else {
-            ch = (unsigned char) *((*pp)++);
+            ch = (int) *((*pp)++);
         }
         
         value = (value << 8) | (ch & 0xff);

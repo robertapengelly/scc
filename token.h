@@ -91,6 +91,7 @@ enum token_kind {
     TOK_REGISTER,
     TOK_RESTRICT,
     TOK_RETURN,
+    TOK_SCC_BUILTIN_VA_ARG,
     TOK_SHORT,
     TOK_SIGNED,
     TOK_SIZEOF,
