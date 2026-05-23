@@ -33529,14 +33529,26 @@ static int is_string_token (void) {
     return tok.kind == TOK_PPSTR || tok.kind == TOK_LSTR;
 }
 
-static void append_global_init_byte (int64_s *values, int max_values, int *count, unsigned int value) {
+static void append_global_init_value (int64_s *values, int max_values, int *count, unsigned int value, int elem_size) {
 
+    unsigned int mask = 0xffU;
+    
+    if (elem_size == (DATA_SHORT & 0x1f)) {
+        mask = 0xffffU;
+    }
+    
     if (*count < max_values) {
-        zext64 (&values[*count], value & 0xffU);
+        zext64 (&values[*count], value & mask);
     }
     
     (*count)++;
 
+}
+
+static int parsed_string_initializer_elem_size = DATA_CHAR & 0x1f;
+
+static void append_global_init_byte (int64_s *values, int max_values, int *count, unsigned int value) {
+    append_global_init_value (values, max_values, count, value, DATA_CHAR & 0x1f);
 }
 
 static int parse_octal_escape_value (const char **ps) {
@@ -33597,6 +33609,8 @@ static int parse_hex_escape_value (const char **ps) {
 
 static void parse_string_initializer_values (int64_s *values, int max_values, int *count) {
 
+    int elem_size = DATA_CHAR & 0x1f;
+    
     while (is_string_token ()) {
     
         const char *s;
@@ -33605,7 +33619,10 @@ static void parse_string_initializer_values (int64_s *values, int max_values, in
         s = tok.ident;
         
         if (tok.kind == TOK_LSTR && *s == 'L') {
+        
+            elem_size = DATA_SHORT & 0x1f;
             s++;
+        
         }
         
         quote = *s;
@@ -33740,7 +33757,7 @@ static void parse_string_initializer_values (int64_s *values, int max_values, in
                 ch = (unsigned char) *s++;
             }
             
-            append_global_init_byte (values, max_values, count, ch);
+            append_global_init_value (values, max_values, count, ch, elem_size);
         
         }
         
@@ -33748,7 +33765,8 @@ static void parse_string_initializer_values (int64_s *values, int max_values, in
     
     }
     
-    append_global_init_byte (values, max_values, count, 0);
+    append_global_init_value (values, max_values, count, 0, elem_size);
+    parsed_string_initializer_elem_size = elem_size;
 
 }
 
@@ -34661,6 +34679,7 @@ static char *emit_string_literal_global (void) {
     char label[64];
     char skip_label[64];
     
+    int elem_size = DATA_CHAR & 0x1f;
     int value_count = 0, i;
     
     memset (label, 0, sizeof (label));
@@ -34673,6 +34692,7 @@ static char *emit_string_literal_global (void) {
     }
     
     parse_string_initializer_values (values, MAX_AGG_FIELDS, &value_count);
+    elem_size = parsed_string_initializer_elem_size;
     
     /*
      * Dead statement parsing suppresses output by temporarily clearing
@@ -34700,7 +34720,7 @@ static char *emit_string_literal_global (void) {
         emit_global_data_label (label, 1);
         
         for (i = 0; i < value_count; i++) {
-            emit_global_scalar (values[i], DATA_CHAR & 0x1f);
+            emit_global_scalar (values[i], elem_size);
         }
         
         switch_section (SECTION_TEXT);
@@ -34714,7 +34734,7 @@ static char *emit_string_literal_global (void) {
     emit_global_data_label (label, 1);
     
     for (i = 0; i < value_count; i++) {
-        emit_global_scalar (values[i], DATA_CHAR & 0x1f);
+        emit_global_scalar (values[i], elem_size);
     }
     
     return xstrdup (label);
