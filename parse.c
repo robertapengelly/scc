@@ -23393,7 +23393,7 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
                 fflush (arg_tmp_ofp);
                 
                 state->ofp = arg_saved_ofp;
-                new_arg_tmp_ofps = (FILE **) realloc (arg_tmp_ofps, sizeof (*arg_tmp_ofps) * (argc + 1));
+                new_arg_tmp_ofps = (FILE **) xrealloc (arg_tmp_ofps, sizeof (*arg_tmp_ofps) * (argc + 1));
                 
                 if (new_arg_tmp_ofps) {
                 
@@ -23795,7 +23795,7 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                 fflush (arg_tmp_ofp);
                 state->ofp = arg_saved_ofp;
                 
-                new_arg_tmp_ofps = (FILE **) realloc (arg_tmp_ofps, sizeof (*arg_tmp_ofps) * (argc + 1));
+                new_arg_tmp_ofps = (FILE **) xrealloc (arg_tmp_ofps, sizeof (*arg_tmp_ofps) * (argc + 1));
                 
                 if (new_arg_tmp_ofps) {
                 
@@ -28457,7 +28457,7 @@ static int parse_identifier_assignment_statement (void) {
                                 fflush (arg_tmp_ofp);
                                 state->ofp = arg_saved_ofp;
                                 
-                                new_arg_tmp_ofps = (FILE **) realloc (arg_tmp_ofps, sizeof (*arg_tmp_ofps) * (argc + 1));
+                                new_arg_tmp_ofps = (FILE **) xrealloc (arg_tmp_ofps, sizeof (*arg_tmp_ofps) * (argc + 1));
                                 
                                 if (new_arg_tmp_ofps) {
                                 

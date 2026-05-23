@@ -1320,7 +1320,7 @@ struct vector *preprocess_line (char **line, char *real_start, char *real_caret,
                         
                         while (!is_end_of_line[(int) *caret]) {
                         
-                            if (!isspace (*caret)) {
+                            if (!isspace ((int) *caret)) {
                                 break;
                             }
                             
