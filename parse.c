@@ -6054,8 +6054,10 @@ struct pending_param {
 };
 
 static struct pending_param pending_params[MAX_PENDING_PARAMS];
+
 static int pending_param_count = 0;
 static int declarator_depth = 0;
+static int preserve_pending_params = 0;
 
 static int local_symbol_exists_in_current_scope (const char *name, int start_count);
 
@@ -6123,6 +6125,129 @@ static void add_pending_param (const char *name, int size, int align, int is_uns
     pending_params[pending_param_count].pointed_tag_name = (pointer_depth > 0 && parsed_type_tag_name[0]) ? xstrdup (parsed_type_tag_name) : 0;
     
     pending_param_count++;
+
+}
+
+static int find_pending_param_from (const char *name, int start) {
+
+    int i;
+    
+    if (!name) {
+        return -1;
+    }
+    
+    if (start < 0) {
+        start = 0;
+    }
+    
+    for (i = start; i < pending_param_count; i++) {
+    
+        if (pending_params[i].name && strcmp (pending_params[i].name, name) == 0) {
+            return i;
+        }
+    
+    }
+    
+    return -1;
+
+}
+
+static int find_pending_param (const char *name) {
+    return find_pending_param_from (name, 0);
+}
+
+static void update_pending_param (const char *name, int size, int align, int is_unsigned, int is_floating, int pointer_depth, int pointed_size) {
+
+    int i = find_pending_param (name);
+    
+    if (i < 0) {
+        return;
+    }
+    
+    if (pointer_depth > 0 && parsed_type_is_aggregate && parsed_type_size > (DATA_PTR & 0x1f) && pointed_size <= (DATA_PTR & 0x1f)) {
+        pointed_size = parsed_type_size;
+    }
+    
+    if (size < 1) {
+        size = DATA_INT & 0x1f;
+    }
+    
+    if (align < 1) {
+        align = type_alignment (size);
+    }
+    
+    pending_params[i].size = size;
+    pending_params[i].align = align;
+    pending_params[i].is_unsigned = is_unsigned ? 1 : 0;
+    pending_params[i].is_floating = is_floating ? 1 : 0;
+    pending_params[i].pointer_depth = pointer_depth;
+    pending_params[i].pointed_size = pointed_size > 0 ? pointed_size : 0;
+    
+    if (pending_params[i].pointed_tag_name) {
+    
+        free (pending_params[i].pointed_tag_name);
+        pending_params[i].pointed_tag_name = 0;
+    
+    }
+    
+    if (pointer_depth > 0 && parsed_type_tag_name[0]) {
+        pending_params[i].pointed_tag_name = xstrdup (parsed_type_tag_name);
+    }
+
+}
+
+static void remove_duplicate_pending_params (void) {
+
+    int i;
+    
+    for (i = 0; i < pending_param_count; i++) {
+    
+        int j;
+        
+        if (!pending_params[i].name) {
+            continue;
+        }
+        
+        j = i + 1;
+        
+        while (j < pending_param_count) {
+        
+            if (pending_params[j].name && strcmp (pending_params[i].name, pending_params[j].name) == 0) {
+            
+                int k;
+                
+                if (pending_params[j].name) {
+                    free (pending_params[j].name);
+                }
+                
+                if (pending_params[j].pointed_tag_name) {
+                    free (pending_params[j].pointed_tag_name);
+                }
+                
+                for (k = j; k + 1 < pending_param_count; k++) {
+                    pending_params[k] = pending_params[k + 1];
+                }
+                
+                pending_param_count--;
+                
+                pending_params[pending_param_count].name = 0;
+                pending_params[pending_param_count].size = 0;
+                pending_params[pending_param_count].align = 0;
+                pending_params[pending_param_count].is_unsigned = 0;
+                pending_params[pending_param_count].is_floating = 0;
+                pending_params[pending_param_count].pointer_depth = 0;
+                pending_params[pending_param_count].pointed_size = 0;
+                pending_params[pending_param_count].pointed_tag_name = 0;
+                
+                continue;
+            
+            }
+            
+            j++;
+        
+        }
+    
+    }
 
 }
 
@@ -7657,6 +7782,7 @@ static void parse_direct_declarator (char **out_name) {
         
         if (_accept (TOK_LPAREN)) {
         
+            int old_style_param_start = pending_param_count;
             declarator_has_function = 1;
             
             if (tok.kind != TOK_RPAREN) {
@@ -7802,7 +7928,13 @@ static void parse_direct_declarator (char **out_name) {
                             get_token ();
                             
                             if (declarator_depth == 1) {
-                                add_pending_param (param_name, param_size, type_alignment (param_size), 0, 0, unknown_typedef_pointer ? 1 : 0, DATA_INT & 0x1f);
+                            
+                                if (find_pending_param_from (param_name, old_style_param_start) >= 0) {
+                                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate parameter '%s'", param_name);
+                                } else {
+                                    add_pending_param (param_name, param_size, type_alignment (param_size), 0, 0, unknown_typedef_pointer ? 1 : 0, DATA_INT & 0x1f);
+                                }
+                            
                             }
                             
                             free (param_name);
@@ -7814,7 +7946,19 @@ static void parse_direct_declarator (char **out_name) {
                         }
                         
                         if (!consumed_as_prototype_param) {
+                        
+                            if (declarator_depth == 1) {
+                            
+                                if (find_pending_param_from (maybe_type_name, old_style_param_start) >= 0) {
+                                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate parameter '%s'", maybe_type_name);
+                                } else {
+                                    add_pending_param (maybe_type_name, DATA_INT & 0x1f, type_alignment (DATA_INT & 0x1f), 0, 0, 0, 0);
+                                }
+                            
+                            }
+                            
                             declarator_function_param_count++;
+                        
                         }
                         
                         if (maybe_type_name) {
@@ -7876,9 +8020,12 @@ static void parse_declarator (char **out_name) {
     
     if (top_level) {
     
-        clear_pending_params ();
+        if (!preserve_pending_params) {
+            clear_pending_params ();
+        }
         
         capture_declarator_name_location = 1;
+        
         captured_declarator_name_location = 0;
         captured_declarator_name_start = 0;
         captured_declarator_name_caret = 0;
@@ -7964,15 +8111,38 @@ static void parse_old_style_param_decls (void) {
 
     while (is_type_start (tok.kind)) {
     
+        int param_base_size;
+        
         parse_type_spec ();
+        param_base_size = parsed_type_size;
         
         for (;;) {
         
             char *name = 0;
+            
+            int param_size;
+            int param_pointer_depth;
+            
+            preserve_pending_params++;
             parse_declarator (&name);
+            preserve_pending_params--;
             
             if (name) {
+            
+                param_size = (declarator_is_pointer || declarator_has_array || declarator_has_function || parsed_type_is_array_typedef) ? DATA_PTR : declarator_object_size (param_base_size);
+                param_pointer_depth = declarator_pointer_depth;
+                
+                if ((declarator_has_array || declarator_has_function || parsed_type_is_array_typedef) && param_pointer_depth < 1) {
+                    param_pointer_depth = 1;
+                }
+                
+                update_pending_param (name, param_size, type_alignment (param_size),
+                    (declarator_is_pointer || declarator_has_array || declarator_has_function || parsed_type_is_array_typedef ? 0 : parsed_type_is_unsigned),
+                        (declarator_is_pointer || declarator_has_array || declarator_has_function || parsed_type_is_array_typedef ? 0 : parsed_type_is_floating),
+                            param_pointer_depth, parsed_type_is_aggregate ? parsed_type_size : (parsed_type_size & 0x1f));
+                
                 free (name);
+            
             }
             
             if (_accept (TOK_ASSIGN)) {
@@ -33993,8 +34163,6 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
         set_global_symbol_returns_void (name, return_is_void);
         set_global_symbol_param_count (name, saved_declarator_function_param_count, saved_declarator_function_has_prototype || saved_declarator_function_param_count > 0, saved_declarator_function_is_variadic);
         
-        copy_pending_params_to_global_symbol (name);
-        
         if (is_inline) {
         
             remember_inline_function_signature (name, saved_declarator_function_param_count, saved_declarator_function_has_prototype || saved_declarator_function_param_count > 0,
@@ -34018,6 +34186,21 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     current_function_returns_aggregate = (!return_is_void && !return_is_floating && return_size > (DATA_LLONG & 0x1f));
     current_function_has_return_statement = 0;
     
+    parse_old_style_param_decls ();
+    remove_duplicate_pending_params ();
+    
+    /*
+     * Old-style definitions start with an identifier list, so the first
+     * function-symbol install only knows the default int-sized parameter
+     * placeholders.  The declaration list between ')' and '{' is what gives
+     * those parameters their real types.  Refresh the saved call signature
+     * after that list has been parsed, otherwise later calls in the same
+     * translation unit pass 64-bit parameters as single words.
+     */
+    if (emit_body && should_emit) {
+        copy_pending_params_to_global_symbol (name);
+    }
+    
     reset_local_symbols ();
     reset_goto_labels ();
     
@@ -34035,7 +34218,6 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     
     emit_function_start (name, !emit_public);
     
-    parse_old_style_param_decls ();
     parse_block ();
     check_goto_labels ();
     
@@ -34123,13 +34305,107 @@ static int parse_possible_knr_function (void) {
     
     }
     
+    clear_pending_params ();
+    
+    declarator_function_param_count = 0;
+    declarator_function_has_prototype = 0;
+    declarator_function_is_variadic = 0;
+    
     if (tok.kind != TOK_RPAREN) {
     
-        for (;;) {
+        int old_style_param_start = pending_param_count;
         
-            if (token_is_ident ()) {
+        for (;;) {
+       
+            if (tok.kind == TOK_ELLIPSIS) {
             
-                add_pending_param (tok.ident, DATA_INT & 0x1f, type_alignment (DATA_INT & 0x1f), 0, 0, 0, 0);
+                declarator_function_is_variadic = 1;
+                declarator_function_has_prototype = 1;
+                
+                get_token ();
+            
+            } else if (is_type_start (tok.kind)) {
+            
+                int param_base_size;
+                int param_size;
+                int param_pointer_depth;
+                int saved_function_param_count;
+                
+                int count_this_param = 0;
+                int saw_void_param_list = 0;
+                
+                char *param_name = 0;
+                
+                parse_type_spec ();
+                param_base_size = parsed_type_size;
+                
+                preserve_pending_params++;
+                
+                declarator_is_pointer = 0;
+                declarator_pointer_depth = 0;
+                declarator_has_array = 0;
+                declarator_has_function = 0;
+                declarator_function_is_pointer = 0;
+                declarator_array_unsized = 0;
+                declarator_array_count = 1;
+                declarator_last_array_count = 1;
+                
+                if (parsed_type_only_qualifiers && token_is_ident ()) {
+                    get_token ();
+                }
+                
+                saved_function_param_count = declarator_function_param_count;
+                
+                if (tok.kind != TOK_COMMA && tok.kind != TOK_RPAREN) {
+                    parse_declarator (&param_name);
+                }
+                
+                preserve_pending_params--;
+                
+                if (!parsed_type_is_void || declarator_is_pointer || declarator_has_array || declarator_has_function || param_name) {
+                
+                    count_this_param = 1;
+                    
+                    param_size = (declarator_is_pointer || declarator_has_array || declarator_has_function || parsed_type_is_array_typedef) ? DATA_PTR : declarator_object_size (param_base_size);
+                    param_pointer_depth = declarator_pointer_depth;
+                    
+                    if ((declarator_has_array || declarator_has_function || parsed_type_is_array_typedef) && param_pointer_depth < 1) {
+                        param_pointer_depth = 1;
+                    }
+                    
+                    if (param_name && find_pending_param_from (param_name, old_style_param_start) >= 0) {
+                        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate parameter '%s'", param_name);
+                    } else {
+                    
+                        add_pending_param (param_name, param_size, type_alignment (param_size),
+                            (declarator_is_pointer || declarator_has_array || declarator_has_function || parsed_type_is_array_typedef ? 0 : parsed_type_is_unsigned),
+                                (declarator_is_pointer || declarator_has_array || declarator_has_function || parsed_type_is_array_typedef ? 0 : parsed_type_is_floating),
+                                    param_pointer_depth, parsed_type_is_aggregate ? parsed_type_size : (parsed_type_size & 0x1f));
+                    
+                    }
+                
+                } else {
+                    saw_void_param_list = 1;
+                }
+                
+                if (param_name) {
+                    free (param_name);
+                }
+                
+                declarator_function_param_count = saved_function_param_count + (count_this_param ? 1 : 0);
+                declarator_function_has_prototype = declarator_function_has_prototype || count_this_param || saw_void_param_list;
+            
+            } else if (token_is_ident ()) {
+            
+                if (find_pending_param_from (tok.ident, old_style_param_start) >= 0) {
+                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate parameter '%s'", tok.ident);
+                } else {
+                
+                    add_pending_param (tok.ident, DATA_INT & 0x1f, type_alignment (DATA_INT & 0x1f), 0, 0, 0, 0);
+                    declarator_function_param_count++;
+                
+                }
+                
                 get_token ();
             
             } else {
@@ -35571,7 +35847,7 @@ static void parse_external_after_type (void) {
         
         }
         
-        if (name && tok.kind == TOK_LBRACE) {
+        if (name && declarator_has_function && (tok.kind == TOK_LBRACE || is_type_start (tok.kind))) {
         
             if (parsed_dllexport) {
             
