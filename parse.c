@@ -901,6 +901,10 @@ struct global_symbol_entry {
     int has_prototype;
     int is_variadic;
     
+    int param_sizes[128];
+    int param_unsigneds[128];
+    int param_floatings[128];
+    
     int is_implicit;
     int extern_emitted;
     
@@ -944,6 +948,21 @@ static void clear_global_symbols (void) {
         global_symbols[i].is_unsigned = 0;
         global_symbols[i].is_floating = 0;
         global_symbols[i].returns_void = 0;
+        
+        {
+        
+            int pi;
+            
+            for (pi = 0; pi < 128; pi++) {
+            
+                global_symbols[i].param_sizes[pi] = 0;
+                global_symbols[i].param_unsigneds[pi] = 0;
+                global_symbols[i].param_floatings[pi] = 0;
+            
+            }
+        
+        }
+        
         global_symbols[i].param_count = 0;
         global_symbols[i].has_prototype = 0;
         global_symbols[i].is_variadic = 0;
@@ -1352,6 +1371,42 @@ static int get_global_symbol_param_count (const char *name) {
 
 }
 
+static int get_global_symbol_param_size (const char *name, int param_index) {
+
+    int i = find_global_symbol (name);
+    
+    if (i >= 0 && param_index >= 0 && param_index < 128 && global_symbols[i].param_sizes[param_index] > 0) {
+        return global_symbols[i].param_sizes[param_index];
+    }
+    
+    return DATA_PTR & 0x1f;
+
+}
+
+static int get_global_symbol_param_unsigned (const char *name, int param_index) {
+
+    int i = find_global_symbol (name);
+    
+    if (i >= 0 && param_index >= 0 && param_index < 128) {
+        return global_symbols[i].param_unsigneds[param_index] ? 1 : 0;
+    }
+    
+    return 0;
+
+}
+
+static int get_global_symbol_param_floating (const char *name, int param_index) {
+
+    int i = find_global_symbol (name);
+    
+    if (i >= 0 && param_index >= 0 && param_index < 128) {
+        return global_symbols[i].param_floatings[param_index] ? 1 : 0;
+    }
+    
+    return 0;
+
+}
+
 static void set_global_symbol_size (const char *name, int size) {
 
     int i = find_global_symbol (name);
@@ -1440,6 +1495,21 @@ static int add_global_symbol (const char *name, int kind, int is_extern, const c
     global_symbols[global_symbol_count].is_floating = 0;
     global_symbols[global_symbol_count].is_array = 0;
     global_symbols[global_symbol_count].returns_void = 0;
+    
+    {
+    
+        int pi;
+        
+        for (pi = 0; pi < 128; pi++) {
+        
+            global_symbols[global_symbol_count].param_sizes[pi] = 0;
+            global_symbols[global_symbol_count].param_unsigneds[pi] = 0;
+            global_symbols[global_symbol_count].param_floatings[pi] = 0;
+        
+        }
+    
+    }
+    
     global_symbols[global_symbol_count].param_count = 0;
     global_symbols[global_symbol_count].has_prototype = 0;
     global_symbols[global_symbol_count].is_variadic = 0;
@@ -6024,10 +6094,6 @@ static void clear_pending_params (void) {
 
 static void add_pending_param (const char *name, int size, int align, int is_unsigned, int is_floating, int pointer_depth, int pointed_size) {
 
-    if (!name || !*name) {
-        return;
-    }
-    
     if (pointer_depth > 0 && parsed_type_is_aggregate && parsed_type_size > (DATA_PTR & 0x1f) && pointed_size <= (DATA_PTR & 0x1f)) {
         pointed_size = parsed_type_size;
     }
@@ -6047,7 +6113,7 @@ static void add_pending_param (const char *name, int size, int align, int is_uns
         align = type_alignment (size);
     }
     
-    pending_params[pending_param_count].name = xstrdup (name);
+    pending_params[pending_param_count].name = (name && *name) ? xstrdup (name) : 0;
     pending_params[pending_param_count].size = size;
     pending_params[pending_param_count].align = align;
     pending_params[pending_param_count].is_unsigned = is_unsigned ? 1 : 0;
@@ -6057,6 +6123,33 @@ static void add_pending_param (const char *name, int size, int align, int is_uns
     pending_params[pending_param_count].pointed_tag_name = (pointer_depth > 0 && parsed_type_tag_name[0]) ? xstrdup (parsed_type_tag_name) : 0;
     
     pending_param_count++;
+
+}
+
+static void copy_pending_params_to_global_symbol (const char *name) {
+
+    int i = find_global_symbol (name);
+    int pi;
+    
+    if (i < 0) {
+        return;
+    }
+    
+    for (pi = 0; pi < 128; pi++) {
+    
+        global_symbols[i].param_sizes[pi] = 0;
+        global_symbols[i].param_unsigneds[pi] = 0;
+        global_symbols[i].param_floatings[pi] = 0;
+    
+    }
+    
+    for (pi = 0; pi < pending_param_count && pi < 128; pi++) {
+    
+        global_symbols[i].param_sizes[pi] = pending_params[pi].size;
+        global_symbols[i].param_unsigneds[pi] = pending_params[pi].is_unsigned;
+        global_symbols[i].param_floatings[pi] = pending_params[pi].is_floating;
+    
+    }
 
 }
 
@@ -9515,6 +9608,9 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg);
 
 static void emit_incdec_symbol_now (struct local_symbol *sym, const char *name, enum token_kind op, int line, const char *start, const char *caret);
 
+static int current_expression_mentions_64bit_symbol_now (void);
+static int rhs_current_operand_is_unsigned_now (void);
+
 static int initializer_contains_runtime_call_now (void) {
 
     const char *p = tok.start;
@@ -10174,7 +10270,10 @@ static void parse_block (void) {
                         set_global_symbol_returns_void (name, declarator_has_function && parsed_type_is_void && !declarator_is_pointer && !declarator_function_is_pointer);
                         
                         if (declarator_has_function) {
+                        
                             set_global_symbol_param_count (name, declarator_function_param_count, declarator_function_has_prototype || declarator_function_param_count > 0, declarator_function_is_variadic);
+                            copy_pending_params_to_global_symbol (name);
+                        
                         }
                         
                         switch_section (SECTION_TEXT);
@@ -11333,6 +11432,25 @@ static void emit_add_indexed_scaled_address_to_reg_now (const char *base_reg, co
 
 }
 
+static void emit_load_subscript_index_to_reg_now (const char *index_reg) {
+
+    if (current_expression_mentions_64bit_symbol_now ()) {
+    
+        int is_unsigned = rhs_current_operand_is_unsigned_now ();
+        emit_load_assignment_rhs_expression_to_pair ("eax", "edx", is_unsigned);
+        
+        if (index_reg && strcmp (index_reg, "eax") != 0) {
+            emit_mov_reg_to_reg_now (index_reg, "eax");
+        }
+        
+        return;
+    
+    }
+    
+    emit_load_assignment_rhs_expression_to_reg (index_reg);
+
+}
+
 static int emit_parse_postfix_subscript_scaled_address_to_reg_now (const char *reg, int elem_size) {
 
     const char *index_reg;
@@ -11350,7 +11468,7 @@ static int emit_parse_postfix_subscript_scaled_address_to_reg_now (const char *r
         get_token ();
         
         emit_push_reg_now (reg);
-        emit_load_assignment_rhs_expression_to_reg (index_reg);
+        emit_load_subscript_index_to_reg_now (index_reg);
         expect (TOK_RBRACK, "]");
         emit_pop_reg_now (reg);
         
@@ -11383,7 +11501,7 @@ static int emit_parse_postfix_subscripts_to_reg_now (const char *reg, int elem_s
         get_token ();
         
         emit_push_reg_now (reg);
-        emit_load_assignment_rhs_expression_to_reg (index_reg);
+        emit_load_subscript_index_to_reg_now (index_reg);
         
         expect (TOK_RBRACK, "]");
         emit_pop_reg_now (reg);
@@ -11453,7 +11571,7 @@ static int emit_parse_postfix_subscripts_to_reg_dims_now (const char *reg, int e
         get_token ();
         
         emit_push_reg_now (reg);
-        emit_load_assignment_rhs_expression_to_reg (index_reg);
+        emit_load_subscript_index_to_reg_now (index_reg);
         
         expect (TOK_RBRACK, "]");
         emit_pop_reg_now (reg);
@@ -24100,7 +24218,17 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                 arg_is_floating = rhs_current_operand_is_floating_now ();
                 arg_bytes = arg_is_floating ? (DATA_DOUBLE & 0x1f) : DATA_PTR;
                 
-                if (arg_is_floating) {
+                if (!use_inline && get_global_symbol_has_prototype (name) &&
+                    argc < get_global_symbol_param_count (name) &&
+                    get_global_symbol_param_size (name, argc) == (DATA_LLONG & 0x1f) &&
+                    !get_global_symbol_param_floating (name, argc)) {
+                
+                    arg_is_floating = 0;
+                    arg_bytes = DATA_LLONG & 0x1f;
+                    
+                    emit_load_assignment_rhs_expression_to_pair ("eax", "edx", get_global_symbol_param_unsigned (name, argc));
+
+                } else if (arg_is_floating) {
                     emit_load_floating_rhs_expression_now (DATA_DOUBLE & 0x1f);
                 } else {
                     emit_load_assignment_rhs_expression_to_reg ("eax");
@@ -24108,7 +24236,12 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                 
                 if (state->ofp) {
                 
-                    if (!use_inline && !arg_is_floating && postfix_member_seen && postfix_member_pointer_depth == 0 && postfix_member_size > (DATA_PTR & 0x1f)) {
+                    if (!use_inline && !arg_is_floating && arg_bytes == (DATA_LLONG & 0x1f)) {
+                    
+                        emit_push_reg_now ("edx");
+                        emit_push_reg_now ("eax");
+                    
+                    } else if (!use_inline && !arg_is_floating && postfix_member_seen && postfix_member_pointer_depth == 0 && postfix_member_size > (DATA_PTR & 0x1f)) {
                     
                         arg_bytes = postfix_member_size;
                         emit_push_aggregate_from_addr_reg_now ("eax", arg_bytes);
@@ -25425,6 +25558,32 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
 
 static void emit_statement_cmp64_to_eax (enum token_kind op, int is_unsigned);
 
+/*
+ * Statement conditions need to parse a 64-bit compare as:
+ *
+ *     <full lhs arithmetic> <compare> <full rhs arithmetic>
+ *
+ * The generic 64-bit expression loader normally treats compare/logical
+ * operators as binary operators that produce a 0/1 pair.  That is fine for
+ * expression values, but it is wrong when the condition emitter wants to
+ * generate the final branch itself: an expression such as
+ *
+ *     i < width - len - additionals_len
+ *
+ * was consumed as ((i < width) - len - additionals_len).  Use this flag only
+ * while the condition emitter is loading one side of a comparison so the
+ * normal tokenizer is left sitting on the compare/logical operator.
+ */
+static int assignment64_stop_before_condition_operator = 0;
+
+static int is_assignment64_condition_stop_operator (enum token_kind k) {
+
+    return  k == TOK_LESS || k == TOK_LTEQ || k == TOK_GREATER ||
+                k == TOK_GTEQ || k == TOK_EQEQ || k == TOK_NOTEQ ||
+                    k == TOK_LOGAND || k == TOK_LOGOR;
+
+}
+
 static int is_assignment64_binary_operator (enum token_kind k) {
 
     return  is_arithmetic_binary_operator (k) ||
@@ -25578,7 +25737,7 @@ static void emit_load_assignment_rhs_expression_to_pair (const char *lo, const c
     
     emit_load_assignment_rhs_to_pair (lo, hi);
     
-    while (is_assignment64_binary_operator (tok.kind)) {
+    while (is_assignment64_binary_operator (tok.kind) && !(assignment64_stop_before_condition_operator && is_assignment64_condition_stop_operator (tok.kind))) {
     
         op = tok.kind;
         get_token ();
@@ -32641,8 +32800,14 @@ static void emit_statement_jump_if_false (int label) {
     
     if (current_expression_mentions_64bit_symbol_now ()) {
     
+        int old_assignment64_stop_before_condition_operator;
         is_unsigned = rhs_current_operand_is_unsigned_now ();
+        
+        old_assignment64_stop_before_condition_operator = assignment64_stop_before_condition_operator;
+        assignment64_stop_before_condition_operator = 1;
+        
         emit_load_assignment_rhs_expression_to_pair ("eax", "edx", is_unsigned);
+        assignment64_stop_before_condition_operator = old_assignment64_stop_before_condition_operator;
         
         if (token_is_statement_compare_operator (tok.kind)) {
         
@@ -32671,6 +32836,18 @@ static void emit_statement_jump_if_false (int label) {
             
             }
             
+            /*
+             * The stop-before-compare guard is only needed while loading the
+             * left hand side of the statement condition.  After the condition
+             * operator has been consumed, the right hand side must be parsed as
+             * a complete expression.  Keeping the guard enabled here makes a
+             * parenthesized conditional expression such as:
+             *
+             *     i < (len_fract == 0 ? 1 : precision - len_fract)
+             *
+             * stop at the nested == and leave the parser expecting the closing
+             * ')'.  That is what produced the false "expected )" diagnostic.
+             */
             emit_load_assignment_rhs_expression_to_pair ("eax", "edx", is_unsigned);
             
             if (state->ofp) {
@@ -33816,6 +33993,8 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
         set_global_symbol_returns_void (name, return_is_void);
         set_global_symbol_param_count (name, saved_declarator_function_param_count, saved_declarator_function_has_prototype || saved_declarator_function_param_count > 0, saved_declarator_function_is_variadic);
         
+        copy_pending_params_to_global_symbol (name);
+        
         if (is_inline) {
         
             remember_inline_function_signature (name, saved_declarator_function_param_count, saved_declarator_function_has_prototype || saved_declarator_function_param_count > 0,
@@ -34745,7 +34924,7 @@ static void masm_emit_data_prefix (const char *directive) {
     
     } else if (masm_data_line_open && strcmp (masm_open_data_directive, directive) == 0) {
     
-        if (strcmp (directive, "db") == 0 && masm_data_line_values >= 8) {
+        if (masm_data_line_values >= 8) {
         
             fprintf (state->ofp, "\n    %s ", directive);
             masm_data_line_values = 0;

@@ -1180,7 +1180,7 @@ static int bn_lshift (unsigned int *bn, int shift, int or_val) {
 
 }
 
-float strtof (const char *nptr, char **endptr) {
+float _strtof (const char *nptr, char **endptr) {
 
     const char *s = nptr;
     float res = 0.0f;
@@ -1656,7 +1656,7 @@ static void parse_number (struct token *tok) {
                 ch = *p++;
                 
                 tok->kind = TOK_CFLOAT;
-                tok->val.f = strtof (cstr.data, 0);
+                tok->val.f = _strtof (cstr.data, 0);
             
             } else if (t == 'L') {
             
