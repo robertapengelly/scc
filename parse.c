@@ -99,6 +99,9 @@ static int pending_struct_return_stack_top = 0;
 static int suppress_next_struct_return_scalar_store = 0;
 static int token_identifier_is_function_call_rhs_now (void);
 
+static int assignment32_stop_before_condition_operator = 0;
+static int assignment64_stop_before_condition_operator = 0;
+
 static int parsed_type_size = DATA_NONE;
 static int parsed_type_is_inline = 0;
 static int parsed_type_is_void = 0;
@@ -1848,6 +1851,117 @@ static char *read_tmp_file_text (FILE *fp) {
     
     text[len] = 0;
     return text;
+
+}
+
+static FILE *open_scc_temp_file (char *name, size_t name_size) {
+
+    static unsigned long temp_id = 1;
+    unsigned long i;
+    
+    FILE *fp;
+    
+    if (!name || name_size == 0) {
+        return 0;
+    }
+    
+    for (i = 0; i < 1000; i++) {
+    
+        sprintf (name, "scc_tmp_%lu.tmp", temp_id++);
+        
+        if ((fp = fopen (name, "rb"))) {
+        
+            fclose (fp);
+            continue;
+        
+        }
+        
+        fp = fopen (name, "w+b");
+        
+        if (fp) {
+            return fp;
+        }
+    
+    }
+    
+    name[0] = 0;
+    return 0;
+
+}
+
+static void append_inline_text (char **dst, const char *start, size_t len);
+
+static void emit_function_frame_adjust_text (char **dst, long frame_size) {
+
+    char buf[128];
+    int n;
+    
+    if (!dst) {
+        return;
+    }
+    
+    frame_size = (frame_size + 3) & ~3L;
+    
+    if (frame_size <= 0) {
+        return;
+    }
+    
+    if (frame_size > 2147483647L) {
+        frame_size = 2147483647L;
+    }
+    
+    if (state->syntax & ASM_SYNTAX_INTEL) {
+        n = sprintf (buf, "    sub esp, %ld\n", frame_size);
+    } else {
+        n = sprintf (buf, "    subl $%ld, %%esp\n", frame_size);
+    }
+    
+    append_inline_text (dst, buf, (size_t) n);
+
+}
+
+static char *replace_function_frame_placeholder (const char *text, long frame_size) {
+
+    const char *marker = "__SCC_FRAME_PLACEHOLDER__\n";
+    const char *p;
+    const char *last;
+    
+    char *out = 0;
+    size_t marker_len;
+    
+    if (!text) {
+        return 0;
+    }
+    
+    marker_len = strlen (marker);
+    last = text;
+    
+    while ((p = strstr (last, marker)) != 0) {
+    
+        append_inline_text (&out, last, (size_t) (p - last));
+        
+        emit_function_frame_adjust_text (&out, frame_size);
+        last = p + marker_len;
+    
+    }
+    
+    append_inline_text (&out, last, strlen (last));
+    return out;
+
+}
+
+static FILE *scc_tmpfile (void) {
+
+    char name[64];
+    FILE *fp;
+
+    fp = open_scc_temp_file (name, sizeof (name));
+
+    if (fp && name[0]) {
+        remove (name);
+    }
+
+    return fp;
 
 }
 
@@ -5732,6 +5846,15 @@ static int local_symbol_count = 0;
 static long current_local_stack_size = 0;
 static long current_block_cleanup_bytes = 0;
 
+static long current_function_frame_size = 0;
+
+static int current_function_frame_label = -1;
+static int current_function_frame_deferred = 0;
+static int current_function_frame_enabled = 0;
+static int current_function_uses_single_frame = 0;
+
+static int next_function_frame_label = 1;
+
 static long align_up_long (long value, int align) {
 
     long mask;
@@ -5796,7 +5919,11 @@ static void reset_local_symbols (void) {
     }
     
     local_symbol_count = 0;
+    
     current_local_stack_size = 0;
+    current_block_cleanup_bytes = 0;
+    current_function_frame_size = 0;
+    current_function_uses_single_frame = 0;
 
 }
 
@@ -5931,6 +6058,10 @@ static long add_local_symbol (const char *name, int size, int align, int is_unsi
     
     local_symbol_count++;
     current_local_stack_size = new_size;
+    
+    if (current_local_stack_size > current_function_frame_size) {
+        current_function_frame_size = current_local_stack_size;
+    }
 
     return -(long) new_size;
 
@@ -6455,12 +6586,20 @@ static int token_is_ms_int_type_name (void) {
 
 static int is_type_start (enum token_kind k) {
 
-    if (k == TOK_IDENT && token_is_ms_int_type_name ()) {
-        return 1;
-    }
-    
     switch (k) {
     
+        case TOK_IDENT:
+        
+            if (token_is_ms_int_type_name ()) {
+                return 1;
+            }
+            
+            if (is_current_typedef_name ()) {
+                return 1;
+            }
+            
+            return 0;
+        
         case TOK_AUTO:          case TOK_REGISTER:      case TOK_STATIC:
         case TOK_DLLEXPORT:     case TOK_EXTERN:        case TOK_TYPEDEF:       case TOK_INLINE:
         case TOK_CONST:         case TOK_VOLATILE:      case TOK_RESTRICT:
@@ -6476,10 +6615,6 @@ static int is_type_start (enum token_kind k) {
         
             break;
     
-    }
-    
-    if (k == TOK_IDENT && is_current_typedef_name ()) {
-        return 1;
     }
     
     return 0;
@@ -6629,6 +6764,8 @@ int parse_cast_type_name (int *out_size, int *out_is_unsigned, int *out_is_point
 
 }
 
+static int last_deref_cast_type_is_floating = 0;
+
 static int parse_deref_cast_type_name (int *out_size) {
 
     int saved_type_size = parsed_type_size;
@@ -6655,6 +6792,9 @@ static int parse_deref_cast_type_name (int *out_size) {
     
     int size = DATA_INT & 0x1f;
     int ok = 0, i;
+    int cast_is_floating = 0;
+    
+    last_deref_cast_type_is_floating = 0;
     
     for (i = 0; i < saved_field_count && i < MAX_AGG_FIELDS; i++) {
         saved_fields[i] = parsed_field_sizes[i];
@@ -6670,7 +6810,9 @@ static int parse_deref_cast_type_name (int *out_size) {
         declarator_array_count = 0;
         
         parse_type_spec ();
+        
         size = parsed_type_size & 0x1f;
+        cast_is_floating = parsed_type_is_floating;
         
         if (tok.kind != TOK_RPAREN) {
         
@@ -6695,6 +6837,8 @@ static int parse_deref_cast_type_name (int *out_size) {
         
             get_token ();
             ok = 1;
+            
+            last_deref_cast_type_is_floating = cast_is_floating;
         
         } else {
             expect (TOK_RPAREN, ")");
@@ -8164,6 +8308,9 @@ static void parse_old_style_param_decls (void) {
 static void emit_extern_symbol (const char *name, int size, int is_function);
 static void emit_extern_reference_symbol (const char *name, int size);
 
+static void emit_deferred_function_frame_placeholder (void);
+static void patch_deferred_function_frame (void);
+
 static void emit_function_start (const char *name, int is_static) {
 
     const char *asm_name;
@@ -8202,12 +8349,16 @@ static void emit_function_start (const char *name, int is_static) {
         fprintf (state->ofp, "%s:\n", asm_name);
         fprintf (state->ofp, "    push ebp\n");
         fprintf (state->ofp, "    mov ebp, esp\n");
+        
+        emit_deferred_function_frame_placeholder ();
     
     } else {
     
         fprintf (state->ofp, "%s:\n", asm_name);
         fprintf (state->ofp, "    pushl %%ebp\n");
         fprintf (state->ofp, "    movl %%esp, %%ebp\n");
+        
+        emit_deferred_function_frame_placeholder ();
     
     }
 
@@ -8247,6 +8398,31 @@ static void emit_stack_adjust (long bytes, int allocate) {
     } else {
         fprintf (state->ofp, "    %s $%ld, %%esp\n", allocate ? "subl" : "addl", bytes);
     }
+
+}
+
+static void emit_deferred_function_frame_placeholder (void) {
+
+    current_function_frame_label = -1;
+    current_function_frame_deferred = 0;
+    
+    if (!state->ofp || !current_function_frame_enabled) {
+        return;
+    }
+    
+    current_function_frame_label = next_function_frame_label++;
+    current_function_frame_deferred = 1;
+    current_function_uses_single_frame = 1;
+    
+    fprintf (state->ofp, "__SCC_FRAME_PLACEHOLDER__\n");
+
+}
+
+static void patch_deferred_function_frame (void) {
+
+    current_function_frame_deferred = 0;
+    current_function_frame_label = -1;
+    current_function_frame_enabled = 0;
 
 }
 
@@ -8554,6 +8730,8 @@ static void emit_local_initializers (struct local_init *inits, int init_count) {
 
 static void emit_function_end (void) {
 
+    patch_deferred_function_frame ();
+    
     if (!state->ofp) {
         return;
     }
@@ -10287,6 +10465,15 @@ static void ensure_block_stack_allocated (long block_stack_start, long *block_st
         return;
     }
     
+    if (current_function_frame_deferred) {
+    
+        *block_stack_bytes = needed_stack_bytes;
+        *block_stack_emitted = (needed_stack_bytes > 0);
+        
+        return;
+    
+    }
+    
     if (!*block_stack_emitted) {
     
         *block_stack_bytes = needed_stack_bytes;
@@ -10650,6 +10837,11 @@ static void parse_block (void) {
                             int adj_i;
                             
                             current_local_stack_size += (elem_index * elem_size) - object_size;
+                            
+                            if (current_local_stack_size > current_function_frame_size) {
+                                current_function_frame_size = current_local_stack_size;
+                            }
+                            
                             new_offset = -current_local_stack_size;
                             delta = new_offset - old_offset;
                             object_offset = new_offset;
@@ -10866,9 +11058,12 @@ static void parse_block (void) {
                 if (!block_stack_emitted) {
                 
                     block_stack_bytes = needed_stack_bytes;
-                    emit_stack_adjust (block_stack_bytes, 1);
                     
-                    if (!is_function_body) {
+                    if (!current_function_frame_deferred) {
+                        emit_stack_adjust (block_stack_bytes, 1);
+                    }
+                    
+                    if (!is_function_body && !current_function_frame_deferred) {
                         current_block_cleanup_bytes += block_stack_bytes;
                     }
                     
@@ -10877,9 +11072,12 @@ static void parse_block (void) {
                 } else if (needed_stack_bytes > block_stack_bytes) {
                 
                     long extra_stack_bytes = needed_stack_bytes - block_stack_bytes;
-                    emit_stack_adjust (extra_stack_bytes, 1);
                     
-                    if (!is_function_body) {
+                    if (!current_function_frame_deferred) {
+                        emit_stack_adjust (extra_stack_bytes, 1);
+                    }
+                    
+                    if (!is_function_body && !current_function_frame_deferred) {
                         current_block_cleanup_bytes += extra_stack_bytes;
                     }
                     
@@ -10917,12 +11115,19 @@ static void parse_block (void) {
             if (!block_stack_emitted) {
             
                 block_stack_bytes = needed_stack_bytes;
-                emit_stack_adjust (block_stack_bytes, 1);
+                
+                if (!current_function_frame_deferred) {
+                    emit_stack_adjust (block_stack_bytes, 1);
+                }
+                
                 block_stack_emitted = (block_stack_bytes > 0);
             
             } else if (needed_stack_bytes > block_stack_bytes) {
             
-                emit_stack_adjust (needed_stack_bytes - block_stack_bytes, 1);
+                if (!current_function_frame_deferred) {
+                    emit_stack_adjust (needed_stack_bytes - block_stack_bytes, 1);
+                }
+                
                 block_stack_bytes = needed_stack_bytes;
             
             }
@@ -10936,7 +11141,7 @@ static void parse_block (void) {
     
     expect (TOK_RBRACE, "}");
     
-    if (!is_function_body && block_stack_emitted && block_stack_bytes > 0) {
+    if (!is_function_body && !current_function_frame_deferred && block_stack_emitted && block_stack_bytes > 0) {
     
         emit_stack_adjust (block_stack_bytes, 0);
         
@@ -18824,9 +19029,89 @@ static int emit_load_deref_assignment_expression_to_reg_now (const char *reg) {
 
 }
 
+static int source_starts_double_deref_at_now (const char *p) {
+
+    if (!p || *p != '*') {
+        return 0;
+    }
+    
+    p++;
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    return *p == '*';
+
+}
+
+static int current_floating_token_is_nonzero_now (void) {
+
+    if (tok.kind == TOK_CFLOAT) {
+    
+        union { float f; unsigned long u; } v;
+        
+        v.u = 0;
+        v.f = tok.val.f;
+        
+        return (v.u & 0x7fffffffUL) != 0;
+    
+    }
+    
+    {
+    
+        union { double d; unsigned long u[2]; } v;
+        
+        v.u[0] = 0;
+        v.u[1] = 0;
+        
+        if (tok.kind == TOK_CLDOUBLE) {
+            v.d = tok.val.ld;
+        } else {
+            v.d = tok.val.d;
+        }
+        
+        return ((v.u[1] & 0x7fffffffUL) != 0 || v.u[0] != 0);
+    
+    }
+
+}
+
 static void emit_load_assignment_rhs_to_reg (const char *reg) {
 
     clear_rhs_last_pointer_info ();
+    
+    if (tok.kind == TOK_STAR && source_starts_double_deref_at_now (tok.caret)) {
+    
+        int deref_size;
+        int inner_pointer_depth;
+        int inner_pointed_size;
+        
+        get_token ();
+        emit_load_assignment_rhs_to_reg (reg);
+        
+        inner_pointer_depth = rhs_last_pointer_depth;
+        inner_pointed_size = rhs_last_pointed_size;
+        
+        if (inner_pointer_depth > 1) {
+            deref_size = DATA_PTR & 0x1f;
+        } else if (inner_pointer_depth == 1 && inner_pointed_size > 0) {
+            deref_size = inner_pointed_size & 0x1f;
+        } else {
+            deref_size = DATA_INT & 0x1f;
+        }
+        
+        emit_load_deref_reg_now (reg, deref_size);
+        
+        if (inner_pointer_depth > 1) {
+            set_rhs_last_pointer_info (inner_pointer_depth - 1, inner_pointed_size);
+        } else {
+            clear_rhs_last_pointer_info ();
+        }
+        
+        return;
+    
+    }
     
     if (tok.kind == TOK_LPAREN && source_starts_lparen_deref_postfix_incdec_at (tok.caret)) {
     
@@ -20847,11 +21132,12 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         {
         
             int trailing_op = 0;
-            size_t len = tok.ident ? strlen (tok.ident) : 0;
             int64_s v;
             
+            size_t len = tok.ident ? strlen (tok.ident) : 0;
+            
+            v.low = current_floating_token_is_nonzero_now () ? 1 : 0;
             v.high = 0;
-            v.low = tok.val.ld != 0.0L ? 1 : 0;
             
             if (len > 1 && tok.ident[len - 1] == '+') {
                 trailing_op = TOK_PLUS;
@@ -22032,9 +22318,9 @@ static int64_s floating_constant_to_bits_now (int size) {
         if (tok.kind == TOK_CFLOAT) {
             f = tok.val.f;
         } else if (tok.kind == TOK_CLDOUBLE) {
-            f = (float) tok.val.ld;
+            f = (double) tok.val.ld;
         } else {
-            f = (float) tok.val.d;
+            f = tok.val.d;
         }
         
         memcpy (&bits32, &f, sizeof (f));
@@ -22076,16 +22362,16 @@ static int64_s floating_constant_to_bits_now (int size) {
 
 }
 
-static long double floating_constant_to_ld_now (void) {
+static double floating_constant_to_ld_now (void) {
 
-    long double v;
+    double v;
     
     if (tok.kind == TOK_CFLOAT) {
-        v = (long double) tok.val.f;
+        v = (float) tok.val.f;
     } else if (tok.kind == TOK_CLDOUBLE) {
-        v = tok.val.ld;
+        v = (double) tok.val.ld;
     } else {
-        v = (long double) tok.val.d;
+        v = tok.val.d;
     }
     
     get_token ();
@@ -22093,19 +22379,53 @@ static long double floating_constant_to_ld_now (void) {
 
 }
 
-static long double parse_floating_const_expr_value_now (void);
-static long double parse_floating_const_term_now (void);
-static long double parse_floating_const_primary_now (void);
+static double int64_u32_base_now (void) {
 
-static long double parse_floating_const_primary_now (void) {
+    volatile unsigned long half;
+    double d;
+    
+    /*
+     * Build 2^32 without a direct large floating literal.  The volatile word
+     * prevents the self compiler from folding this back into an LC*_flt data
+     * constant while compiling parse.c.
+     */
+    half = 65536UL;
+    
+    d = (double) half;
+    d *= (double) half;
+    
+    return d;
 
-    long double v;
+}
+
+static double int64_to_double_now (int64_s v) {
+
+    double d;
+    
+    d = (double) v.high;
+    d *= int64_u32_base_now ();
+    d += (double) v.low;
+    
+    return d;
+
+}
+
+static double parse_floating_const_expr_value_now (void);
+static double parse_floating_const_term_now (void);
+static double parse_floating_const_primary_now (void);
+
+static double parse_floating_const_primary_now (void) {
+
+    double v;
     int64_s iv;
     
     if (_accept (TOK_LPAREN)) {
+    
         v = parse_floating_const_expr_value_now ();
+        
         expect (TOK_RPAREN, ")");
         return v;
+    
     }
     
     if (_accept (TOK_PLUS)) {
@@ -22121,21 +22441,14 @@ static long double parse_floating_const_primary_now (void) {
     }
     
     iv = const64_from_current_operand ();
-    v = (long double) iv.low;
-    
-    if (iv.high != 0) {
-        v += ((long double) iv.high) * 4294967296.0L;
-    }
-    
-    return v;
+    return int64_to_double_now (iv);
 
 }
 
-static long double parse_floating_const_term_now (void) {
+static double parse_floating_const_term_now (void) {
 
-    long double v;
+    double rhs, v;
     enum token_kind op;
-    long double rhs;
     
     v = parse_floating_const_primary_now ();
     
@@ -22143,6 +22456,7 @@ static long double parse_floating_const_term_now (void) {
     
         op = tok.kind;
         get_token ();
+        
         rhs = parse_floating_const_primary_now ();
         
         if (op == TOK_STAR) {
@@ -22157,11 +22471,10 @@ static long double parse_floating_const_term_now (void) {
 
 }
 
-static long double parse_floating_const_expr_value_now (void) {
+static double parse_floating_const_expr_value_now (void) {
 
-    long double v;
+    double rhs, v;
     enum token_kind op;
-    long double rhs;
     
     v = parse_floating_const_term_now ();
     
@@ -22169,6 +22482,7 @@ static long double parse_floating_const_expr_value_now (void) {
     
         op = tok.kind;
         get_token ();
+        
         rhs = parse_floating_const_term_now ();
         
         if (op == TOK_PLUS) {
@@ -22185,7 +22499,7 @@ static long double parse_floating_const_expr_value_now (void) {
 
 static int64_s parse_floating_const_expr_bits_now (int size) {
 
-    long double acc;
+    double acc;
     int64_s r;
     
     acc = parse_floating_const_expr_value_now ();
@@ -22241,28 +22555,32 @@ static void emit_load_floating_const_bits_now (int size, int64_s v) {
     
     if (state->syntax & ASM_SYNTAX_MASM) {
     
-        fprintf (state->ofp, ".data\n");
+        switch_section (SECTION_DATA);
         
         if (size == (DATA_DOUBLE & 0x1f)) {
         
-            if (v.high & U32_MASK) {
-                fprintf (state->ofp, "LC%d_flt dq %lu%lu\n", lab, v.high & U32_MASK, v.low & U32_MASK);
-            } else {
-                fprintf (state->ofp, "LC%d_flt dd %lu\n", lab, v.low & U32_MASK);
-            }
+            /*
+             * Emit the exact IEEE bits as a 64-bit hex integer.  The old
+             * decimal concatenated the high and low dwords as text, and the
+             * high==0 branch emitted only a single dd even though the later
+             * load is fld qword ptr.  Both forms are unstable across
+             * bootstrap runs.
+             */
+            fprintf (state->ofp, "LC%d_flt dq 0%08lX%08lXh\n", lab, v.high & U32_MASK, v.low & U32_MASK);
         
         } else {
-            fprintf (state->ofp, "LC%d_flt dd %lu\n", lab, v.low & U32_MASK);
+            fprintf (state->ofp, "LC%d_flt dd 0%08lXh\n", lab, v.low & U32_MASK);
         }
         
-        fprintf (state->ofp, ".code\n");
+        switch_section (SECTION_TEXT);
         fprintf (state->ofp, "    fld %s ptr LC%d_flt\n", size == (DATA_DOUBLE & 0x1f) ? "qword" : "dword", lab);
     
     } else {
     
         if (state->syntax & ASM_SYNTAX_NASM) {
         
-            fprintf (state->ofp, "section .data\n");
+            switch_section (SECTION_DATA);
+            
             fprintf (state->ofp, "LC%d_flt:\n", lab);
             fprintf (state->ofp, "    dd %lu\n", v.low & U32_MASK);
             
@@ -22270,12 +22588,13 @@ static void emit_load_floating_const_bits_now (int size, int64_s v) {
                 fprintf (state->ofp, "    dd %lu\n", v.high & U32_MASK);
             }
             
-            fprintf (state->ofp, "section .text\n");
+            switch_section (SECTION_TEXT);
             fprintf (state->ofp, "    fld %s [LC%d_flt]\n", size == (DATA_DOUBLE & 0x1f) ? "qword" : "dword", lab);
         
         } else {
         
-            fprintf (state->ofp, ".data\n");
+            switch_section (SECTION_DATA);
+            
             fprintf (state->ofp, ".LC%d_flt:\n", lab);
             fprintf (state->ofp, "    .long %lu\n", v.low & U32_MASK);
             
@@ -22283,7 +22602,7 @@ static void emit_load_floating_const_bits_now (int size, int64_s v) {
                 fprintf (state->ofp, "    .long %lu\n", v.high & U32_MASK);
             }
             
-            fprintf (state->ofp, ".text\n");
+            switch_section (SECTION_TEXT);
             
             if (state->syntax & ASM_SYNTAX_INTEL) {
                 fprintf (state->ofp, "    fld %s ptr .LC%d_flt\n", size == (DATA_DOUBLE & 0x1f) ? "qword" : "dword", lab);
@@ -22603,6 +22922,7 @@ static void emit_floating_binary_now (enum token_kind k);
 
 static int floating_assignment_operator_supported_now (enum token_kind op);
 static int is_value_compare_operator (enum token_kind k);
+static int emit_statement_rhs_const32_to_edx_if_possible (void);
 
 static void emit_statement_label (int label);
 static void emit_statement_label_raw (int label);
@@ -22758,6 +23078,20 @@ static void emit_fild_eax_now (void) {
 
 }
 
+static void emit_load_any_deref_as_floating_now (const char *reg, int size, int is_floating) {
+
+    if (is_floating) {
+    
+        emit_load_floating_deref_reg_now (reg, size);
+        return;
+    
+    }
+    
+    emit_load_deref_reg_now (reg, size);
+    emit_fild_eax_now ();
+
+}
+
 static void emit_load_floating_rhs_operand_now (int result_size) {
 
     if (tok.kind == TOK_PLUS || tok.kind == TOK_MINUS) {
@@ -22778,6 +23112,8 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
     if (tok.kind == TOK_STAR) {
     
         int deref_size = result_size;
+        int deref_is_floating = 1;
+        
         get_token ();
         
         if (tok.kind == TOK_LPAREN) {
@@ -22786,7 +23122,7 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
             
             if (is_type_start (tok.kind) && parse_deref_cast_type_name (&deref_size)) {
             
-                emit_load_floating_deref_reg_now ("eax", deref_size);
+                emit_load_any_deref_as_floating_now ("eax", deref_size, last_deref_cast_type_is_floating);
                 return;
             
             }
@@ -22794,14 +23130,28 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
             emit_load_assignment_rhs_expression_to_reg ("eax");
             expect (TOK_RPAREN, ")");
             
-            emit_load_floating_deref_reg_now ("eax", deref_size);
+            if (rhs_last_pointer_depth > 0 && rhs_last_pointed_size > 0) {
+            
+                deref_size = rhs_last_pointed_size;
+                deref_is_floating = (deref_size == result_size && (result_size == (DATA_FLOAT & 0x1f) || result_size == (DATA_DOUBLE & 0x1f)));
+            
+            }
+            
+            emit_load_any_deref_as_floating_now ("eax", deref_size, deref_is_floating);
             return;
         
         }
         
         emit_load_assignment_rhs_to_reg ("eax");
-        emit_load_floating_deref_reg_now ("eax", deref_size);
         
+        if (rhs_last_pointer_depth > 0 && rhs_last_pointed_size > 0) {
+        
+            deref_size = rhs_last_pointed_size;
+            deref_is_floating = (deref_size == result_size && (result_size == (DATA_FLOAT & 0x1f) || result_size == (DATA_DOUBLE & 0x1f)));
+        
+        }
+        
+        emit_load_any_deref_as_floating_now ("eax", deref_size, deref_is_floating);
         return;
     
     }
@@ -23970,7 +24320,7 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
             
             if (state->ofp) {
             
-                arg_tmp_ofp = tmpfile ();
+                arg_tmp_ofp = scc_tmpfile ();
                 
                 if (arg_tmp_ofp) {
                 
@@ -24237,9 +24587,12 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
     int expected_inline_args = 0;
     int inline_arg_bytes = 0;
     int total_arg_bytes = 0;
+    
+    int arg_is_floating, ch, i;
     int arg_bytes;
-    int arg_is_floating;
-    int ch, i;
+    
+    int saved_arg_assignment32_stop_before_condition_operator;
+    int saved_arg_assignment64_stop_before_condition_operator;
     
     struct local_symbol *saved_pending_struct_return_lhs = pending_struct_return_lhs;
     struct local_symbol *call_sym = 0;
@@ -24277,7 +24630,7 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
         
         if (state->ofp) {
         
-            inline_tmp_ofp = tmpfile ();
+            inline_tmp_ofp = scc_tmpfile ();
             
             if (inline_tmp_ofp) {
             
@@ -24299,6 +24652,12 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
         }
     
     }
+    
+    saved_arg_assignment32_stop_before_condition_operator = assignment32_stop_before_condition_operator;
+    saved_arg_assignment64_stop_before_condition_operator = assignment64_stop_before_condition_operator;
+    
+    assignment32_stop_before_condition_operator = 0;
+    assignment64_stop_before_condition_operator = 0;
     
     get_token ();
     
@@ -24323,7 +24682,7 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
              */
             if (!use_inline && state->ofp) {
             
-                arg_tmp_ofp = tmpfile ();
+                arg_tmp_ofp = scc_tmpfile ();
                 
                 if (arg_tmp_ofp) {
                 
@@ -24501,6 +24860,9 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
     }
     
     expect (TOK_RPAREN, ")");
+    
+    assignment32_stop_before_condition_operator = saved_arg_assignment32_stop_before_condition_operator;
+    assignment64_stop_before_condition_operator = saved_arg_assignment64_stop_before_condition_operator;
     
     if (get_global_symbol_kind (name) == GLOBAL_SYMBOL_FUNCTION && get_global_symbol_has_prototype (name) && ((get_global_symbol_is_variadic (name) && argc < get_global_symbol_param_count (name)) || (!get_global_symbol_is_variadic (name) && argc != get_global_symbol_param_count (name)))) {
         report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret, "wrong number of arguments to function '%s'", name);
@@ -24951,10 +25313,20 @@ static void emit_goto_trampolines (void) {
         emit_statement_label_raw (goto_refs[i].ref_label);
         delta = goto_labels[label_index].defined_stack_size - goto_refs[i].stack_size;
         
-        if (delta > 0) {
-            emit_stack_adjust (delta, 1);
-        } else if (delta < 0) {
-            emit_stack_adjust (-delta, 0);
+        /*
+         * With a single fixed function frame, block-local symbols still have
+         * different logical stack depths, but ESP no longer changes when
+         * entering/leaving those blocks.  The old trampoline fixup would
+         * therefore corrupt ESP before the real jump target.
+         */
+        if (!current_function_uses_single_frame) {
+        
+            if (delta > 0) {
+                emit_stack_adjust (delta, 1);
+            } else if (delta < 0) {
+                emit_stack_adjust (-delta, 0);
+            }
+        
         }
         
         emit_statement_jump (goto_labels[label_index].label);
@@ -25122,7 +25494,7 @@ static void parse_switch_statement (void) {
     
     if (saved_ofp) {
     
-        body_tmp = tmpfile ();
+        body_tmp = scc_tmpfile ();
         
         if (body_tmp) {
             state->ofp = body_tmp;
@@ -25185,8 +25557,22 @@ static void parse_switch_statement (void) {
 
 static int is_value_compare_operator (enum token_kind k) {
 
-    return  k == TOK_LESS || k == TOK_LTEQ || k == TOK_GREATER ||
-                k == TOK_GTEQ || k == TOK_EQEQ || k == TOK_NOTEQ;
+    switch (k) {
+    
+        case TOK_LESS:
+        case TOK_LTEQ:
+        case TOK_GREATER:
+        case TOK_GTEQ:
+        case TOK_EQEQ:
+        case TOK_NOTEQ:
+        
+            return 1;
+        
+        default:
+        
+            return 0;
+
+    }
 
 }
 
@@ -25496,12 +25882,48 @@ static void emit_load_assignment_binary_expression_to_reg (const char *reg) {
 
 }
 
+static void emit_statement_const32_to_edx (int64_s v);
+
+static int is_assignment32_condition_stop_operator (enum token_kind k) {
+
+    /*
+     * Keep this as a switch rather than a chained || expression.  This guard
+     * protects statement-condition parsing from consuming compare/logical
+     * operators too early; if a self-built stage miscompiles the || chain
+     * here, ordinary conditions can degrade into:
+     *
+     *     mov eax, <rhs-constant>
+     *     test eax, eax
+     */
+    switch (k) {
+    
+        case TOK_LESS:
+        case TOK_LTEQ:
+        case TOK_GREATER:
+        case TOK_GTEQ:
+        case TOK_EQEQ:
+        case TOK_NOTEQ:
+        case TOK_LOGAND:
+        case TOK_LOGOR:
+        
+            return 1;
+        
+        default:
+        
+            return 0;
+
+    }
+
+}
+
 static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
 
+    int64_s rhs_enum_value;
     enum token_kind op;
     
     int lhs_pointer_depth;
     int is_unsigned;
+    int rhs_is_enum;
     
     is_unsigned = rhs_current_operand_is_unsigned_now ();
     
@@ -25511,10 +25933,23 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
     
     lhs_pointer_depth = rhs_last_pointer_depth;
     
+    if (assignment32_stop_before_condition_operator && is_assignment32_condition_stop_operator (tok.kind)) {
+        return;
+    }
+    
     if (is_value_compare_operator (tok.kind)) {
     
         op = tok.kind;
         get_token ();
+        
+        rhs_is_enum = 0;
+
+        if (tok.kind == TOK_IDENT && tok.ident && !find_local_symbol (tok.ident) && find_global_symbol (tok.ident) < 0 && resolve_enum_constant (tok.ident, &rhs_enum_value)) {
+        
+            rhs_is_enum = 1;
+            get_token ();
+        
+        }
         
         if (strcmp (reg, "eax") != 0 && state->ofp) {
         
@@ -25526,13 +25961,45 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
         
         }
         
+        /*
+         * Keep identifier-vs-enum comparisons structurally as a real compare.
+         * During bootstrap this path is hit when compiling ordinary tests such
+         * as:
+         *
+         *     unary_op == TOK_MINUS
+         *
+         * If the RHS enum is allowed to go through the generic expression loader,
+         * a later self-built compiler can collapse the expression into just:
+         *
+         *     mov eax, 45
+         *     test eax, eax
+         *
+         * which makes every non-zero enum comparison true.  Loading the enum
+         * directly into EDX avoids clobbering the already-loaded LHS in EAX and
+         * avoids the fragile push/pop/generic-RHS sequence entirely.
+         */
+        if (rhs_is_enum) {
+        
+            emit_statement_const32_to_edx (rhs_enum_value);
+            
+            if (lhs_pointer_depth > 0) {
+                is_unsigned = 1;
+            }
+            
+            emit_compare_eax_edx_to_reg (op, reg, is_unsigned);
+            return;
+        
+        }
+        
         emit_push_reg_now ("eax");
         
         if (rhs_current_operand_is_unsigned_now ()) {
             is_unsigned = 1;
         }
         
-        emit_load_assignment_binary_expression_to_reg ("edx");
+        if (!emit_statement_rhs_const32_to_edx_if_possible ()) {
+            emit_load_assignment_binary_expression_to_reg ("edx");
+        }
         
         if (lhs_pointer_depth > 0 || rhs_last_pointer_depth > 0) {
             is_unsigned = 1;
@@ -25629,8 +26096,6 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
     int true_label;
     int end_label;
     
-    enum token_kind logop;
-    
     if (rhs_current_operand_is_floating_now ()) {
     
         emit_load_floating_rhs_expression_now (DATA_DOUBLE & 0x1f);
@@ -25642,17 +26107,20 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
     
     emit_load_assignment_compare_expression_to_reg (reg);
     
-    while (tok.kind == TOK_LOGAND || tok.kind == TOK_LOGOR) {
+    for (;;) {
     
-        logop = tok.kind;
-        false_label = anon_label++;
-        true_label = anon_label++;
-        end_label = anon_label++;
+        if (assignment32_stop_before_condition_operator && is_assignment32_condition_stop_operator (tok.kind)) {
+            break;
+        }
         
-        get_token ();
+        if (tok.kind == TOK_LOGAND) {
         
-        if (logop == TOK_LOGAND) {
-        
+            false_label = anon_label++;
+            true_label = anon_label++;
+            end_label = anon_label++;
+            
+            get_token ();
+            
             emit_test_reg_jump_zero_now (reg, false_label);
             emit_load_assignment_compare_expression_to_reg (reg);
             emit_test_reg_jump_zero_now (reg, false_label);
@@ -25661,9 +26129,19 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
             emit_statement_label (false_label);
             emit_mov_imm_to_reg_now (reg, 0);
             emit_statement_label (end_label);
+            
+            continue;
         
-        } else {
+        }
         
+        if (tok.kind == TOK_LOGOR) {
+
+            false_label = anon_label++;
+            true_label = anon_label++;
+            end_label = anon_label++;
+            
+            get_token ();
+            
             emit_test_reg_jump_nonzero_now (reg, true_label);
             emit_load_assignment_compare_expression_to_reg (reg);
             emit_test_reg_jump_nonzero_now (reg, true_label);
@@ -25672,9 +26150,13 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
             emit_statement_label (true_label);
             emit_mov_imm_to_reg_now (reg, 1);
             emit_statement_label (end_label);
+            
+            continue;
         
         }
-    
+
+        break;
+
     }
     
     if (tok.kind == TOK_QMARK) {
@@ -25727,24 +26209,6 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
 }
 
 static void emit_statement_cmp64_to_eax (enum token_kind op, int is_unsigned);
-
-/*
- * Statement conditions need to parse a 64-bit compare as:
- *
- *     <full lhs arithmetic> <compare> <full rhs arithmetic>
- *
- * The generic 64-bit expression loader normally treats compare/logical
- * operators as binary operators that produce a 0/1 pair.  That is fine for
- * expression values, but it is wrong when the condition emitter wants to
- * generate the final branch itself: an expression such as
- *
- *     i < width - len - additionals_len
- *
- * was consumed as ((i < width) - len - additionals_len).  Use this flag only
- * while the condition emitter is loading one side of a comparison so the
- * normal tokenizer is left sitting on the compare/logical operator.
- */
-static int assignment64_stop_before_condition_operator = 0;
 
 static int is_assignment64_condition_stop_operator (enum token_kind k) {
 
@@ -28572,6 +29036,7 @@ static int parse_identifier_assignment_statement (void) {
     enum token_kind op;
     struct local_symbol *lhs;
     
+    int is_simple_assign;
     int lhs_size;
     int lhs_is_floating;
     
@@ -28751,6 +29216,8 @@ static int parse_identifier_assignment_statement (void) {
         }
         
         op = tok.kind;
+        
+        is_simple_assign = (tok.kind == TOK_ASSIGN);
         get_token ();
         
         if (!lhs && global_index < 0) {
@@ -28797,7 +29264,7 @@ static int parse_identifier_assignment_statement (void) {
             
             }
             
-            if (op == TOK_ASSIGN) {
+            if (is_simple_assign) {
             
                 emit_push_reg_now ("edx");
                 
@@ -28851,7 +29318,7 @@ static int parse_identifier_assignment_statement (void) {
             
             }
             
-            if ((member_is_floating || token_is_floating_constant_now ()) && op == TOK_ASSIGN) {
+            if ((member_is_floating || token_is_floating_constant_now ()) && is_simple_assign) {
                 emit_store_floating_member_to_addr_reg_now ("edx", member_offset, member_size);
             } else {
                 emit_store_member_to_addr_reg_now ("edx", member_offset, "eax", member_size);
@@ -28945,6 +29412,8 @@ static int parse_identifier_assignment_statement (void) {
         if (tok.kind == TOK_INCR || tok.kind == TOK_DECR) {
         
             op = tok.kind;
+            
+            is_simple_assign = (tok.kind == TOK_ASSIGN);
             get_token ();
             
             if (state->ofp) {
@@ -28982,11 +29451,13 @@ static int parse_identifier_assignment_statement (void) {
         }
         
         op = tok.kind;
+        
+        is_simple_assign = (tok.kind == TOK_ASSIGN);
         get_token ();
         
         if (state->ofp) {
         
-            if (op == TOK_ASSIGN) {
+            if (is_simple_assign) {
             
                 emit_push_reg_now ("edx");
                 emit_load_assignment_rhs_expression_to_reg ("eax");
@@ -29022,6 +29493,8 @@ static int parse_identifier_assignment_statement (void) {
         if (tok.kind == TOK_INCR || tok.kind == TOK_DECR) {
         
             op = tok.kind;
+            
+            is_simple_assign = (tok.kind == TOK_ASSIGN);
             get_token ();
             
             lhs = find_local_symbol (name);
@@ -29065,11 +29538,13 @@ static int parse_identifier_assignment_statement (void) {
                 if (is_assignment_operator (tok.kind)) {
                 
                     op = tok.kind;
+                    
+                    is_simple_assign = (tok.kind == TOK_ASSIGN);
                     get_token ();
                     
                     if (state->ofp) {
                     
-                        if (op == TOK_ASSIGN) {
+                        if (is_simple_assign) {
                         
                             emit_push_reg_now ("edx");
                             emit_load_assignment_rhs_expression_to_reg ("eax");
@@ -29158,6 +29633,8 @@ static int parse_identifier_assignment_statement (void) {
                 if (is_assignment_operator (tok.kind)) {
                 
                     op = tok.kind;
+                    
+                    is_simple_assign = (tok.kind == TOK_ASSIGN);
                     get_token ();
                     
                     if (state->ofp) {
@@ -29168,7 +29645,7 @@ static int parse_identifier_assignment_statement (void) {
                             fprintf (state->ofp, "    movl %%eax, %%edx\n");
                         }
                         
-                        if (op == TOK_ASSIGN) {
+                        if (is_simple_assign) {
                         
                             emit_push_reg_now ("edx");
                             emit_load_assignment_rhs_expression_to_reg ("eax");
@@ -29229,7 +29706,7 @@ static int parse_identifier_assignment_statement (void) {
                             
                             if (state->ofp) {
                             
-                                arg_tmp_ofp = tmpfile ();
+                                arg_tmp_ofp = scc_tmpfile ();
                                 
                                 if (arg_tmp_ofp) {
                                     arg_saved_ofp = state->ofp;
@@ -29368,6 +29845,8 @@ static int parse_identifier_assignment_statement (void) {
     }
     
     op = tok.kind;
+    
+    is_simple_assign = (tok.kind == TOK_ASSIGN);
     get_token ();
     
     lhs = find_local_symbol (name);
@@ -29390,7 +29869,7 @@ static int parse_identifier_assignment_statement (void) {
         lhs_size = lhs ? lhs->size : get_global_symbol_size (name);
         lhs_is_floating = lhs ? lhs->is_floating : get_global_symbol_floating (name);
         
-        if (op == TOK_ASSIGN && lhs_size > (DATA_LLONG & 0x1f) && tok.kind == TOK_IDENT) {
+        if (is_simple_assign && lhs_size > (DATA_LLONG & 0x1f) && tok.kind == TOK_IDENT) {
             
             char *rhs_name = xstrdup (tok.ident);
             
@@ -29445,7 +29924,7 @@ static int parse_identifier_assignment_statement (void) {
             
             } else {
             
-                if (op == TOK_ASSIGN) {
+                if (is_simple_assign) {
                     emit_load_floating_rhs_expression_now (lhs_size);
                 } else {
                 
@@ -29461,7 +29940,7 @@ static int parse_identifier_assignment_statement (void) {
         
         } else if (lhs_size == (DATA_LLONG & 0x1f)) {
         
-            if (op == TOK_ASSIGN) {
+            if (is_simple_assign) {
                 emit_load_assignment_rhs_expression_to_pair ("eax", "edx", lhs ? lhs->is_unsigned : get_global_symbol_unsigned (name));
             } else {
             
@@ -29520,7 +29999,7 @@ static int parse_identifier_assignment_statement (void) {
         
         } else {
         
-            if (op == TOK_ASSIGN) {
+            if (is_simple_assign) {
                 emit_load_assignment_rhs_expression_to_reg ("eax");
             } else {
             
@@ -29655,11 +30134,11 @@ static void emit_statement_jump (int label) {
 }
 
 static int token_is_integer_constant_now (enum token_kind k) {
-    return k == TOK_CINT || k == TOK_CLONG || k == TOK_CLLONG || k == (enum token_kind) (TOK_CINT + 1) || k == (enum token_kind) (TOK_CLONG + 1) || k == (enum token_kind) (TOK_CLLONG + 1);
+    return k == TOK_CCHAR || k == TOK_LCHAR || k == TOK_CINT || k == TOK_CUINT || k == TOK_CLONG || k == TOK_CULONG || k == TOK_CLLONG || k == TOK_CULLONG;
 }
 
 static int token_is_integer_unsigned_constant_now (enum token_kind k) {
-    return k == (enum token_kind) (TOK_CINT + 1) || k == (enum token_kind) (TOK_CLONG + 1) || k == (enum token_kind) (TOK_CLLONG + 1);
+    return k == TOK_CUINT || k == TOK_CULONG || k == TOK_CULLONG;
 }
 
 #define     MAX_INLINE_ASM_INPUTS        16
@@ -30372,6 +30851,52 @@ static int token_is_const_floating_condition_operand_now (void) {
     return token_is_floating_constant_now ();
 }
 
+static void emit_statement_const32_to_edx (int64_s v) {
+
+    flush_pending_statement_labels ();
+    
+    if (!state->ofp) {
+        return;
+    }
+    
+    if (state->syntax & ASM_SYNTAX_INTEL) {
+       fprintf (state->ofp, "    mov edx, %lu\n", v.low & U32_MASK);
+    } else {
+        fprintf (state->ofp, "    movl $%lu, %%edx\n", v.low & U32_MASK);
+    }
+
+}
+
+static int emit_statement_rhs_const32_to_edx_if_possible (void) {
+
+    int64_s v;
+    
+    if (token_is_const_condition_operand_now ()) {
+    
+        if (current_integer_expr_is_foldable_now ()) {
+            v = const64_from_current_foldable_expr ();
+        } else {
+            v = const64_from_current_operand ();
+        }
+        
+        emit_statement_const32_to_edx (v);
+        return 1;
+    
+    }
+    
+    if (tok.kind == TOK_IDENT && tok.ident && !find_local_symbol (tok.ident) && find_global_symbol (tok.ident) < 0 && resolve_enum_constant (tok.ident, &v)) {
+        
+        get_token ();
+        
+        emit_statement_const32_to_edx (v);
+        return 1;
+    
+    }
+    
+    return 0;
+
+}
+
 static int ident_char_now (int ch) {
     return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_';
 }
@@ -30586,7 +31111,7 @@ static int rhs_current_operand_is_floating_now (void) {
 
 }
 
-static int64_s floating_ld_to_bits_now (int size, long double value) {
+static int64_s floating_ld_to_bits_now (int size, double value) {
 
     int64_s r;
     
@@ -30632,7 +31157,7 @@ static int64_s floating_ld_to_bits_now (int size, long double value) {
 
 }
 
-static void emit_load_floating_ld_now (int size, long double value) {
+static void emit_load_floating_ld_now (int size, double value) {
     emit_load_floating_const_bits_now (size, floating_ld_to_bits_now (size, value));
 }
 
@@ -30752,44 +31277,314 @@ static int rhs_current_operand_is_unsigned_now (void) {
 }
 
 static int token_is_statement_compare_operator (enum token_kind k) {
-    return k == TOK_LESS || k == TOK_LTEQ || k == TOK_GREATER || k == TOK_GTEQ || k == TOK_EQEQ || k == TOK_NOTEQ;
+
+    switch (k) {
+    
+        case TOK_LESS:
+        case TOK_LTEQ:
+        case TOK_GREATER:
+        case TOK_GTEQ:
+        case TOK_EQEQ:
+        case TOK_NOTEQ:
+        
+            return 1;
+        
+        default:
+        
+            return 0;
+
+    }
+
 }
 
 static void emit_statement_cmp_eax_edx_jump_if_false (enum token_kind op, int is_unsigned, int label);
 static int statement_condition_emit_logical_tail (int label);
 
-static int source_condition_ident_enum_compare_now (const char *p) {
+static void emit_statement_jump_if_false (int label);
+static int emit_statement_cmp_eax_edx_jump_if_false_and_tail (enum token_kind op, int is_unsigned, int label);
+
+static int source_condition_tail_end_now (const char *p) {
+
+    if (!p) {
+        return 0;
+    }
+
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+
+    switch (*p) {
+
+        case '\0':
+        case ')':
+        case ';':
+        case '{':
+
+            return 1;
+
+        default:
+
+            break;
+
+    }
+
+    return 0;
+
+}
+
+static int source_condition_skip_rhs_const_or_enum_now (const char **pp) {
 
     char word[128];
-    int name_len, i;
+    
+    const char *p;
+    int i;
     
     int64_s ignored;
     
-    if (tok.kind != TOK_IDENT || !tok.ident || !p) {
+    if (!pp || !*pp) {
         return 0;
     }
     
-    /*
-     * Some callers have tok.caret positioned after the identifier, while
-     * others have only tok.start available.  Accept either form here.
-     * Without this, a simple condition such as
-     *
-     *     if (op == TOK_STAR)
-     *
-     * can miss this fast path and fall through to the constant-expression
-     * folder, which then tries to evaluate the local variable `op' as an
-     * integer constant expression.
-     */
-    name_len = (int) strlen (tok.ident);
+    p = *pp;
     
-    if (strncmp (p, tok.ident, (unsigned long) name_len) == 0 && !ident_char_now ((unsigned char) p[name_len])) {
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
     
-        p += name_len;
+    if ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_') {
+    
+        i = 0;
+        
+        while (((p[i] >= 'A' && p[i] <= 'Z') || (p[i] >= 'a' && p[i] <= 'z') ||
+                (p[i] >= '0' && p[i] <= '9') || p[i] == '_') &&
+               i + 1 < (int) sizeof (word)) {
+            i++;
+        }
+        
+        memcpy (word, p, (unsigned long) i);
+        word[i] = 0;
+        
+        if (!resolve_enum_constant (word, &ignored)) {
+            return 0;
+        }
+        
+        p += i;
+        
+        *pp = p;
+        return 1;
+    
+    }
+    
+    if (*p == '\'') {
+    
+        p++;
+        
+        while (*p && *p != '\'') {
+        
+            if (*p == '\\' && p[1]) {
+                p += 2;
+            } else {
+                p++;
+            }
+        
+        }
+        
+        if (*p != '\'') {
+            return 0;
+        }
+        
+        p++;
+        
+        *pp = p;
+        return 1;
+    
+    }
+    
+    if (*p == '-' || *p == '+') {
+        p++;
+    }
+    
+    if (*p < '0' || *p > '9') {
+        return 0;
+    }
+    
+    while ((*p >= '0' && *p <= '9') ||
+           (*p >= 'A' && *p <= 'F') ||
+           (*p >= 'a' && *p <= 'f') ||
+           *p == 'x' || *p == 'X' ||
+           *p == 'u' || *p == 'U' ||
+           *p == 'l' || *p == 'L') {
+        p++;
+    }
+    
+    *pp = p;
+    return 1;
+
+}
+
+static int emit_statement_rhs_const32_or_enum_to_edx_if_possible (void) {
+
+    int64_s v;
+    
+    if (tok.kind == TOK_IDENT && tok.ident && resolve_enum_constant (tok.ident, &v)) {
+    
+        get_token ();
+        
+        emit_statement_const32_to_edx (v);
+        return 1;
+    
+    }
+    
+    if (token_is_const_condition_operand_now ()) {
+    
+        if (current_integer_expr_is_foldable_now ()) {
+            v = const64_from_current_foldable_expr ();
+        } else {
+            v = const64_from_current_operand ();
+        }
+        
+        emit_statement_const32_to_edx (v);
+        return 1;
+    
+    }
+    
+    return 0;
+
+}
+
+static int source_condition_logical_rhs_is_enum_compare_now (const char *p) {
+
+    if (!p) {
+        return 0;
+    }
+    
+    if ((p[0] == '&' && p[1] == '&') || (p[0] == '|' && p[1] == '|')) {
+        p += 2;
+    } else {
+        return 0;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
+        return 0;
+    }
+    
+    while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_') {
+        p++;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    if (*p == '(') {
+        return 0;
+    }
+    
+    for (;;) {
+    
+        if (*p == '.') {
+            p++;
+        } else if (p[0] == '-' && p[1] == '>') {
+            p += 2;
+        } else {
+            break;
+        }
+        
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+        
+        if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
+            return 0;
+        }
+        
+        while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_') {
+            p++;
+        }
         
         while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
             p++;
         }
     
+    }
+    
+    if ((p[0] == '=' && p[1] == '=') || (p[0] == '!' && p[1] == '=') ||
+        (p[0] == '<' && p[1] == '=') || (p[0] == '>' && p[1] == '=')) {
+        p += 2;
+    } else if (*p == '<' || *p == '>') {
+        p++;
+    } else {
+        return 0;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    if (!source_condition_skip_rhs_const_or_enum_now (&p)) {
+        return 0;
+    }
+    
+    return 1;
+
+}
+
+static const char *source_find_current_ident_on_line (const char *p) {
+
+    int name_len;
+    
+    if (tok.kind != TOK_IDENT || !tok.ident || !p) {
+        return 0;
+    }
+    
+    name_len = (int) strlen (tok.ident);
+    
+    while (*p && *p != '\n') {
+    
+        if ((p == tok.start || !ident_char_now ((unsigned char) p[-1])) &&
+            strncmp (p, tok.ident, (unsigned long) name_len) == 0 &&
+            !ident_char_now ((unsigned char) p[name_len])) {
+            return p + name_len;
+        }
+        
+        p++;
+    
+    }
+    
+    return 0;
+
+}
+
+static int source_condition_ident_enum_compare_now (const char *p) {
+
+    if (tok.kind != TOK_IDENT || !tok.ident || !p) {
+        return 0;
+    }
+    
+    /*
+     * tok.start is usually the beginning of the source line, not the current
+     * identifier.  When compiling the compiler itself this made simple enum
+     * tests such as:
+     *
+     *     if (assign_op == TOK_ASSIGN)
+     *
+     * miss the fixed compare-emission path and fall into the generic
+     * expression folder, where later bootstrap stages reduced the condition
+     * to "mov eax, TOK_ASSIGN; test eax, eax".  Locate the current token on
+     * the line first, then inspect the text that follows it.
+     */
+    p = source_find_current_ident_on_line (p);
+    
+    if (!p) {
+        return 0;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
     }
     
     if (*p == '(' || *p == '.' || (p[0] == '-' && p[1] == '>')) {
@@ -30809,30 +31604,250 @@ static int source_condition_ident_enum_compare_now (const char *p) {
         p++;
     }
     
-    if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
+    if (!source_condition_skip_rhs_const_or_enum_now (&p)) {
         return 0;
     }
-    
-    i = 0;
-    
-    while (((p[i] >= 'A' && p[i] <= 'Z') || (p[i] >= 'a' && p[i] <= 'z') || (p[i] >= '0' && p[i] <= '9') || p[i] == '_') && i + 1 < (int) sizeof (word)) {
-        i++;
-    }
-    
-    memcpy (word, p, (unsigned long) i);
-    word[i] = 0;
-    
-    p += i;
     
     while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
         p++;
     }
     
-    if (*p != ')') {
+    /*
+     * This fast path emits a branch-form compare, which is exactly what is
+     * needed for logical tails.  Do not send enum-token compares through the
+     * generic expression path: later self-built stages have repeatedly reduced
+     * them to "mov eax, <enum>; test eax,eax".
+     */
+    if ((*p == '&' && p[1] == '&') || (*p == '|' && p[1] == '|')) {
+        return source_condition_logical_rhs_is_enum_compare_now (p);
+    }
+    
+    return source_condition_tail_end_now (p);
+
+}
+
+static int source_condition_ident_immediate_compare_now (const char *p) {
+
+    int name_len;
+    
+    if (tok.kind != TOK_IDENT || !tok.ident || !p) {
         return 0;
     }
     
-    return resolve_enum_constant (word, &ignored);
+    name_len = (int) strlen (tok.ident);
+    p = source_find_current_ident_on_line (p);
+    
+    if (!p) {
+        return 0;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    /*
+     * Only catch immediate primary/member comparisons here.  Do not claim
+     * calls, subscripts, or arithmetic expressions; those still need the
+     * ordinary expression parser.
+     */
+    if (*p == '(' || *p == '[') {
+        return 0;
+    }
+    
+    for (;;) {
+    
+        if (*p == '.') {
+            p++;
+        } else if (p[0] == '-' && p[1] == '>') {
+            p += 2;
+        } else {
+            break;
+        }
+        
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+        
+        if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
+            return 0;
+        }
+        
+        while ((*p >= 'A' && *p <= 'Z') ||
+               (*p >= 'a' && *p <= 'z') ||
+               (*p >= '0' && *p <= '9') ||
+               *p == '_') {
+            p++;
+        }
+        
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+    
+    }
+    
+    if ((p[0] == '=' && p[1] == '=') ||
+        (p[0] == '!' && p[1] == '=') ||
+        (p[0] == '<' && p[1] == '=') ||
+        (p[0] == '>' && p[1] == '=')) {
+        p += 2;
+    } else if ((p[0] == '<' && p[1] != '<') ||
+               (p[0] == '>' && p[1] != '>')) {
+        p++;
+    } else {
+    
+        (void) name_len;
+        return 0;
+    
+    }
+    
+    /*
+     * This shortcut emits one cmp/jcc and returns to the statement parser.
+     * It must only claim a whole simple condition.  If the comparison is
+     * followed by a top-level logical operator, for example:
+     *
+     *     m->nargs >= 0 || m->is_variadic
+     *     ch >= 'a' && ch <= 'f'
+     *
+     * then claiming only the first comparison leaves the ||/&& tail to a
+     * parser path that expects an integer constant expression.  Let the
+     * ordinary expression parser own those full logical conditions instead.
+     */
+    {
+    
+        int paren_depth = 0;
+        int bracket_depth = 0;
+        
+        while (*p) {
+        
+            if (*p == '\'' || *p == '"') {
+            
+                int quote = *p++;
+                
+                while (*p) {
+                
+                    if (*p == '\\' && p[1]) {
+                    
+                        p += 2;
+                        continue;
+                    
+                    }
+                    
+                    if (*p == quote) {
+                    
+                        p++;
+                        break;
+                    
+                    }
+                    
+                    p++;
+                
+                }
+                
+                continue;
+            
+            }
+            
+            if (*p == '(') {
+            
+                paren_depth++;
+                p++;
+                
+                continue;
+            
+            }
+            
+            if (*p == ')') {
+            
+                if (paren_depth == 0) {
+                    break;
+                }
+                
+                paren_depth--;
+                p++;
+                
+                continue;
+            
+            }
+            
+            if (*p == '[') {
+            
+                bracket_depth++;
+                p++;
+                
+                continue;
+            
+            }
+            
+            if (*p == ']') {
+            
+                if (bracket_depth > 0) {
+                    bracket_depth--;
+                }
+                
+                p++;
+                continue;
+            
+            }
+            
+            if (paren_depth == 0 && bracket_depth == 0 &&
+                ((p[0] == '&' && p[1] == '&') ||
+                 (p[0] == '|' && p[1] == '|'))) {
+                return 0;
+            }
+            
+            p++;
+        
+        }
+    
+    }
+    
+    (void) name_len;
+    return 1;
+
+}
+
+static int emit_statement_ident_immediate_compare_jump_if_false_now (int label) {
+
+    enum token_kind op;
+    int is_unsigned;
+    
+    if (!source_condition_ident_immediate_compare_now (tok.caret) &&
+        !source_condition_ident_immediate_compare_now (tok.start)) {
+        return 0;
+    }
+    
+    is_unsigned = rhs_current_operand_is_unsigned_now ();
+    emit_load_assignment_rhs_to_reg ("eax");
+    
+    while (tok.kind == TOK_ARROW || tok.kind == TOK_DOT) {
+        emit_apply_postfix_member_access_to_reg_now ("eax");
+    }
+    
+    if (postfix_member_seen && postfix_member_is_unsigned) {
+        is_unsigned = 1;
+    }
+    
+    if (!token_is_statement_compare_operator (tok.kind)) {
+        return 0;
+    }
+    
+    op = tok.kind;
+    get_token ();
+    
+    if (rhs_current_operand_is_unsigned_now ()) {
+        is_unsigned = 1;
+    }
+    
+    if (!emit_statement_rhs_const32_to_edx_if_possible ()) {
+    
+        emit_push_reg_now ("eax");
+        emit_load_assignment_compare_expression_to_reg ("edx");
+        emit_pop_reg_now ("eax");
+    
+    }
+    
+    emit_statement_cmp_eax_edx_jump_if_false_and_tail (op, is_unsigned, label);
+    return 1;
 
 }
 
@@ -30840,8 +31855,6 @@ static int emit_statement_ident_enum_compare_jump_if_false_now (int label) {
 
     enum token_kind op;
     int is_unsigned;
-    
-    int64_s rhs;
     
     if (!source_condition_ident_enum_compare_now (tok.caret) && !source_condition_ident_enum_compare_now (tok.start)) {
         return 0;
@@ -30857,16 +31870,164 @@ static int emit_statement_ident_enum_compare_jump_if_false_now (int label) {
     op = tok.kind;
     get_token ();
     
-    if (tok.kind != TOK_IDENT || !resolve_enum_constant (tok.ident, &rhs)) {
+    /*
+     * This path is specifically an EAX-vs-constant statement comparison.
+     * Do not route the RHS through the generic "load constant to named
+     * register" helper here.  During bootstrap the named-register helper path
+     * is fragile: if the next-stage compiler mis-parses the string argument or
+     * folds the call badly, enum compares such as:
+     *
+     *     if (unary_op == TOK_MINUS)
+     *
+     * can degrade into:
+     *
+     *     mov eax, TOK_MINUS
+     *     test eax, eax
+     *
+     * which makes every non-zero enum condition true.  Emit the RHS into EDX
+     * directly so the following cmp/jcc sequence is structurally fixed.
+     */
+    if (!emit_statement_rhs_const32_or_enum_to_edx_if_possible ()) {
         return 0;
     }
     
+    emit_statement_cmp_eax_edx_jump_if_false_and_tail (op, is_unsigned, label);
+    return 1;
+
+}
+
+static int source_condition_member_enum_compare_now (const char *p) {
+
+    char word[128];
+    int i;
+    
+    if (tok.kind != TOK_IDENT || !tok.ident || !p) {
+        return 0;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    if (strncmp (p, tok.ident, (unsigned long) strlen (tok.ident)) == 0 && !ident_char_now ((unsigned char) p[strlen (tok.ident)])) {
+        p += strlen (tok.ident);
+    } else if ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_') {
+    
+        while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_') {
+            p++;
+        }
+    
+    } else if (!(*p == '.' || (p[0] == '-' && p[1] == '>'))) {
+        return 0;
+    }
+    
+    for (;;) {
+    
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+        
+        if (*p == '.') {
+            p++;
+        } else if (p[0] == '-' && p[1] == '>') {
+            p += 2;
+        } else {
+            return 0;
+        }
+        
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+        
+        if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
+            return 0;
+        }
+        
+        while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_') {
+            p++;
+        }
+        
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+        
+        if (!(*p == '.' || (p[0] == '-' && p[1] == '>'))) {
+            break;
+        }
+    
+    }
+    
+    if ((p[0] == '=' && p[1] == '=') || (p[0] == '!' && p[1] == '=') ||
+        (p[0] == '<' && p[1] == '=') || (p[0] == '>' && p[1] == '=')) {
+        p += 2;
+    } else if (*p == '<' || *p == '>') {
+        p++;
+    } else {
+        return 0;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    if (!source_condition_skip_rhs_const_or_enum_now (&p)) {
+        return 0;
+    }
+    
+    i = 0;
+    
+    while (((p[i] >= 'A' && p[i] <= 'Z') || (p[i] >= 'a' && p[i] <= 'z') || (p[i] >= '0' && p[i] <= '9') || p[i] == '_') && i + 1 < (int) sizeof (word)) {
+        i++;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    if ((*p == '&' && p[1] == '&') || (*p == '|' && p[1] == '|')) {
+        return source_condition_logical_rhs_is_enum_compare_now (p);
+    }
+    
+    return source_condition_tail_end_now (p);
+
+}
+
+static int emit_statement_member_enum_compare_jump_if_false_now (int label) {
+
+    enum token_kind op;
+    int is_unsigned;
+    
+    if (!source_condition_member_enum_compare_now (tok.caret) && !source_condition_member_enum_compare_now (tok.start)) {
+        return 0;
+    }
+    
+    is_unsigned = rhs_current_operand_is_unsigned_now ();
+    emit_load_assignment_rhs_to_reg ("eax");
+    
+    while (tok.kind == TOK_ARROW || tok.kind == TOK_DOT) {
+        emit_apply_postfix_member_access_to_reg_now ("eax");
+    }
+    
+    if (postfix_member_seen && postfix_member_is_unsigned) {
+        is_unsigned = 1;
+    }
+    
+    if (!token_is_statement_compare_operator (tok.kind)) {
+        return 0;
+    }
+    
+    op = tok.kind;
     get_token ();
     
-    emit_load_const32_to_reg_now ("edx", rhs);
-    emit_statement_cmp_eax_edx_jump_if_false (op, is_unsigned, label);
+    if (rhs_current_operand_is_unsigned_now ()) {
+        is_unsigned = 1;
+    }
     
-    statement_condition_emit_logical_tail (label);
+    if (!emit_statement_rhs_const32_or_enum_to_edx_if_possible ()) {
+        return 0;
+    }
+    
+    emit_statement_cmp_eax_edx_jump_if_false_and_tail (op, is_unsigned, label);
     return 1;
 
 }
@@ -31302,7 +32463,7 @@ static void emit_statement_floating_compare_jump_if_false (enum token_kind op, i
 
 }
 
-static int statement_compare_floating_const_true (long double left, enum token_kind op, long double right) {
+static int statement_compare_floating_const_true (double left, enum token_kind op, double right) {
 
     switch (op) {
     
@@ -31332,7 +32493,7 @@ static int statement_compare_floating_const_true (long double left, enum token_k
         
         default:
         
-            return left != 0.0L;
+            return left != 0.0;
     
     }
 
@@ -31745,7 +32906,7 @@ static void parse_for_statement (void) {
     } else {
     
         if (state->ofp) {
-            step_tmp = tmpfile ();
+            step_tmp = scc_tmpfile ();
         }
         
         if (step_tmp) {
@@ -31928,66 +33089,6 @@ static void parse_do_statement (void) {
 
 }
 
-static int source_parenthesized_condition_has_logical_now (void) {
-
-    const char *p = tok.caret;
-    int depth = 0;
-    
-    if (!p || *p != '(') {
-        return 0;
-    }
-    
-    for (; *p; p++) {
-    
-        if (*p == '(') {
-        
-            depth++;
-            continue;
-        
-        }
-        
-        if (*p == ')') {
-        
-            depth--;
-            
-            if (depth == 0) {
-                return 0;
-            }
-            
-            continue;
-        
-        }
-        
-        if (depth == 1 && ((*p == '&' && p[1] == '&') || (*p == '|' && p[1] == '|'))) {
-            return 1;
-        }
-        
-        if (*p == '"' || *p == '\'') {
-        
-            int quote = *p++;
-            
-            while (*p && *p != quote) {
-            
-                if (*p == '\\' && p[1]) {
-                    p++;
-                }
-                
-                p++;
-            
-            }
-            
-            if (!*p) {
-                return 0;
-            }
-        
-        }
-    
-    }
-    
-    return 0;
-
-}
-
 static int statement_condition_emit_logical_tail (int label) {
 
     int skip_label;
@@ -32026,6 +33127,75 @@ static int statement_condition_emit_logical_tail (int label) {
     }
     
     return 0;
+
+}
+
+static void emit_statement_eax_truth_jump_if_false_and_tail (int label) {
+
+    int skip_label;
+
+    if (tok.kind == TOK_LOGAND) {
+
+        emit_statement_test_eax_jump_if_false (label);
+        
+        get_token ();
+        emit_statement_jump_if_false (label);
+        
+        return;
+
+    }
+
+    if (tok.kind == TOK_LOGOR) {
+
+        skip_label = anon_label++;
+        emit_test_reg_jump_nonzero_now ("eax", skip_label);
+        get_token ();
+        emit_statement_jump_if_false (label);
+        emit_statement_label (skip_label);
+        return;
+
+    }
+
+    emit_statement_test_eax_jump_if_false (label);
+
+}
+
+static int emit_statement_cmp_eax_edx_jump_if_false_and_tail (enum token_kind op, int is_unsigned, int label) {
+
+    int rhs_label;
+    int skip_label;
+    
+    if (tok.kind == TOK_LOGAND) {
+    
+        get_token ();
+        
+        emit_statement_cmp_eax_edx_jump_if_false (op, is_unsigned, label);
+        emit_statement_jump_if_false (label);
+        
+        return 1;
+    
+    }
+    
+    if (tok.kind == TOK_LOGOR) {
+    
+        rhs_label = anon_label++;
+        skip_label = anon_label++;
+        
+        get_token ();
+        
+        emit_statement_cmp_eax_edx_jump_if_false (op, is_unsigned, rhs_label);
+        emit_statement_jump (skip_label);
+        
+        emit_statement_label (rhs_label);
+        emit_statement_jump_if_false (label);
+        
+        emit_statement_label (skip_label);
+        return 1;
+    
+    }
+    
+    emit_statement_cmp_eax_edx_jump_if_false (op, is_unsigned, label);
+    return 1;
 
 }
 
@@ -32082,18 +33252,35 @@ static int source_starts_with_parenthesized_assignment_at (const char *p) {
         return 0;
     }
     
-    while (*p == '(') {
+    /*
+     * Only claim a single parenthesized assignment here.  Do not treat
+     * a parenthesized logical group whose first term is an assignment as
+     * one big assignment expression.  For example:
+     *
+     *     ((op2 = get_op (pp)) || (brackets && **pp == ')'))
+     *
+     * The old scanner consumed both leading '(' characters, parsed only
+     * the first assignment, and then tried to manage the outer group's
+     * closing ')' with parenthesized_assignment_open_parens.  That left
+     * the statement-condition parser out of sync at the final ')' before
+     * the following '{'.
+     *
+     * A real parenthesized-assignment fast path starts with exactly one
+     * '(' at the current token.  Nested/grouped logical expressions must
+     * be left to the normal expression parser.
+     */
+    parens = 1;
+    p++;
     
-        parens++;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
         p++;
-        
-        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
-            p++;
-        }
-    
     }
     
-    if (parens <= 0 || !((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
+    if (*p == '(') {
+        return 0;
+    }
+    
+    if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
         return 0;
     }
     
@@ -32575,72 +33762,359 @@ static int emit_load_parenthesized_assignment_expression_to_reg_now (const char 
 
 }
 
+static int source_condition_has_top_level_compare_now (const char *p) {
+
+    int paren_depth = 0;
+    int bracket_depth = 0;
+    int saw_operand = 0;
+    
+    if (!p) {
+        return 0;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    while (*p) {
+    
+        if (*p == '\'' || *p == '"') {
+        
+            int quote = *p++;
+            
+            while (*p) {
+            
+                if (*p == '\\' && p[1]) {
+                
+                    p += 2;
+                    continue;
+                
+                }
+                
+                if (*p == quote) {
+                
+                    p++;
+                    break;
+                
+                }
+                
+                p++;
+            
+            }
+            
+            saw_operand = 1;
+            continue;
+        
+        }
+        
+        if (*p == '(') {
+        
+            paren_depth++;
+            
+            saw_operand = 1;
+            p++;
+            
+            continue;
+        
+        }
+        
+        if (*p == ')') {
+        
+            if (paren_depth == 0) {
+                return 0;
+            }
+            
+            paren_depth--;
+            saw_operand = 1;
+            
+            p++;
+            continue;
+        
+        }
+        
+        if (*p == '[') {
+        
+            bracket_depth++;
+            
+            saw_operand = 1;
+            p++;
+            
+            continue;
+        
+        }
+        
+        if (*p == ']') {
+        
+            if (bracket_depth > 0) {
+                bracket_depth--;
+            }
+            
+            saw_operand = 1;
+            p++;
+            
+            continue;
+        
+        }
+        
+        if (paren_depth == 0 && bracket_depth == 0) {
+        
+            if ((p[0] == '&' && p[1] == '&') || (p[0] == '|' && p[1] == '|') ||
+                *p == '?' || *p == ':' || *p == ',' || *p == ';') {
+                return 0;
+            }
+            
+            if (saw_operand) {
+            
+                if ((p[0] == '=' && p[1] == '=') ||
+                    (p[0] == '!' && p[1] == '=') ||
+                    (p[0] == '<' && p[1] == '=') ||
+                    (p[0] == '>' && p[1] == '=')) {
+                    return 1;
+                }
+                
+                if ((p[0] == '<' && p[1] != '<') ||
+                    (p[0] == '>' && p[1] != '>')) {
+                    return 1;
+                }
+            
+            }
+        
+        }
+        
+        if (!(*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) {
+            saw_operand = 1;
+        }
+        
+        p++;
+    
+    }
+
+    return 0;
+
+}
+
+static int source_parenthesized_lhs_followed_by_compare_now (const char *p) {
+
+    int paren_depth = 0;
+    
+    if (!p) {
+        return 0;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    if (*p != '(') {
+        return 0;
+    }
+    
+    while (*p) {
+    
+        if (*p == '\'' || *p == '"') {
+        
+            int quote = *p++;
+            
+            while (*p) {
+            
+                if (*p == '\\' && p[1]) {
+                
+                    p += 2;
+                    continue;
+                
+                }
+                
+                if (*p == quote) {
+                
+                    p++;
+                    break;
+                
+                }
+                
+                p++;
+            
+            }
+            
+            continue;
+        
+        }
+        
+        if (*p == '(') {
+        
+            paren_depth++;
+            p++;
+            
+            continue;
+        
+        }
+        
+        if (*p == ')') {
+        
+            paren_depth--;
+            p++;
+            
+            if (paren_depth == 0) {
+            
+                while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+                    p++;
+                }
+                
+                if ((p[0] == '=' && p[1] == '=') ||
+                    (p[0] == '!' && p[1] == '=') ||
+                    (p[0] == '<' && p[1] == '=') ||
+                    (p[0] == '>' && p[1] == '=')) {
+                    return 1;
+                }
+                
+                if ((p[0] == '<' && p[1] != '<') ||
+                    (p[0] == '>' && p[1] != '>')) {
+                    return 1;
+                }
+                
+                return 0;
+            
+            }
+            
+            if (paren_depth < 0) {
+                return 0;
+            }
+            
+            continue;
+        
+        }
+        
+        p++;
+    
+    }
+    
+    return 0;
+
+}
+
+static int emit_statement_parenthesized_lhs_compare_jump_if_false_now (int label) {
+
+    enum token_kind op;
+    int is_unsigned;
+    
+    if (tok.kind != TOK_LPAREN) {
+        return 0;
+    }
+    
+    if (!source_parenthesized_lhs_followed_by_compare_now (tok.caret)) {
+        return 0;
+    }
+    
+    get_token ();
+    
+    is_unsigned = rhs_current_operand_is_unsigned_now ();
+    emit_load_assignment_rhs_expression_to_reg ("eax");
+    
+    expect (TOK_RPAREN, ")");
+    
+    if (!token_is_statement_compare_operator (tok.kind)) {
+    
+        emit_statement_eax_truth_jump_if_false_and_tail (label);
+        return 1;
+    
+    }
+    
+    op = tok.kind;
+    get_token ();
+    
+    if (rhs_current_operand_is_unsigned_now ()) {
+        is_unsigned = 1;
+    }
+    
+    if (!emit_statement_rhs_const32_to_edx_if_possible ()) {
+    
+        emit_push_reg_now ("eax");
+        emit_load_assignment_compare_expression_to_reg ("edx");
+        emit_pop_reg_now ("eax");
+    
+    }
+    
+    emit_statement_cmp_eax_edx_jump_if_false_and_tail (op, is_unsigned, label);
+    return 1;
+
+}
+
+static int emit_statement_direct_compare_jump_if_false_now (int label) {
+
+    enum token_kind op;
+    
+    int is_unsigned;
+    int old_assignment32_stop_before_condition_operator;
+    
+    if (!source_condition_has_top_level_compare_now (tok.caret) &&
+        !source_condition_has_top_level_compare_now (tok.start)) {
+        return 0;
+    }
+    
+    is_unsigned = rhs_current_operand_is_unsigned_now ();
+    
+    old_assignment32_stop_before_condition_operator = assignment32_stop_before_condition_operator;
+    assignment32_stop_before_condition_operator = 1;
+    
+    if (emit_load_assignment_binary_expression_prec_to_reg ("eax", 1)) {
+        is_unsigned = 1;
+    }
+    
+    assignment32_stop_before_condition_operator = old_assignment32_stop_before_condition_operator;
+    
+    if (!token_is_statement_compare_operator (tok.kind)) {
+    
+        emit_statement_eax_truth_jump_if_false_and_tail (label);
+        return 1;
+    
+    }
+    
+    op = tok.kind;
+    get_token ();
+    
+    if (rhs_current_operand_is_unsigned_now ()) {
+        is_unsigned = 1;
+    }
+    
+    if (!emit_statement_rhs_const32_to_edx_if_possible ()) {
+    
+        emit_push_reg_now ("eax");
+        emit_load_assignment_compare_expression_to_reg ("edx");
+        emit_pop_reg_now ("eax");
+    
+    }
+    
+    emit_statement_cmp_eax_edx_jump_if_false_and_tail (op, is_unsigned, label);
+    return 1;
+
+}
+
 static void emit_statement_jump_if_false (int label) {
 
     enum token_kind op;
     int is_unsigned;
     
+    const char *call_start;
+    const char *call_caret;
+    
+    char *call_name;
+    unsigned long call_line;
+    
+    int old_assignment32_stop_before_condition_operator;
     flush_pending_statement_labels ();
     
     statement_condition_constant_known = 0;
     statement_condition_constant_value = 0;
     
+    if (emit_statement_ident_immediate_compare_jump_if_false_now (label)) {
+        return;
+    }
+    
     if (emit_statement_ident_enum_compare_jump_if_false_now (label)) {
         return;
     }
     
-    if (tok.kind == TOK_LPAREN && source_parenthesized_condition_has_logical_now ()) {
-    
-        /*
-         * Parse the whole parenthesized logical expression as an expression.
-         * The older recursive condition parser stopped after the first operand
-         * of nested logical groups such as:
-         *
-         *     a && (b || c || d)
-         *
-         * and then the outer caller immediately expected the closing ')',
-         * leaving the inner '||' tokens unconsumed and reporting a false
-         * "expected )" at the first member expression.
-         */
-        get_token ();
-        
-        emit_load_assignment_rhs_expression_to_reg ("eax");
-        expect (TOK_RPAREN, ")");
-        
-        if (tok.kind == TOK_LOGOR) {
-        
-            int skip_label = anon_label++;
-            
-            if (state->ofp) {
-            
-                if (state->syntax & ASM_SYNTAX_INTEL) {
-                
-                    fprintf (state->ofp, "    test eax, eax\n");
-                    fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jnz L%d\n" : "    jnz .L%d\n"), skip_label);
-                
-                } else {
-                
-                    fprintf (state->ofp, "    testl %%eax, %%eax\n");
-                    fprintf (state->ofp, "    jnz .L%d\n", skip_label);
-                
-                }
-            
-            }
-            
-            get_token ();
-            
-            emit_statement_jump_if_false (label);
-            emit_statement_label (skip_label);
-            
-            return;
-        
-        }
-        
-        emit_statement_test_eax_jump_if_false (label);
-        statement_condition_emit_logical_tail (label);
-        
+    if (emit_statement_member_enum_compare_jump_if_false_now (label)) {
         return;
-    
     }
     
     if (emit_load_parenthesized_assignment_expression_to_reg_now ("eax", &is_unsigned)) {
@@ -32668,21 +34142,49 @@ static void emit_statement_jump_if_false (int label) {
                 is_unsigned = 1;
             }
             
-            emit_load_assignment_rhs_expression_to_reg ("edx");
+            emit_load_assignment_compare_expression_to_reg ("edx");
             consume_parenthesized_assignment_remaining_closes ();
-            emit_statement_cmp_eax_edx_jump_if_false (op, is_unsigned, label);
+            
+            emit_statement_cmp_eax_edx_jump_if_false_and_tail (op, is_unsigned, label);
+            statement_condition_emit_logical_tail (label);
             
             return;
         
         }
         
         consume_parenthesized_assignment_remaining_closes ();
-        emit_statement_test_eax_jump_if_false (label);
+        
+        emit_statement_eax_truth_jump_if_false_and_tail (label);
         return;
     
     }
     
-    if (statement_condition_starts_with_ident_call_now ()) {
+    if (emit_statement_parenthesized_lhs_compare_jump_if_false_now (label)) {
+        return;
+    }
+    
+    if (emit_statement_direct_compare_jump_if_false_now (label)) {
+        return;
+    }
+    
+    /*
+     * Parenthesized statement conditions must be parsed as ordinary
+     * expressions here.  The older recursive/special-case paths try to split
+     * things like:
+     *
+     *     (p - q) > 2
+     *     ((*u++ = *t++) != '\n')
+     *     (toupper((unsigned char)specifier) == 'X')
+     *
+     * into a hand-emitted branch form.  That interacts badly with the
+     * stop-before-condition-operator guard and makes the inner expression
+     * parser treat non-constant subexpressions as integer constant
+     * expressions.  Let the normal expression parser consume the whole
+     * parenthesized expression, then branch on the resulting value.  If the
+     * parenthesized value is followed by a comparison, handle that comparison
+     * normally after the grouped LHS has been loaded.
+     */
+    if (tok.kind == TOK_LPAREN) {
     
         is_unsigned = rhs_current_operand_is_unsigned_now ();
         emit_load_assignment_rhs_expression_to_reg ("eax");
@@ -32696,17 +34198,82 @@ static void emit_statement_jump_if_false (int label) {
                 is_unsigned = 1;
             }
             
-            emit_load_assignment_rhs_expression_to_reg ("edx");
-            emit_statement_cmp_eax_edx_jump_if_false (op, is_unsigned, label);
+            if (!emit_statement_rhs_const32_to_edx_if_possible ()) {
             
-            statement_condition_emit_logical_tail (label);
+                emit_push_reg_now ("eax");
+                emit_load_assignment_compare_expression_to_reg ("edx");
+                emit_pop_reg_now ("eax");
+            
+            }
+            
+            emit_statement_cmp_eax_edx_jump_if_false_and_tail (op, is_unsigned, label);
+            return;
+        
+        }
+
+        emit_statement_eax_truth_jump_if_false_and_tail (label);
+        return;
+
+    }
+    
+    if (tok.kind == TOK_LPAREN && !source_starts_with_parenthesized_assignment_now ()) {
+    
+        get_token ();
+        
+        emit_statement_jump_if_false (label);
+        expect (TOK_RPAREN, ")");
+        
+        statement_condition_emit_logical_tail (label);
+        return;
+    }
+    
+    if (statement_condition_starts_with_ident_call_now ()) {
+    
+        is_unsigned = rhs_current_operand_is_unsigned_now ();
+        
+        if (tok.kind != TOK_IDENT) {
+            emit_load_assignment_rhs_expression_to_reg ("eax");
+        } else {
+        
+            call_name = xstrdup (tok.ident);
+            call_start = tok.start;
+            call_caret = tok.caret;
+            call_line = get_line_number ();
+            
+            get_token ();
+            
+            if (!find_local_symbol (call_name)) {
+                ensure_global_function_symbol (call_name, call_start, call_caret, call_line);
+            }
+            
+            emit_call_identifier_to_reg_now (call_name, "eax", call_start, call_caret, call_line);
+            free (call_name);
+        
+        }
+        
+        if (token_is_statement_compare_operator (tok.kind)) {
+        
+            op = tok.kind;
+            get_token ();
+            
+            if (rhs_current_operand_is_unsigned_now ()) {
+                is_unsigned = 1;
+            }
+            
+            if (!emit_statement_rhs_const32_to_edx_if_possible ()) {
+            
+                emit_push_reg_now ("eax");
+                emit_load_assignment_compare_expression_to_reg ("edx");
+                emit_pop_reg_now ("eax");
+            
+            }
+            
+            emit_statement_cmp_eax_edx_jump_if_false_and_tail (op, is_unsigned, label);
             return;
         
         }
         
-        emit_statement_test_eax_jump_if_false (label);
-        statement_condition_emit_logical_tail (label);
-        
+        emit_statement_eax_truth_jump_if_false_and_tail (label);
         return;
     
     }
@@ -32723,7 +34290,7 @@ static void emit_statement_jump_if_false (int label) {
      */
     if (token_is_const_floating_condition_operand_now () || rhs_current_operand_is_floating_now ()) {
     
-        long double left_float = 0.0L;
+        double left_float = 0.0;
         
         int left_float_constant = 0;
         int float_size = DATA_DOUBLE & 0x1f;
@@ -32744,19 +34311,14 @@ static void emit_statement_jump_if_false (int label) {
             
             if (left_float_constant && (token_is_floating_constant_now () || token_is_const_condition_operand_now ())) {
             
-                long double right_float;
+                double right_float;
                 
                 if (token_is_floating_constant_now ()) {
                     right_float = parse_floating_const_expr_value_now ();
                 } else {
                 
                     int64_s right_int = const64_from_current_operand ();
-                    
-                    right_float = (long double) right_int.low;
-                    
-                    if (right_int.high != 0) {
-                        right_float += ((long double) right_int.high) * 4294967296.0L;
-                    }
+                    right_float = int64_to_double_now (right_int);
                 
                 }
                 
@@ -32785,7 +34347,7 @@ static void emit_statement_jump_if_false (int label) {
         if (left_float_constant) {
         
             statement_condition_constant_known = 1;
-            statement_condition_constant_value = left_float != 0.0L ? 1 : 0;
+            statement_condition_constant_value = left_float != 0.0 ? 1 : 0;
             
             if (statement_condition_fold_logical_tail (label)) {
                 return;
@@ -32795,16 +34357,27 @@ static void emit_statement_jump_if_false (int label) {
         
         }
         
-        emit_load_floating_ld_now (float_size, 0.0L);
+        emit_load_floating_ld_now (float_size, 0.0);
         emit_statement_floating_compare_jump_if_false (TOK_NOTEQ, label);
         
         return;
     
     }
     
-    if (token_is_const_condition_operand_now () || const_integer_expr_text_is_foldable_now (tok.caret) || current_integer_expr_is_foldable_now ()) {
+    /*
+     * Only take the statement-condition constant shortcut when the current
+     * token itself is a constant operand.  The old text-based fallbacks could
+     * misfire during self-compilation of enum comparisons such as:
+     *
+     *     if (assign_op == TOK_ASSIGN)
+     *
+     * and reduce the whole condition to the RHS enum value.  That generated
+     * "mov eax, 61; test eax, eax" and made every compound assignment look
+     * like a plain assignment in the next bootstrap stage.
+     */
+    if (token_is_const_condition_operand_now ()) {
     
-        int fold_whole_expr = const_integer_expr_text_is_foldable_now (tok.caret) || current_integer_expr_is_foldable_now ();
+        int fold_whole_expr = current_integer_expr_is_foldable_now ();
         int left_unsigned = rhs_current_operand_is_unsigned_now ();
         
         int64_s left;
@@ -32844,9 +34417,7 @@ static void emit_statement_jump_if_false (int label) {
                     is_unsigned = 1;
                 }
                 
-                emit_load_assignment_rhs_expression_to_reg ("edx");
-                emit_statement_cmp_eax_edx_jump_if_false (op, is_unsigned, label);
-                
+                emit_statement_cmp_eax_edx_jump_if_false_and_tail (op, is_unsigned, label);
                 return;
             
             }
@@ -32869,15 +34440,10 @@ static void emit_statement_jump_if_false (int label) {
             
             if (token_is_floating_constant_now ()) {
             
-                long double left_float;
-                long double right_float;
+                double left_float;
+                double right_float;
                 
-                left_float = (long double) left.low;
-                
-                if (left.high != 0) {
-                    left_float += ((long double) left.high) * 4294967296.0L;
-                }
-                
+                left_float = int64_to_double_now (left);
                 right_float = parse_floating_const_expr_value_now ();
                 
                 statement_condition_constant_known = 1;
@@ -32914,13 +34480,7 @@ static void emit_statement_jump_if_false (int label) {
             
             if (rhs_current_operand_is_floating_now ()) {
             
-                long double left_float;
-                
-                left_float = (long double) left.low;
-                
-                if (left.high != 0) {
-                    left_float += ((long double) left.high) * 4294967296.0L;
-                }
+                double left_float = int64_to_double_now (left);
                 
                 emit_load_floating_ld_now (DATA_DOUBLE & 0x1f, left_float);
                 emit_load_floating_rhs_expression_now (DATA_DOUBLE & 0x1f);
@@ -32933,9 +34493,7 @@ static void emit_statement_jump_if_false (int label) {
             emit_statement_const32_to_eax (left);
             emit_load_assignment_rhs_expression_to_reg ("edx");
             
-            emit_statement_cmp_eax_edx_jump_if_false (op, is_unsigned, label);
-            statement_condition_emit_logical_tail (label);
-            
+            emit_statement_cmp_eax_edx_jump_if_false_and_tail (op, is_unsigned, label);
             return;
         
         }
@@ -32961,9 +34519,8 @@ static void emit_statement_jump_if_false (int label) {
     if (tok.kind == TOK_XMARK) {
     
         emit_load_assignment_rhs_expression_to_reg ("eax");
-        emit_statement_test_eax_jump_if_false (label);
         
-        statement_condition_emit_logical_tail (label);
+        emit_statement_eax_truth_jump_if_false_and_tail (label);
         return;
     
     }
@@ -33077,7 +34634,12 @@ static void emit_statement_jump_if_false (int label) {
     }
     
     is_unsigned = rhs_current_operand_is_unsigned_now ();
+    
+    old_assignment32_stop_before_condition_operator = assignment32_stop_before_condition_operator;
+    assignment32_stop_before_condition_operator = 1;
+    
     emit_load_assignment_rhs_expression_to_reg ("eax");
+    assignment32_stop_before_condition_operator = old_assignment32_stop_before_condition_operator;
     
     if (token_is_statement_compare_operator (tok.kind)) {
     
@@ -33088,16 +34650,20 @@ static void emit_statement_jump_if_false (int label) {
             is_unsigned = 1;
         }
         
-        emit_load_assignment_rhs_expression_to_reg ("edx");
-        emit_statement_cmp_eax_edx_jump_if_false (op, is_unsigned, label);
+        if (!emit_statement_rhs_const32_to_edx_if_possible ()) {
         
-        statement_condition_emit_logical_tail (label);
+            emit_push_reg_now ("eax");
+            emit_load_assignment_compare_expression_to_reg ("edx");
+            emit_pop_reg_now ("eax");
+        
+        }
+        
+        emit_statement_cmp_eax_edx_jump_if_false_and_tail (op, is_unsigned, label);
         return;
     
     }
     
-    emit_statement_test_eax_jump_if_false (label);
-    statement_condition_emit_logical_tail (label);
+    emit_statement_eax_truth_jump_if_false_and_tail (label);
 
 }
 
@@ -33958,30 +35524,52 @@ static void parse_statement (void) {
     
     }
     
-    if (tok.kind == TOK_BREAK || tok.kind == TOK_CONTINUE) {
+    if (tok.kind == TOK_BREAK) {
     
-        enum token_kind jump_kind = tok.kind;
-        int target_label = -1;
+        int target_label = current_break_label;
+        
+        long cleanup_base = current_break_cleanup_base;
+        long cleanup_bytes;
         
         get_token ();
         
-        if (jump_kind == TOK_BREAK) {
-            target_label = current_break_label;
-        } else {
-            target_label = current_continue_label;
+        if (target_label >= 0) {
+        
+            cleanup_bytes = current_block_cleanup_bytes - cleanup_base;
+            
+            if (!current_function_uses_single_frame && cleanup_bytes > 0) {
+                emit_stack_adjust (cleanup_bytes, 0);
+            }
+            
+            emit_statement_jump (target_label);
+            statement_ends_control_flow = 1;
+        
         }
+        
+        if (tok.kind != TOK_SEMI) {
+            skip_balanced_until (TOK_SEMI, TOK_EOF, TOK_EOF);
+        }
+        
+        expect (TOK_SEMI, ";");
+        return;
+    
+    }
+    
+    if (tok.kind == TOK_CONTINUE) {
+    
+        int target_label = current_continue_label;
+        
+        long cleanup_base = current_continue_cleanup_base;
+        long cleanup_bytes;
+        
+        get_token ();
         
         if (target_label >= 0) {
         
-            {
+            cleanup_bytes = current_block_cleanup_bytes - cleanup_base;
             
-                long cleanup_base = (jump_kind == TOK_BREAK) ? current_break_cleanup_base : current_continue_cleanup_base;
-                long cleanup_bytes = current_block_cleanup_bytes - cleanup_base;
-                
-                if (cleanup_bytes > 0) {
-                    emit_stack_adjust (cleanup_bytes, 0);
-                }
-            
+            if (!current_function_uses_single_frame && cleanup_bytes > 0) {
+                emit_stack_adjust (cleanup_bytes, 0);
             }
             
             emit_statement_jump (target_label);
@@ -34086,10 +35674,14 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     int emit_inline_definition_to_output = 1;
     
     FILE *saved_ofp;
-    FILE *inline_tmp = 0;
+    FILE *function_tmp = 0;
     
     char *inline_asm_text = 0;
+    char *function_asm_text = 0;
+    char function_tmp_name[64];
+    
     int capture_inline_body = 0;
+    int capture_function_body = 0;
     
     int saved_declarator_function_param_count;
     int saved_declarator_function_has_prototype;
@@ -34104,6 +35696,7 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     int old_function_has_return_statement;
     
     char *function_filename_copy = 0;
+    function_tmp_name[0] = 0;
     
     /**
      * Inline definitions are compiled into a temporary assembler buffer so
@@ -34142,13 +35735,14 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     }
     
     capture_inline_body = is_inline && saved_ofp != 0;
+    capture_function_body = saved_ofp != 0;
     
-    if (capture_inline_body) {
+    if (capture_function_body) {
     
-        inline_tmp = tmpfile ();
+        function_tmp = open_scc_temp_file (function_tmp_name, sizeof (function_tmp_name));
         
-        if (!inline_tmp) {
-            capture_inline_body = 0;
+        if (!function_tmp) {
+            capture_function_body = 0;
         }
     
     }
@@ -34209,13 +35803,21 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     
     if (!emit_body || !should_emit) {
         state->ofp = 0;
-    } else if (capture_inline_body) {
-        state->ofp = inline_tmp;
+    } else if (capture_function_body) {
+        state->ofp = function_tmp;
     }
     
     current_return_label = anon_label++;
     pending_return_jump = 0;
     
+    /*
+     * Do not apply the whole-function frame deferral to inline-function
+     * capture.  The inline expander analyses the captured body as it was
+     * emitted, including any stack movement before parameter references.
+     * Moving all automatic storage to a synthetic prologue changes that
+     * analysis and can corrupt the self-built compiler.
+     */
+    current_function_frame_enabled = (!is_inline && capture_function_body);
     emit_function_start (name, !emit_public);
     
     parse_block ();
@@ -34226,28 +35828,64 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     }
     
     pending_return_jump = 0;
-    
     emit_function_end ();
+    
+    current_function_frame_label = -1;
+    current_function_frame_deferred = 0;
+    current_function_frame_enabled = 0;
+    
     emit_goto_trampolines ();
+    current_function_uses_single_frame = 0;
     
-    if (capture_inline_body && inline_tmp) {
+    if (capture_function_body && function_tmp) {
     
-        inline_asm_text = read_tmp_file_text (inline_tmp);
+        function_asm_text = read_tmp_file_text (function_tmp);
         
-        if (inline_asm_text) {
+        if (function_asm_text) {
         
-            if (emit_inline_definition_to_output) {
+            inline_asm_text = replace_function_frame_placeholder (function_asm_text, current_function_frame_size);
+            
+            if (!inline_asm_text) {
+            
+                inline_asm_text = function_asm_text;
+                function_asm_text = 0;
+            
+            }
+            
+            if (!capture_inline_body || emit_inline_definition_to_output) {
                 fputs (inline_asm_text, saved_ofp);
             }
             
-            remember_inline_function (name, inline_asm_text, current_return_label,
-                saved_declarator_function_param_count, saved_declarator_function_has_prototype || saved_declarator_function_param_count > 0,
-                    return_is_void, return_is_floating, return_size);
+            if (capture_inline_body) {
+            
+                remember_inline_function (name, inline_asm_text, current_return_label,
+                    saved_declarator_function_param_count, saved_declarator_function_has_prototype || saved_declarator_function_param_count > 0,
+                        return_is_void, return_is_floating, return_size);
+            
+            }
         
         }
         
-        fclose (inline_tmp);
-        inline_tmp = 0;
+        if (function_asm_text) {
+            free (function_asm_text);
+        }
+        
+        if (inline_asm_text) {
+        
+            free (inline_asm_text);
+            inline_asm_text = 0;
+        
+        }
+        
+        fclose (function_tmp);
+        function_tmp = 0;
+        
+        if (function_tmp_name[0]) {
+        
+            remove (function_tmp_name);
+            function_tmp_name[0] = 0;
+        
+        }
     
     }
     
@@ -35246,12 +36884,7 @@ static void emit_global_scalar (int64_s value, int size) {
         } else if (size == (DATA_LLONG & 0x1f) || size == (DATA_DOUBLE & 0x1f)) {
         
             masm_emit_data_prefix ("dq");
-            
-            if (high & U32_MASK) {
-                fprintf (state->ofp, "%lu%lu", high & U32_MASK, low & U32_MASK);
-            } else {
-                fprintf (state->ofp, "%lu", low & U32_MASK);
-            }
+            fprintf (state->ofp, "0%08lX%08lXh", high & U32_MASK, low & U32_MASK);
         
         } else {
         

@@ -1180,16 +1180,22 @@ static int bn_lshift (unsigned int *bn, int shift, int or_val) {
 
 }
 
-float _strtof (const char *nptr, char **endptr) {
+float scc_strtof (const char *nptr, char **endptr) {
 
     const char *s = nptr;
-    float res = 0.0f;
+    
+    float res = 0;
+    float frac = 0;
+    float div = 1;
+    float pow10;
     
     int sign = 1;
     int exp = 0;
+    int exp_sign = 1;
     int has_digits = 0;
+    int i;
     
-    while (isspace ((unsigned char) *s)) {
+    while (isspace ((int) *s)) {
         s++;
     }
     
@@ -1203,9 +1209,11 @@ float _strtof (const char *nptr, char **endptr) {
     }
     
     /* Integer part */
-    while (isdigit ((unsigned char) *s)) {
+    while (isdigit ((int) *s)) {
     
-        res = res * 10.0f + (*s++ - '0');
+        res = (res * 10) + (*s - '0');
+        s++;
+        
         has_digits = 1;
     
     }
@@ -1213,13 +1221,14 @@ float _strtof (const char *nptr, char **endptr) {
     /* Fractional part */
     if (*s == '.') {
     
-        float factor = 0.1f;
         s++;
         
-        while (isdigit ((unsigned char) *s)) {
+        while (isdigit ((int) *s)) {
         
-            res += (*s++ - '0') * factor;
-            factor *= 0.1f;
+            frac = (frac * 10) + (*s - '0');
+            
+            div *= 10;
+            s++;
             
             has_digits = 1;
         
@@ -1233,17 +1242,17 @@ float _strtof (const char *nptr, char **endptr) {
             *endptr = (char *) nptr;
         }
         
-        return 0.0f;
+        return 0;
     
     }
+    
+    res += frac / div;
     
     /* Exponent part */
     if (*s == 'e' || *s == 'E') {
     
-        const char *backtrack = s;
-        
-        int exp_sign = 1;
-        int e_val = 0;
+        const char *exp_start = s;
+        int exp_val = 0;
         
         s++;
         
@@ -1256,168 +1265,177 @@ float _strtof (const char *nptr, char **endptr) {
             s++;
         }
         
-        if (isdigit ((unsigned char) *s)) {
+        if (isdigit ((int) *s)) {
         
-            while (isdigit ((unsigned char) *s)) {
+            while (isdigit ((int) *s)) {
             
-                e_val = e_val * 10 + (*s - '0');
+                exp_val = (exp_val * 10) + (*s - '0');
                 s++;
             
             }
             
-            exp = e_val * exp_sign;
+            exp = exp_val * exp_sign;
         
         } else {
-            s = backtrack; 
+            s = exp_start;
         }
     
     }
     
-    if (exp != 0) {
+    pow10 = 1;
     
-        float base = (exp > 0) ? 10.0f : 0.1f;
-        int abs_exp = (exp > 0) ? exp : -exp;
-        
-        for (; abs_exp > 0; abs_exp--) {
-            res *= base;
+    if (exp > 0) {
+    
+        for (i = 0; i < exp; i++) {
+            pow10 *= 10;
         }
+        
+        res *= pow10;
     
+    } else if (exp < 0) {
+    
+        for (i = 0; i < -exp; i++) {
+            pow10 *= 10;
+        }
+        
+        res /= pow10;
+    
+    }
+    
+    if (sign < 0) {
+        res = -res;
     }
     
     if (endptr) {
         *endptr = (char *) s;
     }
     
-    return res * sign;
+    return res;
 
 }
 
-long double strtold (const char *nptr, char **endptr) {
+double scc_strtod (const char *nptr, char **endptr) {
 
     const char *s = nptr;
     
-    long double res = 0.0L;
-    int sign = 1, exp = 0, has_digits = 0;
+    double x = 0;
+    double frac = 0;
+    double div = 1;
+    double pow10;
+
+    int neg = 0;
+    int exp_neg = 0;
+    int exp_val = 0;
+    int saw_digit = 0;
+    int i;
     
-    while (isspace ((unsigned char) *s)) {
+    while (isspace ((int) *s)) {
         s++;
     }
     
     if (*s == '-') {
     
-        sign = -1;
+        neg = 1;
         s++;
     
     } else if (*s == '+') {
         s++;
     }
     
-    while (isdigit ((unsigned char) *s)) {
+    while (isdigit ((int) *s)) {
     
-        res = res * 10.0L + (*s++ - '0');
-        has_digits = 1;
+        x = (x * 10) + (*s - '0');
+        s++;
+        
+        saw_digit = 1;
     
     }
     
     if (*s == '.') {
     
-        long double factor = 0.1L;
         s++;
         
-        while (isdigit ((unsigned char) *s)) {
+        while (isdigit ((int) *s)) {
+        
+            frac = (frac * 10) + (*s - '0');
             
-            res += (long double) (*s++ - '0') * factor;
-            factor *= 0.1L;
+            div *= 10;
+            s++;
             
-            has_digits = 1;
+            saw_digit = 1;
         
         }
-    
+
     }
-    
-    if (!has_digits) {
+
+    if (!saw_digit) {
     
         if (endptr) {
             *endptr = (char *) nptr;
         }
         
-        return 0.0L;
+        return 0;
     
     }
     
+    x += frac / div;
+    
     if (*s == 'e' || *s == 'E') {
     
-        const char *back = s;
-        int esign = 1, eval = 0;
-        
-        s++;
+        const char *exp_start = s++;
         
         if (*s == '-') {
         
-            esign = -1;
+            exp_neg = 1;
             s++;
         
         } else if (*s == '+') {
             s++;
         }
         
-        if (isdigit ((unsigned char) *s)) {
+        if (isdigit ((int) *s)) {
         
-            while (isdigit ((unsigned char) *s)) {
-                eval = eval * 10 + (*s++ - '0');
-            }
+            while (isdigit ((int) *s)) {
             
-            exp = eval * esign;
+                if (exp_val < 308) {
+                    exp_val = (exp_val * 10) + (*s - '0');
+                }
+                
+                s++;
+            
+            }
         
         } else {
-            s = back;
+            s = exp_start;
         }
     
     }
     
-    /* Apply exponent in safe chunks to avoid intermediate overflow/underflow */
-    if (exp != 0) {
+    pow10 = 1;
     
-        int abs_exp = (exp > 0) ? exp : -exp;
-        
-        while (abs_exp > 0) {
-        
-            int chunk = (abs_exp > 4000) ? 4000 : abs_exp;
-            
-            long double multiplier = 1.0L;
-            long double base = 10.0L;
-            
-            int i = chunk;
-            
-            /* Binary Exponentiation for the current chunk */
-            while (i > 0) {
-            
-                if (i & 1) {
-                    multiplier *= base;
-                }
-                
-                base *= base;
-                i >>= 1;
-            
-            }
-            
-            if (exp > 0) {
-                res *= multiplier;
-            } else {
-                res /= multiplier;
-            }
-            
-            abs_exp -= chunk;
-        
+    for (i = 0; i < exp_val; i++) {
+        pow10 *= 10;
+    }
+    
+    if (exp_val != 0) {
+    
+        if (exp_neg) {
+            x /= pow10;
+        } else {
+            x *= pow10;
         }
     
+    }
+    
+    if (neg) {
+        x = -x;
     }
     
     if (endptr) {
         *endptr = (char *) s;
     }
     
-    return res * sign;
+    return x;
 
 }
 
@@ -1426,7 +1444,7 @@ static void parse_number (struct token *tok) {
     const char *p = tok->ident, *q;
     
     unsigned int bn[BN_SIZE] = { 0 };
-    long double d;
+    double d;
     
     CString cstr;
     int b, t, shift, frac_bits, s, exp_val, ch;
@@ -1570,16 +1588,16 @@ static void parse_number (struct token *tok) {
             }
             
             exp_val = exp_val * s;
-            d = (long double) bn[3];
+            d = bn[3];
             
             d = ldexp (d, 32);
-            d += (long double) bn[2];
+            d += bn[2];
             
             d = ldexp (d, 32);
-            d += (long double) bn[1];
+            d += bn[1];
             
             d = ldexp (d, 32);
-            d += (long double) bn[0];
+            d += bn[0];
             
             d = ldexp (d, exp_val - frac_bits);
             t = toupper ((int) ch);
@@ -1589,7 +1607,7 @@ static void parse_number (struct token *tok) {
                 ch = *p++;
                 
                 tok->kind = TOK_CFLOAT;
-                tok->val.f = (float) d;
+                tok->val.f = d;
             
             } else if (t == 'L') {
             
@@ -1601,7 +1619,7 @@ static void parse_number (struct token *tok) {
             } else {
             
                 tok->kind = TOK_CDOUBLE;
-                tok->val.d = (double) d;
+                tok->val.d = d;
             
             }
         
@@ -1633,11 +1651,11 @@ static void parse_number (struct token *tok) {
                 
                 }
                 
-                if (ch < '0' || ch >= '9') {
+                if (ch < '0' || ch > '9') {
                     report_at (get_filename (), get_line_number (), REPORT_ERROR, "expected exponent digits");
                 }
                 
-                while (ch >= '0' && ch <=  '9') {
+                while (ch >= '0' && ch <= '9') {
                 
                     cstr_ccat (&cstr, ch);
                     ch = *p++;
@@ -1656,19 +1674,19 @@ static void parse_number (struct token *tok) {
                 ch = *p++;
                 
                 tok->kind = TOK_CFLOAT;
-                tok->val.f = _strtof (cstr.data, 0);
+                tok->val.f = scc_strtof (cstr.data, 0);
             
             } else if (t == 'L') {
             
                 ch = *p++;
                 
                 tok->kind = TOK_CLDOUBLE;
-                tok->val.ld = strtold (cstr.data, 0);
+                tok->val.ld = scc_strtod (cstr.data, 0);
             
             } else {
             
                 tok->kind = TOK_CDOUBLE;
-                tok->val.d = strtod (cstr.data, 0);
+                tok->val.d = scc_strtod (cstr.data, 0);
             
             }
         

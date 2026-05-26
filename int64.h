@@ -53,8 +53,8 @@ int gte64_signed (int64_s a, int64_s b);
 int gt64_unsigned (int64_s a, int64_s b);
 int gt64_signed (int64_s a, int64_s b);
 
-void ld_to_u64 (int64_s *out, long double x);
-void ld_to_i64 (int64_s *out, long double x);
+void ld_to_u64 (int64_s *out, double x);
+void ld_to_i64 (int64_s *out, double x);
 
 int int64_is_negative (int64_s v);
 int int64_fits_uint (int64_s v);
@@ -65,7 +65,7 @@ void parse_string_to_i64 (int64_s *val, const char *str);
 
 #define     U32_MASK                    ((((unsigned long) 0xFFFFU) << 16) | 0xFFFFU)
 
-long double u64_to_ld (int64_s v);
-long double i64_to_ld (int64_s v);
+double u64_to_ld (int64_s v);
+double i64_to_ld (int64_s v);
 
 #endif      /* _INT64_H */

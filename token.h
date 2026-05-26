@@ -141,7 +141,7 @@ struct token {
     
     union {
     
-        long double ld;
+        double ld;
         
         double d;
         float f;

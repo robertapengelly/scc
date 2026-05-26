@@ -469,12 +469,45 @@ int gt64_signed (int64_s a, int64_s b) {
 
 }
 
-void ld_to_u64 (int64_s *out, long double x) {
+static double int64_double_2p32 (void) {
 
-    long double base = 4294967296.0L;                       /* 2^32 */
-    long double hi, lo;
+    double v;
     
-    if (x <= 0.0L) {
+    v = 65536;
+    v *= 65536;
+    
+    return v;
+
+}
+
+static double int64_double_2p63 (void) {
+
+    double v;
+    
+    v = int64_double_2p32 ();
+    v *= 2147483648UL;
+    
+    return v;
+
+}
+
+static double int64_double_2p64 (void) {
+
+    double v;
+    
+    v = int64_double_2p32 ();
+    v *= int64_double_2p32 ();
+    
+    return v;
+
+}
+
+void ld_to_u64 (int64_s *out, double x) {
+
+    double base = int64_double_2p32 ();
+    double hi, lo;
+    
+    if (x <= 0.0) {
     
         out->low = 0;
         out->high = 0;
@@ -484,7 +517,7 @@ void ld_to_u64 (int64_s *out, long double x) {
     }
     
     /* optional clamp */
-    if (x >= 18446744073709551615.0L) {                     /* 2^64 - 1 */
+    if (x >= int64_double_2p64 ()) {
     
         out->low = 0xFFFFFFFFUL;
         out->high = 0xFFFFFFFFUL;
@@ -496,14 +529,14 @@ void ld_to_u64 (int64_s *out, long double x) {
     hi = x / base;
     out->high = (unsigned long) hi;
     
-    lo = x - ((long double) out->high * base);
+    lo = x - ((double) out->high * base);
     out->low = (unsigned long) lo;
 
 }
 
-void ld_to_i64 (int64_s *out, long double x) {
+void ld_to_i64 (int64_s *out, double x) {
 
-    long double limit = 9223372036854775808.0L; /* 2^63 */
+    double limit = int64_double_2p63 ();
     
     if (x >= limit) {
     
@@ -525,7 +558,7 @@ void ld_to_i64 (int64_s *out, long double x) {
     
     }
     
-    if (x >= 0.0L) {
+    if (x >= 0.0) {
     
         ld_to_u64 (out, x);
         return;
@@ -578,23 +611,23 @@ static void norm64 (int64_s *v) {
 
 }
 
-long double u64_to_ld (int64_s v) {
+double u64_to_ld (int64_s v) {
 
     norm64 (&v);
-    return (long double) v.high * 4294967296.0L + (long double) v.low;
+    return (double) v.high * int64_double_2p32 () + (double) v.low;
 
 }
 
-long double i64_to_ld (int64_s v) {
+double i64_to_ld (int64_s v) {
 
     norm64 (&v);
 
     if (!(v.high & 0x80000000UL)) {
-        return (long double) v.high * 4294967296.0L + (long double) v.low;
+        return (double) v.high * int64_double_2p32 () + (double) v.low;
     }
 
     neg64 (&v);
-    return -((long double) v.high * 4294967296.0L + (long double) v.low);
+    return -((double) v.high * int64_double_2p32 () + (double) v.low);
 
 }
 
