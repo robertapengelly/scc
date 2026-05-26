@@ -5622,7 +5622,7 @@ static void finish_inline_buffer (FILE **tmp, FILE **saved, int optimize) {
     
     }
     
-    fclose (*tmp);
+    scc_close (*tmp);
     
     *tmp = 0;
     *saved = 0;
@@ -24367,7 +24367,7 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
             
             if (arg_tmp_ofp) {
             
-                fclose (arg_tmp_ofp);
+                scc_close (arg_tmp_ofp);
                 arg_tmp_ofp = 0;
             
             }
@@ -24396,7 +24396,7 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
                     fputc (ch, state->ofp);
                 }
                 
-                fclose (arg_tmp_ofps[i]);
+                scc_close (arg_tmp_ofps[i]);
                 arg_tmp_ofps[i] = 0;
             
             }
@@ -24444,7 +24444,7 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
         for (i = 0; i < argc; i++) {
         
             if (arg_tmp_ofps[i]) {
-                fclose (arg_tmp_ofps[i]);
+                scc_close (arg_tmp_ofps[i]);
             }
         
         }
@@ -24794,7 +24794,7 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
             
             if (arg_tmp_ofp) {
             
-                fclose (arg_tmp_ofp);
+                scc_close (arg_tmp_ofp);
                 arg_tmp_ofp = 0;
             
             }
@@ -24869,7 +24869,7 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
             for (i = 0; i < argc; i++) {
             
                 if (arg_tmp_ofps[i]) {
-                    fclose (arg_tmp_ofps[i]);
+                    scc_close (arg_tmp_ofps[i]);
                 }
             
             }
@@ -24913,7 +24913,7 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                         fputc (ch, state->ofp);
                     }
                     
-                    fclose (arg_tmp_ofps[i]);
+                    scc_close (arg_tmp_ofps[i]);
                     arg_tmp_ofps[i] = 0;
                 
                 }
@@ -25004,7 +25004,7 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
         for (i = 0; i < argc; i++) {
         
             if (arg_tmp_ofps[i]) {
-                fclose (arg_tmp_ofps[i]);
+                scc_close (arg_tmp_ofps[i]);
             }
         
         }
@@ -25459,7 +25459,7 @@ static void parse_switch_statement (void) {
     
         body_text = read_tmp_file_text (body_tmp);
         
-        fclose (body_tmp);
+        scc_close (body_tmp);
         body_tmp = 0;
         
         state->ofp = saved_ofp;
@@ -29689,7 +29689,7 @@ static int parse_identifier_assignment_statement (void) {
                             }
                             
                             if (arg_tmp_ofp) {
-                                fclose (arg_tmp_ofp);
+                                scc_close (arg_tmp_ofp);
                             }
                             
                             argc++;
@@ -29717,7 +29717,7 @@ static int parse_identifier_assignment_statement (void) {
                                     fputc (ch, state->ofp);
                                 }
                                 
-                                fclose (arg_tmp_ofps[i]);
+                                scc_close (arg_tmp_ofps[i]);
                                 arg_tmp_ofps[i] = 0;
                             
                             }
@@ -32892,7 +32892,7 @@ static void parse_for_statement (void) {
         if (step_tmp) {
         
             replay_tmp_file_to_output (step_tmp, state->ofp);
-            fclose (step_tmp);
+            scc_close (step_tmp);
             
             step_tmp = 0;
         
@@ -32903,7 +32903,7 @@ static void parse_for_statement (void) {
     }
     
     if (step_tmp) {
-        fclose (step_tmp);
+        scc_close (step_tmp);
     }
     
     emit_statement_label (break_label);
@@ -35628,7 +35628,6 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     
     char *inline_asm_text = 0;
     char *function_asm_text = 0;
-    char function_tmp_name[64];
     
     int capture_inline_body = 0;
     int capture_function_body = 0;
@@ -35646,7 +35645,6 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     int old_function_has_return_statement;
     
     char *function_filename_copy = 0;
-    function_tmp_name[0] = 0;
     
     /**
      * Inline definitions are compiled into a temporary assembler buffer so
@@ -35689,7 +35687,7 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     
     if (capture_function_body) {
     
-        function_tmp = open_scc_temp_file (function_tmp_name, sizeof (function_tmp_name));
+        function_tmp = scc_tmpfile ();
         
         if (!function_tmp) {
             capture_function_body = 0;
@@ -35827,15 +35825,8 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
         
         }
         
-        fclose (function_tmp);
+        scc_close (function_tmp);
         function_tmp = 0;
-        
-        if (function_tmp_name[0]) {
-        
-            remove (function_tmp_name);
-            function_tmp_name[0] = 0;
-        
-        }
     
     }
     

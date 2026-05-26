@@ -49,8 +49,10 @@ void print_include_stack (void);
 char *get_current_directory (void);
 int is_pragma_igored (const char *filename);
 
+#include    <stddef.h>
 #include    <stdio.h>
-FILE *open_scc_temp_file (char *name, size_t name_size);
+
 FILE *scc_tmpfile (void);
+int scc_close (FILE *fp);
 
 #endif      /* _LIB_H */

@@ -627,7 +627,7 @@ int is_pragma_igored (const char *filename) {
 
 }
 
-FILE *open_scc_temp_file (char *name, size_t name_size) {
+FILE *scc_tmpfile (void) {
 
     char *temp_path, *template;
     int fd;
@@ -639,25 +639,26 @@ FILE *open_scc_temp_file (char *name, size_t name_size) {
     template = xmalloc (strlen (temp_path) + 1 + 10 + 1);
     sprintf (template, "%s/sccXXXXXX", temp_path);
     
-    if (!(fd = mkstemp (template))) {
+    if ((fd = mkstemp (template)) < 0) {
         return 0;
     }
-    
-    (void) name;
-    (void) name_size;
     
     return fdopen (fd, "w+b");
 
 }
 
-FILE *scc_tmpfile (void) {
-
-    char name[64];
-    return open_scc_temp_file (name, sizeof (name));
-
+int scc_close (FILE *fp) {
+    return fclose (fp);
 }
+
 #elif       defined (_WIN32)
 # include       <windows.h>
+
+# ifndef    MAX_PATH
+#  define       MAX_PATH                206
+# endif
+
+# include       "hashtab.h"
 
 struct pragma_entry {
 
@@ -738,10 +739,25 @@ int is_pragma_igored (const char *filename) {
 
 }
 
-FILE *open_scc_temp_file (char *name, size_t name_size) {
+struct temp_file {
+
+    char *name, *path;
+    FILE *fp;
+
+};
+
+static struct hashtab hashtab_tmpfiles = { 0 };
+
+FILE *scc_tmpfile (void) {
 
     char temp_path[MAX_PATH + 1] = { 0 };
     char full_path[MAX_PATH + 1] = { 0 };
+    
+    struct hashtab_name *key;
+    struct temp_file *tmp;
+    
+    char *name;
+    FILE *fp;
     
     if (!GetTempPath (MAX_PATH + 1, temp_path)) {
         return 0;
@@ -751,20 +767,91 @@ FILE *open_scc_temp_file (char *name, size_t name_size) {
         return 0;
     }
     
-    (void) name;
-    (void) name_size;
+    if ((name = strrchr (full_path, '\\'))) {
+        name++;
+    } else {
+        name = full_path;
+    }
     
-    return fopen (full_path, "w+b");
+    if ((fp = fopen (full_path, "w+b"))) {
+        
+        if (!(key = hashtab_get_key (&hashtab_tmpfiles, name))) {
+        
+            if (!((key = hashtab_alloc_name (xstrdup (name))))) {
+            
+                remove (full_path);
+                fclose (fp);
+                
+                return 0;
+            
+            }
+        
+        }
+        
+        tmp = xmalloc (sizeof (*tmp));
+        tmp->fp = fp;
+        
+        tmp->path = xstrdup (full_path);
+        tmp->name = xstrdup (name);
+        
+        hashtab_put (&hashtab_tmpfiles, key, tmp);
+        return fp;
+    
+    }
+    
+    return 0;
 
 }
 
-FILE *scc_tmpfile (void) {
+int scc_close (FILE *fp) {
 
-    char name[64];
-    return open_scc_temp_file (name, sizeof (name));
+    struct hashtab_entry *entry;
+    struct temp_file *tmp;
+    
+    int ret, i;
+    
+    for (i = 0; i < hashtab_tmpfiles.capacity; i++) {
+    
+        if (!(entry = &hashtab_tmpfiles.entries[i])) {
+            continue;
+        }
+        
+        if (!entry->key || !entry->value) {
+            continue;
+        }
+        
+        tmp = (struct temp_file *) entry->value;
+        
+        if (tmp->fp == fp) {
+        
+            if ((ret = fclose (fp))) {
+                return ret;
+            }
+            
+            remove (tmp->path);
+            
+            hashtab_remove (&hashtab_tmpfiles, hashtab_get_key (&hashtab_tmpfiles, tmp->name));
+            return 0;
+        
+        }
+    
+    }
+    
+    return 0;
 
 }
 #else
+# include       "hashtab.h"
+
+struct temp_file {
+
+    FILE *fp;
+    char name[1];
+
+};
+
+static struct hashtab hashtab_tmpfiles = { 0 };
+
 char *get_current_directory (void) {
     return xstrdup ("");
 }
@@ -789,16 +876,17 @@ int is_pragma_igored (const char *filename) {
 
 }
 
-FILE *open_scc_temp_file (char *name, size_t name_size) {
+FILE *scc_tmpfile (void) {
 
     static unsigned long temp_id = 1;
+    
+    char name[64];
     unsigned long i;
     
-    FILE *fp;
+    struct hashtab_name *key;
+    struct temp_file *tmp;
     
-    if (!name || name_size == 0) {
-        return 0;
-    }
+    FILE *fp;
     
     for (i = 0; i < 1000; i++) {
     
@@ -811,31 +899,72 @@ FILE *open_scc_temp_file (char *name, size_t name_size) {
         
         }
         
-        fp = fopen (name, "w+b");
+        if ((fp = fopen (name, "w+b"))) {
+            
+            if (!(key = hashtab_get_key (&hashtab_tmpfiles, name))) {
+            
+                if (!((key = hashtab_alloc_name (xstrdup (name))))) {
+                
+                    remove (name);
+                    fclose (fp);
+                    
+                    continue;
+                
+                }
+            
+            }
+            
+            tmp = xmalloc (sizeof (*tmp) + strlen (name) + 1);
+            sprintf (tmp->name, "%s", name);
+            
+            tmp->fp = fp;
         
-        if (fp) {
+            hashtab_put (&hashtab_tmpfiles, key, tmp);
             return fp;
+        
         }
     
     }
     
-    name[0] = 0;
     return 0;
 
 }
 
-FILE *scc_tmpfile (void) {
+int scc_close (FILE *fp) {
 
-    char name[64];
-    FILE *fp;
-
-    fp = open_scc_temp_file (name, sizeof (name));
-
-    if (fp && name[0]) {
-        remove (name);
+    struct hashtab_entry *entry;
+    struct temp_file *tmp;
+    
+    int ret, i;
+    
+    for (i = 0; i < hashtab_tmpfiles.capacity; i++) {
+    
+        if (!(entry = &hashtab_tmpfiles.entries[i])) {
+            continue;
+        }
+        
+        if (!entry->key || !entry->value) {
+            continue;
+        }
+        
+        tmp = (struct temp_file *) entry->value;
+        
+        if (tmp->fp == fp) {
+        
+            if ((ret = fclose (fp))) {
+                return ret;
+            }
+            
+            remove (tmp->name);
+            
+            hashtab_remove (&hashtab_tmpfiles, hashtab_get_key (&hashtab_tmpfiles, tmp->name));
+            return 0;
+        
+        }
+    
     }
-
-    return fp;
+    
+    return 0;
 
 }
 #endif
@@ -874,7 +1003,7 @@ void print_include_stack (void) {
     
     for (i = state->vec_hist.length - 1; i >= 0; i--) {
         
-        entry = state->vec_hist.data[i];
+        entry = (struct hist_entry *) state->vec_hist.data[i];
         printf ("from %s:%lu", entry->filename, entry->line_number);
         
         if (i > 0) {
