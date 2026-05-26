@@ -459,7 +459,7 @@ static int get_line (void) {
                         
                             report_line_at (get_filename (), get_line_number (), REPORT_WARNING, start, caret, "missing terminating %c character", ch);
                             
-                            temp = xmalloc (line - caret);
+                            temp = xmalloc ((line - caret + 1));
                             sprintf (temp, "%.*s", (int) (line - caret), caret + 1);
                             
                             new_line_number = line_number;
@@ -624,7 +624,7 @@ static int get_line (void) {
                 
                     report_line_at (get_filename (), get_line_number (), REPORT_WARNING, start, caret, "missing terminating %c character", ch);
                     
-                    temp = xmalloc (line - caret);
+                    temp = xmalloc ((line - caret) + 1);
                     sprintf (temp, "%.*s", (int) (line - caret), caret + 1);
                     
                     new_line_number = line_number;
@@ -1180,7 +1180,7 @@ static int bn_lshift (unsigned int *bn, int shift, int or_val) {
 
 }
 
-float scc_strtof (const char *nptr, char **endptr) {
+static float scc_strtof (const char *nptr, char **endptr) {
 
     const char *s = nptr;
     
@@ -1314,7 +1314,7 @@ float scc_strtof (const char *nptr, char **endptr) {
 
 }
 
-double scc_strtod (const char *nptr, char **endptr) {
+static double scc_strtod (const char *nptr, char **endptr) {
 
     const char *s = nptr;
     

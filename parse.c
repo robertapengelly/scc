@@ -1854,41 +1854,6 @@ static char *read_tmp_file_text (FILE *fp) {
 
 }
 
-static FILE *open_scc_temp_file (char *name, size_t name_size) {
-
-    static unsigned long temp_id = 1;
-    unsigned long i;
-    
-    FILE *fp;
-    
-    if (!name || name_size == 0) {
-        return 0;
-    }
-    
-    for (i = 0; i < 1000; i++) {
-    
-        sprintf (name, "scc_tmp_%lu.tmp", temp_id++);
-        
-        if ((fp = fopen (name, "rb"))) {
-        
-            fclose (fp);
-            continue;
-        
-        }
-        
-        fp = fopen (name, "w+b");
-        
-        if (fp) {
-            return fp;
-        }
-    
-    }
-    
-    name[0] = 0;
-    return 0;
-
-}
-
 static void append_inline_text (char **dst, const char *start, size_t len);
 
 static void emit_function_frame_adjust_text (char **dst, long frame_size) {
@@ -1947,21 +1912,6 @@ static char *replace_function_frame_placeholder (const char *text, long frame_si
     
     append_inline_text (&out, last, strlen (last));
     return out;
-
-}
-
-static FILE *scc_tmpfile (void) {
-
-    char name[64];
-    FILE *fp;
-
-    fp = open_scc_temp_file (name, sizeof (name));
-
-    if (fp && name[0]) {
-        remove (name);
-    }
-
-    return fp;
 
 }
 
@@ -37757,15 +37707,24 @@ void compile_translation_unit (void) {
     
     if (vec_dllexports.length) {
     
-        char *p = strrchr (state->ofile, '.'), *tmp;
+        char *p, *tmp;
         
         const char *name;
         long i;
         
         FILE *fp;
         
-        tmp = xmalloc (p - state->ofile + 4);
-        sprintf (tmp, "%.*s.def", (int) (p - state->ofile), state->ofile);
+        if ((p = strrchr (state->ofile, '.'))) {
+        
+            tmp = xmalloc (p - state->ofile + 5);
+            sprintf (tmp, "%.*s.def", (int) (p - state->ofile), state->ofile);
+        
+        } else {
+        
+            tmp = xmalloc (strlen (state->ofile) + 5);
+            sprintf (tmp, "%s.def", state->ofile);
+        
+        }
         
         if ((fp = fopen (tmp, "w"))) {
         

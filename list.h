@@ -12,5 +12,6 @@ struct list {
 };
 
 void list_append (struct list **list, void *data);
+unsigned int nlist (struct list *list);
 
 #endif      /* _LIST_H */

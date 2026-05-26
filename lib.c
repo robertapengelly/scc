@@ -626,6 +626,36 @@ int is_pragma_igored (const char *filename) {
     return 0;
 
 }
+
+FILE *open_scc_temp_file (char *name, size_t name_size) {
+
+    char *temp_path, *template;
+    int fd;
+    
+    if (!(temp_path = getenv ("TMPDIR"))) {
+        temp_path = "/tmp";
+    }
+    
+    template = xmalloc (strlen (temp_path) + 1 + 10 + 1);
+    sprintf (template, "%s/sccXXXXXX", temp_path);
+    
+    if (!(fd = mkstemp (template))) {
+        return 0;
+    }
+    
+    (void) name;
+    (void) name_size;
+    
+    return fdopen (fd, "w+b");
+
+}
+
+FILE *scc_tmpfile (void) {
+
+    char name[64];
+    return open_scc_temp_file (name, sizeof (name));
+
+}
 #elif       defined (_WIN32)
 # include       <windows.h>
 
@@ -707,6 +737,33 @@ int is_pragma_igored (const char *filename) {
     return 0;
 
 }
+
+FILE *open_scc_temp_file (char *name, size_t name_size) {
+
+    char temp_path[MAX_PATH + 1] = { 0 };
+    char full_path[MAX_PATH + 1] = { 0 };
+    
+    if (!GetTempPath (MAX_PATH + 1, temp_path)) {
+        return 0;
+    }
+    
+    if (!GetTempFileName (temp_path, "scc", 0, full_path)) {
+        return 0;
+    }
+    
+    (void) name;
+    (void) name_size;
+    
+    return fopen (full_path, "w+b");
+
+}
+
+FILE *scc_tmpfile (void) {
+
+    char name[64];
+    return open_scc_temp_file (name, sizeof (name));
+
+}
 #else
 char *get_current_directory (void) {
     return xstrdup ("");
@@ -729,6 +786,56 @@ int is_pragma_igored (const char *filename) {
     
     vec_push (&vec_pragmas, xstrdup (filename));
     return 0;
+
+}
+
+FILE *open_scc_temp_file (char *name, size_t name_size) {
+
+    static unsigned long temp_id = 1;
+    unsigned long i;
+    
+    FILE *fp;
+    
+    if (!name || name_size == 0) {
+        return 0;
+    }
+    
+    for (i = 0; i < 1000; i++) {
+    
+        sprintf (name, "scc_tmp_%lu.tmp", temp_id++);
+        
+        if ((fp = fopen (name, "rb"))) {
+        
+            fclose (fp);
+            continue;
+        
+        }
+        
+        fp = fopen (name, "w+b");
+        
+        if (fp) {
+            return fp;
+        }
+    
+    }
+    
+    name[0] = 0;
+    return 0;
+
+}
+
+FILE *scc_tmpfile (void) {
+
+    char name[64];
+    FILE *fp;
+
+    fp = open_scc_temp_file (name, sizeof (name));
+
+    if (fp && name[0]) {
+        remove (name);
+    }
+
+    return fp;
 
 }
 #endif

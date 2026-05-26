@@ -31,6 +31,7 @@ unsigned long get_line_number (void);
 void set_filename (const char *__filename);
 void set_line_number (unsigned long __line_number);
 
+void get_filename_and_line_number (const char **__filename_p, unsigned long *__line_number_p);
 void set_filename_and_line_number (const char *__filename, unsigned long __line_number);
 
 
@@ -47,5 +48,9 @@ void print_include_stack (void);
 
 char *get_current_directory (void);
 int is_pragma_igored (const char *filename);
+
+#include    <stdio.h>
+FILE *open_scc_temp_file (char *name, size_t name_size);
+FILE *scc_tmpfile (void);
 
 #endif      /* _LIB_H */
