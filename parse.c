@@ -898,6 +898,7 @@ struct global_symbol_entry {
     int is_floating;
     int pointer_depth;
     int pointed_size;
+    int pointed_is_floating;
     int returns_void;
     
     int param_count;
@@ -1269,6 +1270,8 @@ static void set_global_symbol_pointer_info (const char *name, int pointer_depth,
     
         global_symbols[i].pointer_depth = pointer_depth;
         global_symbols[i].pointed_size = pointed_size;
+        
+        global_symbols[i].pointed_is_floating = pointer_depth > 0 ? (parsed_type_is_floating ? 1 : 0) : 0;
     
     }
 
@@ -1295,6 +1298,18 @@ static int get_global_symbol_pointed_size (const char *name) {
     }
     
     return DATA_INT & 0x1f;
+
+}
+
+static int get_global_symbol_pointed_is_floating (const char *name) {
+
+    int i = find_global_symbol (name);
+    
+    if (i >= 0) {
+        return global_symbols[i].pointed_is_floating;
+    }
+    
+    return 0;
 
 }
 
@@ -5791,6 +5806,7 @@ struct local_symbol {
     
     int pointer_depth;
     int pointed_size;
+    int pointed_is_floating;
     
     char *pointed_tag_name;
     char *tag_name;
@@ -6032,6 +6048,7 @@ static long add_local_symbol (const char *name, int size, int align, int is_unsi
     local_symbols[local_symbol_count].array_dimensions = 0;
     local_symbols[local_symbol_count].pointer_depth = 0;
     local_symbols[local_symbol_count].pointed_size = 0;
+    local_symbols[local_symbol_count].pointed_is_floating = 0;
     local_symbols[local_symbol_count].pointed_tag_name = 0;
     local_symbols[local_symbol_count].tag_name = 0;
     
@@ -6087,6 +6104,7 @@ static void add_static_local_symbol (const char *name, const char *label, int si
     local_symbols[local_symbol_count].array_dimensions = 0;
     local_symbols[local_symbol_count].pointer_depth = 0;
     local_symbols[local_symbol_count].pointed_size = 0;
+    local_symbols[local_symbol_count].pointed_is_floating = 0;
     local_symbols[local_symbol_count].pointed_tag_name = 0;
     local_symbols[local_symbol_count].tag_name = 0;
        
@@ -6158,6 +6176,7 @@ struct pending_param {
     int is_floating;
     int pointer_depth;
     int pointed_size;
+    int pointed_is_floating;
     
     char *pointed_tag_name;
 
@@ -6232,6 +6251,7 @@ static void add_pending_param (const char *name, int size, int align, int is_uns
     pending_params[pending_param_count].is_floating = is_floating ? 1 : 0;
     pending_params[pending_param_count].pointer_depth = pointer_depth;
     pending_params[pending_param_count].pointed_size = pointed_size > 0 ? pointed_size : 0;
+    pending_params[pending_param_count].pointed_is_floating = pointer_depth > 0 ? (parsed_type_is_floating ? 1 : 0) : 0;
     pending_params[pending_param_count].pointed_tag_name = (pointer_depth > 0 && parsed_type_tag_name[0]) ? xstrdup (parsed_type_tag_name) : 0;
     
     pending_param_count++;
@@ -6292,6 +6312,7 @@ static void update_pending_param (const char *name, int size, int align, int is_
     pending_params[i].is_floating = is_floating ? 1 : 0;
     pending_params[i].pointer_depth = pointer_depth;
     pending_params[i].pointed_size = pointed_size > 0 ? pointed_size : 0;
+    pending_params[i].pointed_is_floating = pointer_depth > 0 ? (parsed_type_is_floating ? 1 : 0) : 0;
     
     if (pending_params[i].pointed_tag_name) {
     
@@ -6421,6 +6442,8 @@ static void set_local_symbol_pointer_info (const char *name, int pointer_depth, 
         sym->pointer_depth = pointer_depth;
         sym->pointed_size = pointed_size;
         
+        sym->pointed_is_floating = pointer_depth > 0 ? (parsed_type_is_floating ? 1 : 0) : 0;
+        
         if (sym->pointed_tag_name) {
         
             free (sym->pointed_tag_name);
@@ -6469,6 +6492,7 @@ static void install_pending_params_as_locals (void) {
         local_symbols[local_symbol_count].is_unsigned = pending_params[i].is_unsigned;
         local_symbols[local_symbol_count].is_floating = pending_params[i].is_floating;
         local_symbols[local_symbol_count].pointer_depth = pending_params[i].pointer_depth;
+        local_symbols[local_symbol_count].pointed_is_floating = pending_params[i].pointed_is_floating;
         local_symbols[local_symbol_count].is_array = 0;
         local_symbols[local_symbol_count].array_element_size = 0;
         local_symbols[local_symbol_count].array_dimensions = 0;
@@ -11625,7 +11649,7 @@ static void emit_load_indexed_char_to_reg_now (const char *base_reg, const char 
         }
     
     } else {
-        fprintf (state->ofp, "    movsbl (%%%s,%%%s), %%%s\n", base_reg, index_reg, dst_reg);
+        fprintf (state->ofp, "    %s (%%%s,%%%s), %%%s\n", is_unsigned ? "movzbl" : "movsbl", base_reg, index_reg, dst_reg);
     }
 
 }
@@ -13975,12 +13999,15 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
         get_token ();
         emit_parse_builtin_va_arg_address_to_reg_now (addr_reg, &va_size, &va_unsigned, &va_pointer, &va_floating);
         
-        if (va_size == (DATA_LLONG & 0x1f) && !va_floating && va_pointer == 0) {
+        if (va_size == (DATA_LLONG & 0x1f) && va_pointer == 0) {
             emit_load_pair_from_deref_reg_now (lo, hi, addr_reg);
         } else {
+        
             emit_copy_reg_now (lo, addr_reg);
             emit_load_deref_reg_now (lo, va_size);
+            
             emit_extend_pair_high_from_low (lo, hi, va_size, va_unsigned);
+        
         }
         
         return;
@@ -27972,10 +27999,11 @@ static int parse_indirect_assignment_statement (void) {
     unsigned long name_line;
     struct local_symbol *lhs;
     
-    int global_index;
     int deref_size = DATA_INT & 0x1f;
+    int deref_is_floating = 0;
     
     enum token_kind op;
+    int global_index;
     
     if (tok.kind != TOK_STAR) {
         return 0;
@@ -28501,7 +28529,10 @@ static int parse_indirect_assignment_statement (void) {
     if (lhs) {
     
         if (lhs->pointer_depth > 1) {
+        
             deref_size = DATA_PTR & 0x1f;
+            deref_is_floating = 0;
+        
         } else if (lhs->pointer_depth == 1) {
         
             /**
@@ -28510,15 +28541,22 @@ static int parse_indirect_assignment_statement (void) {
              * copies whose size is greater than 31 bytes.
              */
             deref_size = lhs->pointed_size;
+            deref_is_floating = lhs->pointed_is_floating;
         
         }
     
     } else {
     
         if (get_global_symbol_pointer_depth (name) > 1) {
+        
             deref_size = DATA_PTR & 0x1f;
+            deref_is_floating = 0;
+        
         } else if (get_global_symbol_pointer_depth (name) == 1) {
+        
             deref_size = get_global_symbol_pointed_size (name);
+            deref_is_floating = get_global_symbol_pointed_is_floating (name);
+        
         }
     
     }
@@ -28543,8 +28581,22 @@ static int parse_indirect_assignment_statement (void) {
         
         if (op == TOK_ASSIGN) {
         
-            if (deref_size != (DATA_LLONG & 0x1f) &&
-                emit_aggregate_copy_from_current_rhs_to_addr_reg_now ("edx", 0, deref_size)) {
+            if (deref_is_floating) {
+            
+                emit_push_reg_now ("edx");
+                
+                emit_load_floating_rhs_expression_now (deref_size);
+                emit_pop_reg_now ("edx");
+                
+                emit_store_floating_member_to_addr_reg_now ("edx", 0, deref_size);
+                expect_semi_or_recover ();
+                
+                free (name);
+                return 1;
+            
+            }
+            
+            if (deref_size != (DATA_LLONG & 0x1f) && emit_aggregate_copy_from_current_rhs_to_addr_reg_now ("edx", 0, deref_size)) {
             
                 expect_semi_or_recover ();
                 
@@ -28582,7 +28634,7 @@ static int parse_indirect_assignment_statement (void) {
         
         }
         
-        if (deref_size == (DATA_LLONG & 0x1f)) {
+        if (deref_size == (DATA_LLONG & 0x1f) && !deref_is_floating) {
             emit_store_pair_to_deref_reg_now ("ecx", "eax", "edx");
         } else {
             emit_store_reg_to_deref_reg_now ("edx", "eax", deref_size);
@@ -31041,6 +31093,82 @@ static int source_parenthesized_floating_condition_now (const char *p) {
         return 1;
     }
     
+    /*
+     * Parenthesized floating conditions such as:
+     *
+     *     if (num < 0)
+     *     while (b >= 10.0)
+     *
+     * arrive here while TOK_LPAREN is still current.  If we don't recognise
+     * the name inside the parens as floating, the generic parenthesized
+     * integer path consumes the expression and compares only the low dword.
+     */
+    if (find_local_symbol (name)) {
+    
+        struct local_symbol *src = find_local_symbol (name);
+        return src && src->is_floating ? 1 : 0;
+    
+    }
+    
+    if (find_global_symbol (name) >= 0) {
+        return get_global_symbol_floating (name) ? 1 : 0;
+    }
+    
+    return 0;
+
+}
+
+static int source_va_arg_type_is_double_now (const char *p) {
+
+    int paren;
+    
+    if (!p) {
+        return 0;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    if (*p != '(') {
+        return 0;
+    }
+    
+    paren = 0;
+    
+    while (*p) {
+    
+        if (*p == '(') {
+            paren++;
+        } else if (*p == ')') {
+        
+            paren--;
+            
+            if (paren == 0) {
+                return 0;
+            }
+        
+        } else if (paren == 1 && *p == ',') {
+        
+            p++;
+            
+            while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+                p++;
+            }
+            
+            if (strncmp (p, "double", 6) == 0 &&
+                !(p[6] == '_' || (p[6] >= '0' && p[6] <= '9') ||
+                  (p[6] >= 'A' && p[6] <= 'Z') ||
+                  (p[6] >= 'a' && p[6] <= 'z'))) {
+                return 1;
+            }
+        
+        }
+        
+        p++;
+    
+    }
+    
     return 0;
 
 }
@@ -31049,6 +31177,16 @@ static int rhs_current_operand_is_floating_now (void) {
 
     if (token_is_floating_constant_now ()) {
         return 1;
+    }
+    
+    if (tok.kind == TOK_SCC_BUILTIN_VA_ARG) {
+    
+        const char *p = tok.caret ? tok.caret + tok.len : 0;
+        
+        if (source_va_arg_type_is_double_now (p)) {
+            return 1;
+        }
+    
     }
     
     if (tok.kind == TOK_LPAREN && (source_parenthesized_floating_condition_now (tok.caret) || source_parenthesized_floating_condition_now (tok.start))) {
@@ -31066,6 +31204,10 @@ static int rhs_current_operand_is_floating_now (void) {
         
         while (p && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) {
             p++;
+        }
+        
+        if (strcmp (tok.ident, "__scc_builtin_va_arg") == 0 && source_va_arg_type_is_double_now (p)) {
+            return 1;
         }
         
         if (p && *p == '(' && find_global_symbol (tok.ident) >= 0) {
@@ -34208,6 +34350,82 @@ static void emit_statement_jump_if_false (int label) {
         return;
     }
     
+    if (tok.kind == TOK_LPAREN && (token_is_const_floating_condition_operand_now () || rhs_current_operand_is_floating_now ())) {
+    
+        double left_float = 0.0;
+        
+        int left_float_constant = 0;
+        int float_size = DATA_DOUBLE & 0x1f;
+        
+        if (token_is_const_floating_condition_operand_now ()) {
+        
+            left_float = parse_floating_const_expr_value_now ();
+            left_float_constant = 1;
+        
+        } else {
+            emit_load_floating_rhs_expression_now (float_size);
+        }
+        
+        if (token_is_statement_compare_operator (tok.kind)) {
+        
+            op = tok.kind;
+            get_token ();
+            
+            if (left_float_constant && (token_is_floating_constant_now () || token_is_const_condition_operand_now ())) {
+            
+                double right_float;
+                
+                if (token_is_floating_constant_now ()) {
+                    right_float = parse_floating_const_expr_value_now ();
+                } else {
+                
+                    int64_s right_int = const64_from_current_operand ();
+                    right_float = int64_to_double_now (right_int);
+                
+                }
+                
+                statement_condition_constant_known = 1;
+                statement_condition_constant_value = statement_compare_floating_const_true (left_float, op, right_float) ? 1 : 0;
+                
+                if (statement_condition_fold_logical_tail (label)) {
+                    return;
+                }
+                
+                return;
+            
+            }
+            
+            if (left_float_constant) {
+                emit_load_floating_ld_now (float_size, left_float);
+            }
+            
+            emit_load_floating_rhs_expression_now (float_size);
+            emit_statement_floating_compare_jump_if_false (op, label);
+            
+            return;
+        
+        }
+        
+        if (left_float_constant) {
+        
+            statement_condition_constant_known = 1;
+            statement_condition_constant_value = left_float != 0.0 ? 1 : 0;
+            
+            if (statement_condition_fold_logical_tail (label)) {
+                return;
+            }
+            
+            return;
+        
+        }
+        
+        emit_load_floating_ld_now (float_size, 0.0);
+        
+        emit_statement_floating_compare_jump_if_false (TOK_NOTEQ, label);
+        return;
+    
+    }
+    
     /*
      * Parenthesized statement conditions must be parsed as ordinary
      * expressions here.  The older recursive/special-case paths try to split
@@ -34984,7 +35202,7 @@ static int parse_postfix_assignment_statement_now (void) {
     
     if (assign_op == TOK_ASSIGN) {
     
-        if (token_is_floating_constant_now ()) {
+        if (postfix_member_is_floating || token_is_floating_constant_now () || rhs_current_operand_is_floating_now ()) {
         
             emit_push_reg_now ("edx");
             emit_load_floating_rhs_expression_now (lvalue_size);
