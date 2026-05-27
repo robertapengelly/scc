@@ -1228,6 +1228,35 @@ static int get_global_symbol_floating (const char *name) {
 
 }
 
+static int get_global_function_returns_floating (const char *name) {
+
+    int i = find_global_symbol (name);
+    
+    if (i < 0 || global_symbols[i].kind != GLOBAL_SYMBOL_FUNCTION) {
+        return 0;
+    }
+    
+    if (global_symbols[i].is_floating) {
+        return 1;
+    }
+    
+    /*
+     * Do not infer floating return types from the masked object size.
+     *
+     * DATA_INT and DATA_FLOAT both have a 4-byte payload size, so checking
+     * only (size & 0x1f) makes every int-returning function look like it
+     * returns float.  That breaks expressions such as:
+     *
+     *     printf("%p", main);
+     *
+     * because the function designator gets loaded as a floating object from
+     * memory instead of as a plain code address.  The declaration/definition
+     * paths already record real floating function returns in is_floating.
+     */
+    return global_symbols[i].is_floating ? 1 : 0;
+
+}
+
 static void set_global_symbol_pointer_info (const char *name, int pointer_depth, int pointed_size) {
 
     int i = find_global_symbol (name);
@@ -6866,7 +6895,10 @@ static int token_is_ident (void) {
 }
 
 static void skip_balanced_until (enum token_kind stop1, enum token_kind stop2, enum token_kind stop3);
+
 static void emit_load_assignment_rhs_expression_to_reg (const char *reg);
+static void emit_load_floating_rhs_expression_now (int result_size);
+static void emit_store_floating_to_local_now (long offset, int size);
 
 static void consume_comma_expression_tail_before_semi (void) {
 
@@ -8479,6 +8511,25 @@ static void emit_local_store_const (long offset, int size, int64_s value) {
 
 }
 
+static void emit_store_floating_to_local_now (long offset, int size) {
+
+    char memref[64];
+    
+    if (!state->ofp) {
+        return;
+    }
+    
+    if (state->syntax & ASM_SYNTAX_INTEL) {
+    
+        format_intel_ebp_offset (memref, sizeof (memref), offset);
+        fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    fstp %s %s\n" : "    fstp %s ptr %s\n"), size == (DATA_DOUBLE & 0x1f) ? "qword" : "dword", memref);
+    
+    } else {
+        fprintf (state->ofp, "    fstp%s %ld(%%ebp)\n", size == (DATA_DOUBLE & 0x1f) ? "l" : "s", offset);
+    }
+
+}
+
 static void emit_local_store_address (long offset, const char *symbol) {
 
     const char *asm_symbol;
@@ -9909,6 +9960,8 @@ static void emit_incdec_symbol_now (struct local_symbol *sym, const char *name, 
 static int current_expression_mentions_64bit_symbol_now (void);
 static int rhs_current_operand_is_unsigned_now (void);
 
+static int64_s parse_floating_const_expr_bits_now (int size);
+
 static int initializer_contains_runtime_call_now (void) {
 
     const char *p = tok.start;
@@ -10105,7 +10158,7 @@ static int auto_initializer_needs_runtime_now (void) {
 
 }
 
-static void parse_local_initializer_value (struct local_init *init) {
+static void parse_local_initializer_value (struct local_init *init, int object_size, int object_is_floating) {
 
     init->kind = LOCAL_INIT_CONST;
     init->symbol = 0;
@@ -10117,7 +10170,7 @@ static void parse_local_initializer_value (struct local_init *init) {
     if (tok.kind == TOK_LBRACE) {
     
         get_token ();
-        parse_local_initializer_value (init);
+        parse_local_initializer_value (init, object_size, object_is_floating);
         
         while (_accept (TOK_COMMA)) {
             skip_initializer ();
@@ -10184,7 +10237,11 @@ static void parse_local_initializer_value (struct local_init *init) {
     
     }
     
-    init->value = const64_from_current_expr ();
+    if (object_is_floating) {
+        init->value = parse_floating_const_expr_bits_now (object_size);
+    } else {
+        init->value = const64_from_current_expr ();
+    }
 
 }
 
@@ -10273,7 +10330,7 @@ static void parse_local_aggregate_initializer_values (struct local_init *inits, 
                 inits[*init_count].offset = base_offset + field_offset;
                 inits[*init_count].size = field_size;
                 
-                parse_local_initializer_value (&inits[*init_count]);
+                parse_local_initializer_value (&inits[*init_count], 0, 0);
                 (*init_count)++;
             
             }
@@ -10568,12 +10625,12 @@ static void parse_block (void) {
                 
                     if (add_global_symbol (name, (declarator_has_function && !declarator_function_is_pointer) ? GLOBAL_SYMBOL_FUNCTION : GLOBAL_SYMBOL_OBJECT, 1, name_start, name_caret, name_line)) {
                     
-                        set_global_symbol_size (name, (declarator_has_function || declarator_is_pointer) ? DATA_PTR : declarator_object_size (parsed_type_size));
+                        set_global_symbol_size (name, (declarator_has_function && !declarator_is_pointer && !declarator_function_is_pointer) ? parsed_type_size : ((declarator_has_function || declarator_is_pointer) ? DATA_PTR : declarator_object_size (parsed_type_size)));
                         set_global_symbol_pointer_info (name, declarator_effective_pointer_depth_now (),
                             declarator_effective_pointed_size_now (parsed_type_size, object_fields, object_field_count));
                         set_global_symbol_tag_name (name, parsed_type_tag_name);
                         set_global_symbol_unsigned (name, (declarator_is_pointer || declarator_has_function) ? 0 : parsed_type_is_unsigned);
-                        set_global_symbol_floating (name, (declarator_is_pointer || declarator_has_function) ? 0 : parsed_type_is_floating);
+                        set_global_symbol_floating (name, (declarator_is_pointer || (declarator_has_function && declarator_function_is_pointer)) ? 0 : parsed_type_is_floating);
                         set_global_symbol_returns_void (name, declarator_has_function && parsed_type_is_void && !declarator_is_pointer && !declarator_function_is_pointer);
                         
                         if (declarator_has_function) {
@@ -10630,7 +10687,7 @@ static void parse_block (void) {
                     
                     }
                     
-                    object_init_size = declarator_is_pointer ? DATA_PTR : parsed_type_size;
+                    object_init_size = declarator_is_pointer ? DATA_PTR : (parsed_type_size & 0x1f);
                     object_is_auto = 1;
                     
                     /*
@@ -10758,7 +10815,7 @@ static void parse_block (void) {
                                     switch_section (SECTION_TEXT);
                                 
                                 } else {
-                                    parse_local_initializer_value (&inits[init_count]);
+                                    parse_local_initializer_value (&inits[init_count], elem_size, 0);
                                 }
                                 
                                 init_count++;
@@ -10875,6 +10932,11 @@ static void parse_block (void) {
                             
                             }
                         
+                        } else if (!declarator_is_pointer && parsed_type_is_floating) {
+                        
+                            emit_load_floating_rhs_expression_now (object_init_size);
+                            emit_store_floating_to_local_now (object_offset, object_init_size);
+                        
                         } else if (object_init_size == (DATA_LLONG & 0x1f) && !parsed_type_is_floating && !declarator_is_pointer) {
                         
                             emit_load_assignment_rhs_expression_to_pair ("eax", "edx", parsed_type_is_unsigned);
@@ -10904,7 +10966,7 @@ static void parse_block (void) {
                             switch_section (SECTION_TEXT);
                         
                         } else {
-                            parse_local_initializer_value (&inits[init_count]);
+                            parse_local_initializer_value (&inits[init_count], object_init_size, (!declarator_is_pointer && parsed_type_is_floating));
                         }
                         
                         init_count++;
@@ -11548,7 +11610,7 @@ static void emit_load_indexed_pointer_to_reg_now (const char *base_reg, const ch
 
 }
 
-static void emit_load_indexed_char_to_reg_now (const char *base_reg, const char *index_reg, const char *dst_reg) {
+static void emit_load_indexed_char_to_reg_now (const char *base_reg, const char *index_reg, const char *dst_reg, int is_unsigned) {
 
     if (!state->ofp || !base_reg || !index_reg || !dst_reg) {
         return;
@@ -11557,9 +11619,9 @@ static void emit_load_indexed_char_to_reg_now (const char *base_reg, const char 
     if (state->syntax & ASM_SYNTAX_INTEL) {
     
         if (state->syntax & ASM_SYNTAX_NASM) {
-            fprintf (state->ofp, "    movsx %s, byte [%s + %s]\n", dst_reg, base_reg, index_reg);
+            fprintf (state->ofp, "    %s %s, byte [%s + %s]\n", is_unsigned ? "movzx" : "movsx", dst_reg, base_reg, index_reg);
         } else {
-            fprintf (state->ofp, "    movsx %s, byte ptr [%s + %s]\n", dst_reg, base_reg, index_reg);
+            fprintf (state->ofp, "    %s %s, byte ptr [%s + %s]\n", is_unsigned ? "movzx" : "movsx", dst_reg, base_reg, index_reg);
         }
     
     } else {
@@ -11568,12 +11630,12 @@ static void emit_load_indexed_char_to_reg_now (const char *base_reg, const char 
 
 }
 
-static void emit_load_indexed_sized_to_reg_now (const char *base_reg, const char *index_reg, const char *dst_reg, int elem_size) {
+static void emit_load_indexed_sized_to_reg_ex_now (const char *base_reg, const char *index_reg, const char *dst_reg, int elem_size, int is_unsigned) {
 
     int scale = 1;
     
+    const char *gasop = is_unsigned ? "movzbl" : "movsbl";
     const char *atype = "byte";
-    const char *gasop = "movsbl";
     
     if (!state->ofp || !base_reg || !index_reg || !dst_reg) {
         return;
@@ -11600,23 +11662,23 @@ static void emit_load_indexed_sized_to_reg_now (const char *base_reg, const char
     if (state->syntax & ASM_SYNTAX_INTEL) {
     
         if (elem_size == (DATA_CHAR & 0x1f)) {
-            emit_load_indexed_char_to_reg_now (base_reg, index_reg, dst_reg);
+            emit_load_indexed_char_to_reg_now (base_reg, index_reg, dst_reg, is_unsigned);
         } else if (scale == 1) {
         
             if (strcmp (atype, "byte") == 0) {
             
                 if (state->syntax & ASM_SYNTAX_NASM) {
-                    fprintf (state->ofp, "    movsx %s, byte [%s + %s]\n", dst_reg, base_reg, index_reg);
+                    fprintf (state->ofp, "    %s %s, byte [%s + %s]\n", is_unsigned ? "movzx" : "movsx", dst_reg, base_reg, index_reg);
                 } else {
-                    fprintf (state->ofp, "    movsx %s, byte ptr [%s + %s]\n", dst_reg, base_reg, index_reg);
+                    fprintf (state->ofp, "    %s %s, byte ptr [%s + %s]\n", is_unsigned ? "movzx" : "movsx", dst_reg, base_reg, index_reg);
                 }
             
             } else if (elem_size == (DATA_SHORT & 0x1f)) {
             
                 if (state->syntax & ASM_SYNTAX_NASM) {
-                    fprintf (state->ofp, "    movsx %s, word [%s + %s]\n", dst_reg, base_reg, index_reg);
+                    fprintf (state->ofp, "    %s %s, word [%s + %s]\n", is_unsigned ? "movzx" : "movsx", dst_reg, base_reg, index_reg);
                 } else {
-                    fprintf (state->ofp, "    movsx %s, word ptr [%s + %s]\n", dst_reg, base_reg, index_reg);
+                    fprintf (state->ofp, "    %s %s, word ptr [%s + %s]\n", is_unsigned ? "movzx" : "movsx", dst_reg, base_reg, index_reg);
                 }
             
             } else if (state->syntax & ASM_SYNTAX_NASM) {
@@ -11630,17 +11692,17 @@ static void emit_load_indexed_sized_to_reg_now (const char *base_reg, const char
             if (strcmp (atype, "byte") == 0) {
             
                 if (state->syntax & ASM_SYNTAX_NASM) {
-                    fprintf (state->ofp, "    movsx %s, byte [%s + %s * %d]\n", dst_reg, base_reg, index_reg, scale);
+                    fprintf (state->ofp, "    %s %s, byte [%s + %s * %d]\n", is_unsigned ? "movzx" : "movsx", dst_reg, base_reg, index_reg, scale);
                 } else {
-                    fprintf (state->ofp, "    movsx %s, byte ptr [%s + %s * %d]\n", dst_reg, base_reg, index_reg, scale);
+                    fprintf (state->ofp, "    %s %s, byte ptr [%s + %s * %d]\n", is_unsigned ? "movzx" : "movsx", dst_reg, base_reg, index_reg, scale);
                 }
             
             } else if (elem_size == (DATA_SHORT & 0x1f)) {
 
                 if (state->syntax & ASM_SYNTAX_NASM) {
-                    fprintf (state->ofp, "    movsx %s, word [%s + %s * %d]\n", dst_reg, base_reg, index_reg, scale);
+                    fprintf (state->ofp, "    %s %s, word [%s + %s * %d]\n", is_unsigned ? "movzx" : "movsx", dst_reg, base_reg, index_reg, scale);
                 } else {
-                    fprintf (state->ofp, "    movsx %s, word ptr [%s + %s * %d]\n", dst_reg, base_reg, index_reg, scale);
+                    fprintf (state->ofp, "    %s %s, word ptr [%s + %s * %d]\n", is_unsigned ? "movzx" : "movsx", dst_reg, base_reg, index_reg, scale);
                 }
 
             } else if (state->syntax & ASM_SYNTAX_NASM) {
@@ -11661,6 +11723,14 @@ static void emit_load_indexed_sized_to_reg_now (const char *base_reg, const char
     
     }
 
+}
+
+static void emit_load_indexed_sized_to_reg_now (const char *base_reg, const char *index_reg, const char *dst_reg, int elem_size) {
+    emit_load_indexed_sized_to_reg_ex_now (base_reg, index_reg, dst_reg, elem_size, 0);
+}
+
+static void emit_load_indexed_unsigned_sized_to_reg_now (const char *base_reg, const char *index_reg, const char *dst_reg, int elem_size) {
+    emit_load_indexed_sized_to_reg_ex_now (base_reg, index_reg, dst_reg, elem_size, 1);
 }
 
 static void emit_load_symbol_address_to_reg_now (const char *reg, const char *symbol, long offset, int is_local) {
@@ -11877,7 +11947,7 @@ static int emit_parse_postfix_subscripts_to_reg_now (const char *reg, int elem_s
 
 }
 
-static int emit_parse_postfix_subscripts_to_reg_dims_now (const char *reg, int elem_size, int pointer_depth, int pointed_size, int array_dimensions) {
+static int emit_parse_postfix_subscripts_to_reg_dims_now (const char *reg, int elem_size, int pointer_depth, int pointed_size, int array_dimensions, int is_unsigned) {
 
     const char *index_reg;
     int saw_subscript = 0;
@@ -11935,7 +12005,13 @@ static int emit_parse_postfix_subscripts_to_reg_dims_now (const char *reg, int e
             } else if (index_step_size (elem_size) > (DATA_PTR & 0x1f)) {
                 emit_add_indexed_scaled_address_to_reg_now (reg, index_reg, elem_size);
             } else {
-                emit_load_indexed_sized_to_reg_now (reg, index_reg, reg, elem_size);
+            
+                if (is_unsigned) {
+                    emit_load_indexed_unsigned_sized_to_reg_now (reg, index_reg, reg, elem_size);
+                } else {
+                    emit_load_indexed_sized_to_reg_now (reg, index_reg, reg, elem_size);
+                }
+            
             }
         
         }
@@ -13455,6 +13531,11 @@ static void emit_copy_reg_now (const char *dst, const char *src) {
 }
 
 static int emit_parse_builtin_va_arg_address_to_reg_now (const char *reg, int *out_size, int *out_unsigned, int *out_pointer, int *out_floating);
+static int rhs_current_operand_is_floating_now (void);
+static int token_is_floating_constant_now (void);
+
+static void emit_store_floating_member_to_addr_reg_now (const char *addr_reg, int offset, int size);
+static void emit_load_floating_rhs_expression_now (int result_size);
 static void emit_load_assignment_rhs_to_reg (const char *reg);
 
 static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
@@ -13967,6 +14048,34 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
             
             emit_call_identifier_to_reg_now (name, "eax", name_start, name_caret, name_line);
             
+            if (get_global_function_returns_floating (name)) {
+            
+                if (state->ofp) {
+                
+                    if (state->syntax & ASM_SYNTAX_INTEL) {
+                    
+                        fprintf (state->ofp, "    sub esp, 8\n");
+                        fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    fstp qword [esp]\n" : "    fstp qword ptr [esp]\n");
+                        fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov %s, dword [esp]\n" : "    mov %s, dword ptr [esp]\n", lo);
+                        fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov %s, dword [esp + 4]\n" : "    mov %s, dword ptr [esp + 4]\n", hi);
+                        fprintf (state->ofp, "    add esp, 8\n");
+                    
+                    } else {
+                    
+                        fprintf (state->ofp, "    subl $8, %%esp\n");
+                        fprintf (state->ofp, "    fstpl (%%esp)\n");
+                        fprintf (state->ofp, "    movl (%%esp), %%%s\n", lo);
+                        fprintf (state->ofp, "    movl 4(%%esp), %%%s\n", hi);
+                        fprintf (state->ofp, "    addl $8, %%esp\n");
+                    
+                    }
+                
+                }
+                
+                free (name);
+                return;
+            }
+            
             if (state->ofp) {
             
                 if (state->syntax & ASM_SYNTAX_INTEL) {
@@ -14062,6 +14171,18 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
                     int lvalue_size = index_step_size (source_size);
                     
                     get_token ();
+                    
+                    if (assign_op == TOK_ASSIGN && (postfix_member_is_floating || token_is_floating_constant_now () || rhs_current_operand_is_floating_now ())) {
+                    
+                        emit_push_reg_now (lo);
+                        emit_load_floating_rhs_expression_now (lvalue_size);
+                        
+                        emit_pop_reg_now (addr_reg);
+                        emit_store_floating_member_to_addr_reg_now (addr_reg, 0, lvalue_size);
+                        
+                        free (name);
+                        return;
+                    }
                     
                     if (assign_op == TOK_ASSIGN && lvalue_size == (DATA_LLONG & 0x1f)) {
                     
@@ -15621,6 +15742,8 @@ static int emit_store_assignment_to_aggregate_address_now (const char *addr_reg,
 
 }
 
+static int rhs_current_operand_is_floating_now (void);
+
 static int emit_store_assignment_to_postfix_member_now (const char *reg) {
 
     enum token_kind op;
@@ -15641,7 +15764,7 @@ static int emit_store_assignment_to_postfix_member_now (const char *reg) {
     
         if (op == TOK_ASSIGN) {
         
-            if (postfix_member_is_floating || token_is_floating_constant_now ()) {
+            if (postfix_member_is_floating || token_is_floating_constant_now () || rhs_current_operand_is_floating_now ()) {
             
                 emit_push_reg_now ("edx");
                 emit_load_floating_rhs_expression_now (assign_member_size);
@@ -19575,7 +19698,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                 
                     if (op == TOK_ASSIGN) {
                     
-                        if (postfix_member_is_floating || token_is_floating_constant_now ()) {
+                        if (postfix_member_is_floating || token_is_floating_constant_now () || rhs_current_operand_is_floating_now ()) {
                         
                             emit_push_reg_now ("edx");
                             emit_load_floating_rhs_expression_now (assign_member_size);
@@ -21238,7 +21361,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                         emit_load_local_to_reg (reg, src->offset, DATA_PTR);
                     }
                     
-                    saw_subscript = emit_parse_postfix_subscripts_to_reg_dims_now (reg, elem_size, src->pointer_depth, src->pointed_size, src->array_dimensions);
+                    saw_subscript = emit_parse_postfix_subscripts_to_reg_dims_now (reg, elem_size, src->pointer_depth, src->pointed_size, src->array_dimensions, src->is_unsigned);
                     
                     postfix_copy_lvalue_size = index_step_size (elem_size);
                     postfix_copy_lvalue_tag_name = src->is_array ? (src->tag_name ? src->tag_name : src->pointed_tag_name) : src->pointed_tag_name;
@@ -21305,7 +21428,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                         emit_load_global_to_reg (reg, name, DATA_PTR);
                     }
                     
-                    saw_subscript = emit_parse_postfix_subscripts_to_reg_dims_now (reg, elem_size, get_global_symbol_pointer_depth (name), get_global_symbol_pointed_size (name), get_global_symbol_array_dimensions (name));
+                    saw_subscript = emit_parse_postfix_subscripts_to_reg_dims_now (reg, elem_size, get_global_symbol_pointer_depth (name), get_global_symbol_pointed_size (name), get_global_symbol_array_dimensions (name), get_global_symbol_unsigned (name));
                     
                     postfix_copy_lvalue_size = index_step_size (elem_size);
                     postfix_copy_lvalue_tag_name = get_global_symbol_array (name) ? get_global_symbol_tag_name (name) : 0;
@@ -22471,11 +22594,11 @@ static int64_s parse_floating_const_expr_bits_now (int size) {
     
     {
     
-        double d;
         unsigned char bytes[8];
+        
+        double d = (double) acc;
         int i;
         
-        d = (double) acc;
         memset (bytes, 0, sizeof (bytes));
         memcpy (bytes, &d, sizeof (d));
         
@@ -22958,8 +23081,10 @@ static void emit_floating_compare_to_eax_now (enum token_kind op) {
     const char *setcc;
     
     if (!state->ofp) {
+    
         floating_rhs_result_in_eax_bool = 1;
         return;
+    
     }
     
     setcc = floating_compare_true_setcc_now (op);
@@ -23275,7 +23400,7 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
             
             emit_call_identifier_to_reg_now (name, "eax", name_start, name_caret, name_line);
             
-            if (!get_global_symbol_floating (name)) {
+            if (!get_global_function_returns_floating (name)) {
             
                 if (state->syntax & ASM_SYNTAX_INTEL) {
                 
@@ -23778,66 +23903,30 @@ static int token_is_floating_binary_now (enum token_kind k) {
 
 static void emit_floating_binary_now (enum token_kind k) {
 
-    const char *st1;
-    const char *st0;
-    
     if (!state->ofp) {
         return;
-    }
-    
-    if (state->syntax & ASM_SYNTAX_NASM) {
-    
-        st1 = "st1";
-        st0 = "st0";
-    
-    } else if (state->syntax & ASM_SYNTAX_INTEL) {
-    
-        st1 = "st(1)";
-        st0 = "st(0)";
-    
-    } else {
-    
-        st1 = "%st(1)";
-        st0 = "%st";
-    
     }
     
     switch (k) {
     
         case TOK_PLUS:      case TOK_PLUSEQ:
         
-            if (state->syntax & ASM_SYNTAX_INTEL) {
-                fprintf (state->ofp, "    faddp %s, %s\n", st1, st0);
-            } else {
-                fprintf (state->ofp, "    faddp %s, %s\n", st0, st1);
-            }
+            fprintf (state->ofp, "    faddp\n");
             break;
         
         case TOK_MINUS:     case TOK_MINUSEQ:
         
-            if (state->syntax & ASM_SYNTAX_INTEL) {
-                fprintf (state->ofp, "    fsubp %s, %s\n", st1, st0);
-            } else {
-                fprintf (state->ofp, "    fsubp %s, %s\n", st0, st1);
-            }
+            fprintf (state->ofp, "    fsubrp\n");
             break;
         
         case TOK_STAR:      case TOK_STAREQ:
         
-            if (state->syntax & ASM_SYNTAX_INTEL) {
-                fprintf (state->ofp, "    fmulp %s, %s\n", st1, st0);
-            } else {
-                fprintf (state->ofp, "    fmulp %s, %s\n", st0, st1);
-            }
+            fprintf (state->ofp, "    fmulp\n");
             break;
         
         case TOK_BSLASH:    case TOK_SLASHEQ:
         
-            if (state->syntax & ASM_SYNTAX_INTEL) {
-                fprintf (state->ofp, "    fdivp %s, %s\n", st1, st0);
-            } else {
-                fprintf (state->ofp, "    fdivp %s, %s\n", st0, st1);
-            }
+            fprintf (state->ofp, "    fdivrp\n");
             break;
         
         default:
@@ -24006,7 +24095,6 @@ static void emit_load_floating_rhs_expression_now (int result_size) {
 }
 
 static void emit_load_assignment_rhs_expression_to_reg (const char *reg);
-static int rhs_current_operand_is_floating_now (void);
 
 static int current_argument_is_bare_identifier_now (void) {
 
@@ -29032,6 +29120,7 @@ static int parse_identifier_assignment_statement (void) {
         int member_elem_size = DATA_INT & 0x1f;
         int member_pointer_depth = 0;
         int member_is_floating = 0;
+        int member_assignment_is_floating = 0;
         
         get_token ();
         
@@ -29216,9 +29305,10 @@ static int parse_identifier_assignment_statement (void) {
             
             if (is_simple_assign) {
             
+                member_assignment_is_floating = member_is_floating || rhs_current_operand_is_floating_now ();
                 emit_push_reg_now ("edx");
                 
-                if (member_is_floating || token_is_floating_constant_now ()) {
+                if (member_assignment_is_floating) {
                     emit_load_floating_rhs_expression_now (member_size);
                 } else {
                     emit_load_assignment_rhs_expression_to_reg ("eax");
@@ -29229,6 +29319,7 @@ static int parse_identifier_assignment_statement (void) {
             } else {
             
                 emit_load_member_from_addr_reg_now ("eax", "edx", member_offset, member_size);
+                
                 emit_push_reg_now ("edx");
                 emit_push_reg_now ("eax");
                 
@@ -29268,7 +29359,7 @@ static int parse_identifier_assignment_statement (void) {
             
             }
             
-            if ((member_is_floating || token_is_floating_constant_now ()) && is_simple_assign) {
+            if (member_assignment_is_floating && is_simple_assign) {
                 emit_store_floating_member_to_addr_reg_now ("edx", member_offset, member_size);
             } else {
                 emit_store_member_to_addr_reg_now ("edx", member_offset, "eax", member_size);
@@ -30978,7 +31069,7 @@ static int rhs_current_operand_is_floating_now (void) {
         }
         
         if (p && *p == '(' && find_global_symbol (tok.ident) >= 0) {
-            return get_global_symbol_floating (tok.ident) ? 1 : 0;
+            return get_global_function_returns_floating (tok.ident) ? 1 : 0;
         }
         
         if (p && ((p[0] == '-' && p[1] == '>') || p[0] == '.')) {
@@ -31052,7 +31143,7 @@ static int rhs_current_operand_is_floating_now (void) {
         }
         
         if (find_global_symbol (tok.ident) >= 0) {
-            return get_global_symbol_floating (tok.ident) ? 1 : 0;
+            return get_global_function_returns_floating (tok.ident) ? 1 : 0;
         }
     
     }
