@@ -111,10 +111,13 @@ static int parsed_type_only_qualifiers = 0;
 
 static int parsed_type_is_aggregate = 0;
 static int parsed_type_has_tag = 0;
-static char parsed_type_tag_name[128];
 
+static char parsed_type_tag_name[128];
 static char last_cast_type_tag_name[128];
+
 static int last_cast_type_object_size = 0;
+static int last_cast_type_is_floating = 0;
+static int floating_rhs_result_in_eax_bool = 0;
 
 static int parsed_type_is_array_typedef = 0;
 static int parsed_type_array_element_size = DATA_NONE;
@@ -6714,6 +6717,7 @@ int parse_cast_type_name (int *out_size, int *out_is_unsigned, int *out_is_point
     
     last_cast_type_tag_name[0] = '\0';
     last_cast_type_object_size = parsed_type_size & 0x1f;
+    last_cast_type_is_floating = (is_pointer ? 0 : parsed_type_is_floating);
     
     if (parsed_type_tag_name[0]) {
     
@@ -13561,6 +13565,8 @@ static int token_is_floating_constant_now (void);
 static void emit_store_floating_member_to_addr_reg_now (const char *addr_reg, int offset, int size);
 static void emit_load_floating_rhs_expression_now (int result_size);
 static void emit_load_assignment_rhs_to_reg (const char *reg);
+static void emit_floating_stack_to_int_pair_now (const char *lo, const char *hi);
+static void emit_integer_pair_to_floating_stack_now (const char *lo, const char *hi, int size);
 
 static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
 
@@ -13574,6 +13580,39 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
             
             if (parse_cast_type_name (&cast_size, &cast_is_unsigned, &cast_is_pointer)) {
             
+                if (!cast_is_pointer && !last_cast_type_is_floating && rhs_current_operand_is_floating_now ()) {
+                
+                    emit_load_floating_rhs_expression_now (DATA_DOUBLE & 0x1f);
+                    
+                    if (floating_rhs_result_in_eax_bool) {
+                    
+                        if (strcmp (lo, "eax") != 0 && state->ofp) {
+                        
+                            if (state->syntax & ASM_SYNTAX_INTEL) {
+                                fprintf (state->ofp, "    mov %s, eax\n", lo);
+                            } else {
+                                fprintf (state->ofp, "    movl %%eax, %%%s\n", lo);
+                            }
+                        
+                        }
+                        
+                        emit_extend_pair_high_from_low (lo, hi, cast_size, cast_is_unsigned);
+                        floating_rhs_result_in_eax_bool = 0;
+                    
+                    } else {
+                    
+                        emit_floating_stack_to_int_pair_now (lo, hi);
+                        
+                        if ((cast_size & 0x1f) != (DATA_LLONG & 0x1f)) {
+                            emit_extend_pair_high_from_low (lo, hi, cast_size, cast_is_unsigned);
+                        }
+                    
+                    }
+                    
+                    return;
+                
+                }
+                
                 emit_load_assignment_rhs_to_pair (lo, hi);
                 
                 {
@@ -23028,8 +23067,6 @@ static void emit_statement_label (int label);
 static void emit_statement_label_raw (int label);
 static void emit_statement_jump (int label);
 
-static int floating_rhs_result_in_eax_bool = 0;
-
 static void emit_eax_bool_to_floating_stack_now (void) {
 
     if (!state->ofp) {
@@ -23268,6 +23305,34 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
             
             if (parse_cast_type_name (&cast_size, &cast_is_unsigned, &cast_is_pointer)) {
             
+                if (!cast_is_pointer && !last_cast_type_is_floating) {
+                
+                    if (rhs_current_operand_is_floating_now ()) {
+                    
+                        emit_load_floating_rhs_operand_now (result_size);
+                        
+                        if (floating_rhs_result_in_eax_bool) {
+                        
+                            emit_extend_pair_high_from_low ("eax", "edx", cast_size, cast_is_unsigned);
+                            floating_rhs_result_in_eax_bool = 0;
+                        
+                        } else {
+                            emit_floating_stack_to_int_pair_now ("eax", "edx");
+                        }
+                        
+                        if ((cast_size & 0x1f) != (DATA_LLONG & 0x1f)) {
+                            emit_extend_pair_high_from_low ("eax", "edx", cast_size, cast_is_unsigned);
+                        }
+                    
+                    } else {
+                        emit_load_assignment_rhs_to_pair ("eax", "edx");
+                    }
+                    
+                    emit_integer_pair_to_floating_stack_now ("eax", "edx", cast_size);
+                    return;
+                
+                }
+                
                 emit_load_floating_rhs_operand_now (result_size);
                 return;
             
@@ -26155,6 +26220,80 @@ static void emit_floating_stack_to_int_reg_now (const char *reg) {
 
 }
 
+static void emit_floating_stack_to_int_pair_now (const char *lo, const char *hi) {
+
+    if (!state->ofp) {
+        return;
+    }
+    
+    if (state->syntax & ASM_SYNTAX_INTEL) {
+    
+        fprintf (state->ofp, "    sub esp, 8\n");
+        fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    fistp qword [esp]\n" : "    fistp qword ptr [esp]\n");
+        fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov %s, dword [esp]\n" : "    mov %s, dword ptr [esp]\n", lo);
+        fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov %s, dword [esp + 4]\n" : "    mov %s, dword ptr [esp + 4]\n", hi);
+        fprintf (state->ofp, "    add esp, 8\n");
+    
+    } else {
+    
+        fprintf (state->ofp, "    subl $8, %%esp\n");
+        fprintf (state->ofp, "    fistpll (%%esp)\n");
+        fprintf (state->ofp, "    movl (%%esp), %%%s\n", lo);
+        fprintf (state->ofp, "    movl 4(%%esp), %%%s\n", hi);
+        fprintf (state->ofp, "    addl $8, %%esp\n");
+    
+    }
+
+}
+
+static void emit_integer_pair_to_floating_stack_now (const char *lo, const char *hi, int size) {
+
+    if (!state->ofp) {
+        return;
+    }
+    
+    if ((size & 0x1f) == (DATA_LLONG & 0x1f)) {
+    
+        if (state->syntax & ASM_SYNTAX_INTEL) {
+        
+            fprintf (state->ofp, "    sub esp, 8\n");
+            fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov dword [esp], %s\n" : "    mov dword ptr [esp], %s\n", lo);
+            fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov dword [esp + 4], %s\n" : "    mov dword ptr [esp + 4], %s\n", hi);
+            fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    fild qword [esp]\n" : "    fild qword ptr [esp]\n");
+            fprintf (state->ofp, "    add esp, 8\n");
+        
+        } else {
+        
+            fprintf (state->ofp, "    subl $8, %%esp\n");
+            fprintf (state->ofp, "    movl %%%s, (%%esp)\n", lo);
+            fprintf (state->ofp, "    movl %%%s, 4(%%esp)\n", hi);
+            fprintf (state->ofp, "    fildll (%%esp)\n");
+            fprintf (state->ofp, "    addl $8, %%esp\n");
+        
+        }
+        
+        return;
+    
+    }
+    
+    if (state->syntax & ASM_SYNTAX_INTEL) {
+    
+        fprintf (state->ofp, "    sub esp, 4\n");
+        fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov dword [esp], %s\n" : "    mov dword ptr [esp], %s\n", lo);
+        fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    fild dword [esp]\n" : "    fild dword ptr [esp]\n");
+        fprintf (state->ofp, "    add esp, 4\n");
+    
+    } else {
+    
+        fprintf (state->ofp, "    subl $4, %%esp\n");
+        fprintf (state->ofp, "    movl %%%s, (%%esp)\n", lo);
+        fprintf (state->ofp, "    fildl (%%esp)\n");
+        fprintf (state->ofp, "    addl $4, %%esp\n");
+    
+    }
+
+}
+
 static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
 
     int false_label;
@@ -26164,8 +26303,31 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
     if (rhs_current_operand_is_floating_now ()) {
     
         emit_load_floating_rhs_expression_now (DATA_DOUBLE & 0x1f);
-        emit_floating_stack_to_int_reg_now (reg);
         
+        /*
+         * Floating comparisons leave their boolean result in eax.
+         * Do not run that through fistp: emit_floating_compare_to_eax_now()
+         * has already consumed both x87 operands with fcompp, so the x87
+         * stack no longer contains a value to convert.
+         */
+        if (floating_rhs_result_in_eax_bool) {
+        
+            if (state->ofp && strcmp (reg, "eax") != 0) {
+            
+                if (state->syntax & ASM_SYNTAX_INTEL) {
+                    fprintf (state->ofp, "    mov %s, eax\n", reg);
+                } else {
+                    fprintf (state->ofp, "    movl %%eax, %%%s\n", reg);
+                }
+            
+            }
+            
+            floating_rhs_result_in_eax_bool = 0;
+            return;
+        
+        }
+        
+        emit_floating_stack_to_int_reg_now (reg);
         return;
     
     }
@@ -32732,6 +32894,30 @@ static void emit_statement_test_pair_jump_if_false (const char *lo, const char *
 
 }
 
+static void emit_statement_test_pair_jump_if_true (const char *lo, const char *hi, int label) {
+
+    if (!state->ofp) {
+        return;
+    }
+    
+    if (state->syntax & ASM_SYNTAX_INTEL) {
+    
+        fprintf (state->ofp, "    test %s, %s\n", hi, hi);
+        fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jnz L%d\n" : "    jnz .L%d\n"), label);
+        fprintf (state->ofp, "    test %s, %s\n", lo, lo);
+        fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jnz L%d\n" : "    jnz .L%d\n"), label);
+    
+    } else {
+    
+        fprintf (state->ofp, "    testl %%%s, %%%s\n", hi, hi);
+        fprintf (state->ofp, "    jnz .L%d\n", label);
+        fprintf (state->ofp, "    testl %%%s, %%%s\n", lo, lo);
+        fprintf (state->ofp, "    jnz .L%d\n", label);
+    
+    }
+
+}
+
 static int statement_condition_constant_known = 0;
 static int statement_condition_constant_value = 0;
 
@@ -34233,6 +34419,21 @@ static int emit_statement_direct_compare_jump_if_false_now (int label) {
         return 0;
     }
     
+    /*
+     * Do not let the generic integer direct-compare fast path consume
+     * floating conditions such as:
+     *
+     *     while (value_fractional_d - ((int64_t)value_fractional_d) != 0)
+     *
+     * That path lowers the LHS through eax and compares integer dwords,
+     * so the example above becomes low_word - low_word and the fractional
+     * loop exits immediately.  Leave floating expressions for the x87
+     * condition path below.
+     */
+    if (token_is_const_floating_condition_operand_now () || rhs_current_operand_is_floating_now ()) {
+        return 0;
+    }
+    
     is_unsigned = rhs_current_operand_is_unsigned_now ();
     
     old_assignment32_stop_before_condition_operator = assignment32_stop_before_condition_operator;
@@ -34402,6 +34603,15 @@ static void emit_statement_jump_if_false (int label) {
             emit_load_floating_rhs_expression_now (float_size);
             emit_statement_floating_compare_jump_if_false (op, label);
             
+            return;
+        
+        }
+        
+        if (floating_rhs_result_in_eax_bool) {
+        
+            emit_statement_eax_truth_jump_if_false_and_tail (label);
+            
+            floating_rhs_result_in_eax_bool = 0;
             return;
         
         }
@@ -34599,6 +34809,15 @@ static void emit_statement_jump_if_false (int label) {
             emit_load_floating_rhs_expression_now (float_size);
             emit_statement_floating_compare_jump_if_false (op, label);
             
+            return;
+        
+        }
+        
+        if (floating_rhs_result_in_eax_bool) {
+        
+            emit_statement_eax_truth_jump_if_false_and_tail (label);
+            
+            floating_rhs_result_in_eax_bool = 0;
             return;
         
         }
@@ -34873,21 +35092,31 @@ static void emit_statement_jump_if_false (int label) {
         
         }
         
-        /*
-         * No explicit comparison follows, so this is just the truth value of
-         * the 64-bit expression in EDX:EAX.  Do not route it through the
-         * generic 64-bit comparison helper as TOK_NOTEQ: that helper compares
-         * EDX:EAX against ECX:EBX, and there is no RHS pair here.  This broke
-         * conditions such as:
-         *
-         *     if ((entry_point = coff_calculate_entry_point ())) return;
-         *
-         * after the assignment stored the result and left ECX holding the
-         * destination address instead of zero.
-         */
-        emit_statement_test_pair_jump_if_false ("eax", "edx", label);
-        statement_condition_emit_logical_tail (label);
+        if (tok.kind == TOK_LOGAND) {
         
+            get_token ();
+            
+            emit_statement_test_pair_jump_if_false ("eax", "edx", label);
+            emit_statement_jump_if_false (label);
+            
+            return;
+        
+        }
+        
+        if (tok.kind == TOK_LOGOR) {
+        
+            int skip_label = anon_label++;
+            get_token ();
+            
+            emit_statement_test_pair_jump_if_true ("eax", "edx", skip_label);
+            emit_statement_jump_if_false (label);
+            emit_statement_label (skip_label);
+            
+            return;
+        
+        }
+        
+        emit_statement_test_pair_jump_if_false ("eax", "edx", label);
         return;
     
     }
