@@ -38,6 +38,7 @@ static void flush_pending_statement_labels (void);
 #define     DATA_VOID                   4
 #define     DATA_PTR                    4
 
+static int current_function_preserve_assignment64_regs = 0;
 static int current_return_label = 0;
 
 #define     DATA_CHAR                   (1 | (1 << 5))
@@ -1903,9 +1904,15 @@ static char *read_tmp_file_text (FILE *fp) {
 
 static void append_inline_text (char **dst, const char *start, size_t len);
 
+static long function_frame_saved_assignment64_bytes (void) {
+    return current_function_preserve_assignment64_regs ? 12 : 0;
+}
+
 static void emit_function_frame_adjust_text (char **dst, long frame_size) {
 
     char buf[128];
+    long save_bytes;
+    
     int n;
     
     if (!dst) {
@@ -1913,8 +1920,9 @@ static void emit_function_frame_adjust_text (char **dst, long frame_size) {
     }
     
     frame_size = (frame_size + 3) & ~3L;
+    save_bytes = function_frame_saved_assignment64_bytes ();
     
-    if (frame_size <= 0) {
+    if (frame_size <= 0 && save_bytes <= 0) {
         return;
     }
     
@@ -1923,20 +1931,74 @@ static void emit_function_frame_adjust_text (char **dst, long frame_size) {
     }
     
     if (state->syntax & ASM_SYNTAX_INTEL) {
-        n = sprintf (buf, "    sub esp, %ld\n", frame_size);
+    
+        if (frame_size > 0) {
+        
+            n = sprintf (buf, "    sub esp, %ld\n", frame_size);
+            append_inline_text (dst, buf, (size_t) n);
+        
+        }
+        
+        if (save_bytes) {
+        
+            append_inline_text (dst, "    push ebx\n", strlen ("    push ebx\n"));
+            append_inline_text (dst, "    push esi\n", strlen ("    push esi\n"));
+            append_inline_text (dst, "    push edi\n", strlen ("    push edi\n"));
+        
+        }
+    
     } else {
-        n = sprintf (buf, "    subl $%ld, %%esp\n", frame_size);
+    
+        if (frame_size > 0) {
+        
+            n = sprintf (buf, "    subl $%ld, %%esp\n", frame_size);
+            append_inline_text (dst, buf, (size_t) n);
+        
+        }
+        
+        if (save_bytes) {
+        
+            append_inline_text (dst, "    pushl %ebx\n", strlen ("    pushl %ebx\n"));
+            append_inline_text (dst, "    pushl %esi\n", strlen ("    pushl %esi\n"));
+            append_inline_text (dst, "    pushl %edi\n", strlen ("    pushl %edi\n"));
+        
+        }
+    
+    }
+
+}
+
+static void emit_function_frame_restore_text (char **dst, long frame_size) {
+
+    if (!dst || !function_frame_saved_assignment64_bytes ()) {
+        return;
     }
     
-    append_inline_text (dst, buf, (size_t) n);
+    (void) frame_size;
+    
+    if (state->syntax & ASM_SYNTAX_INTEL) {
+    
+        append_inline_text (dst, "    pop edi\n", strlen ("    pop edi\n"));
+        append_inline_text (dst, "    pop esi\n", strlen ("    pop esi\n"));
+        append_inline_text (dst, "    pop ebx\n", strlen ("    pop ebx\n"));
+    
+    } else {
+    
+        append_inline_text (dst, "    popl %edi\n", strlen ("    popl %edi\n"));
+        append_inline_text (dst, "    popl %esi\n", strlen ("    popl %esi\n"));
+        append_inline_text (dst, "    popl %ebx\n", strlen ("    popl %ebx\n"));
+    
+    }
 
 }
 
 static char *replace_function_frame_placeholder (const char *text, long frame_size) {
 
-    const char *marker = "__SCC_FRAME_PLACEHOLDER__\n";
-    const char *p;
-    const char *last;
+    const char *frame_marker = "__SCC_FRAME_PLACEHOLDER__\n";
+    const char *restore_marker = "__SCC_RESTORE_ASSIGNMENT64_REGS__\n";
+    
+    const char *pr, *pf, *p;
+    const char *marker, *last;
     
     char *out = 0;
     size_t marker_len;
@@ -1945,14 +2007,34 @@ static char *replace_function_frame_placeholder (const char *text, long frame_si
         return 0;
     }
     
-    marker_len = strlen (marker);
     last = text;
     
-    while ((p = strstr (last, marker)) != 0) {
+    for (;;) {
     
+        pf = strstr (last, frame_marker);
+        pr = strstr (last, restore_marker);
+        
+        if (!pf && !pr) {
+            break;
+        }
+        
+        if (pf && (!pr || pf < pr)) {
+            p = pf;
+            marker = frame_marker;
+        } else {
+            p = pr;
+            marker = restore_marker;
+        }
+        
+        marker_len = strlen (marker);
         append_inline_text (&out, last, (size_t) (p - last));
         
-        emit_function_frame_adjust_text (&out, frame_size);
+        if (marker == frame_marker) {
+            emit_function_frame_adjust_text (&out, frame_size);
+        } else {
+            emit_function_frame_restore_text (&out, frame_size);
+        }
+        
         last = p + marker_len;
     
     }
@@ -5922,6 +6004,7 @@ static void reset_local_symbols (void) {
     current_block_cleanup_bytes = 0;
     current_function_frame_size = 0;
     current_function_uses_single_frame = 0;
+    current_function_preserve_assignment64_regs = 0;
 
 }
 
@@ -8779,6 +8862,10 @@ static void emit_function_end (void) {
         
         }
         
+        if (current_function_preserve_assignment64_regs) {
+            fprintf (state->ofp, "__SCC_RESTORE_ASSIGNMENT64_REGS__\n");
+        }
+        
         fprintf (state->ofp, "    leave\n");
         fprintf (state->ofp, "    ret\n");
     
@@ -8796,6 +8883,10 @@ static void emit_function_end (void) {
         
         }
         
+        if (current_function_preserve_assignment64_regs) {
+            fprintf (state->ofp, "__SCC_RESTORE_ASSIGNMENT64_REGS__\n");
+        }
+        
         fprintf (state->ofp, "    leave\n");
         fprintf (state->ofp, "    ret\n");
     
@@ -8805,6 +8896,13 @@ static void emit_function_end (void) {
 
 static void emit_preserve_assignment64_regs (enum token_kind op) {
 
+    if (current_function_frame_deferred) {
+    
+        current_function_preserve_assignment64_regs = 1;
+        return;
+    
+    }
+    
     if (!state->ofp) {
         return;
     }
@@ -8837,6 +8935,10 @@ static void emit_preserve_assignment64_regs (enum token_kind op) {
 
 static void emit_restore_assignment64_regs (enum token_kind op) {
 
+    if (current_function_frame_deferred) {
+        return;
+    }
+    
     if (!state->ofp) {
         return;
     }
@@ -36325,6 +36427,7 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     
     current_return_label = anon_label++;
     pending_return_jump = 0;
+    current_function_preserve_assignment64_regs = 0;
     
     /*
      * Do not apply the whole-function frame deferral to inline-function
