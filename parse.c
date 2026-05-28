@@ -26202,19 +26202,37 @@ static void emit_floating_stack_to_int_reg_now (const char *reg) {
         return;
     }
     
+    /*
+     * C requires floating-to-integer conversion to discard the fractional
+     * part.  x87 fistp uses the current FPU rounding mode, which is normally
+     * round-to-nearest, so values such as 0.5000000001 become 1 instead of 0.
+     * Temporarily switch the x87 control word to truncate for this conversion.
+     */
     if (state->syntax & ASM_SYNTAX_INTEL) {
     
-        fprintf (state->ofp, "    sub esp, 4\n");
+        fprintf (state->ofp, "    sub esp, 8\n");
+        fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    fnstcw word [esp + 4]\n" : "    fnstcw word ptr [esp + 4]\n");
+        fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov ax, word [esp + 4]\n" : "    mov ax, word ptr [esp + 4]\n");
+        fprintf (state->ofp, "    or ah, 12\n");
+        fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov word [esp + 6], ax\n" : "    mov word ptr [esp + 6], ax\n");
+        fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    fldcw word [esp + 6]\n" : "    fldcw word ptr [esp + 6]\n");
         fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    fistp dword [esp]\n" : "    fistp dword ptr [esp]\n");
+        fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    fldcw word [esp + 4]\n" : "    fldcw word ptr [esp + 4]\n");
         fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov %s, dword [esp]\n" : "    mov %s, dword ptr [esp]\n", reg);
-        fprintf (state->ofp, "    add esp, 4\n");
+        fprintf (state->ofp, "    add esp, 8\n");
     
     } else {
     
-        fprintf (state->ofp, "    subl $4, %%esp\n");
+        fprintf (state->ofp, "    subl $8, %%esp\n");
+        fprintf (state->ofp, "    fnstcw 4(%%esp)\n");
+        fprintf (state->ofp, "    movw 4(%%esp), %%ax\n");
+        fprintf (state->ofp, "    orb $12, %%ah\n");
+        fprintf (state->ofp, "    movw %%ax, 6(%%esp)\n");
+        fprintf (state->ofp, "    fldcw 6(%%esp)\n");
         fprintf (state->ofp, "    fistpl (%%esp)\n");
+        fprintf (state->ofp, "    fldcw 4(%%esp)\n");
         fprintf (state->ofp, "    movl (%%esp), %%%s\n", reg);
-        fprintf (state->ofp, "    addl $4, %%esp\n");
+        fprintf (state->ofp, "    addl $8, %%esp\n");
     
     }
 
@@ -26228,19 +26246,31 @@ static void emit_floating_stack_to_int_pair_now (const char *lo, const char *hi)
     
     if (state->syntax & ASM_SYNTAX_INTEL) {
     
-        fprintf (state->ofp, "    sub esp, 8\n");
+        fprintf (state->ofp, "    sub esp, 12\n");
+        fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    fnstcw word [esp + 8]\n" : "    fnstcw word ptr [esp + 8]\n");
+        fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov ax, word [esp + 8]\n" : "    mov ax, word ptr [esp + 8]\n");
+        fprintf (state->ofp, "    or ah, 12\n");
+        fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov word [esp + 10], ax\n" : "    mov word ptr [esp + 10], ax\n");
+        fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    fldcw word [esp + 10]\n" : "    fldcw word ptr [esp + 10]\n");
         fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    fistp qword [esp]\n" : "    fistp qword ptr [esp]\n");
+        fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    fldcw word [esp + 8]\n" : "    fldcw word ptr [esp + 8]\n");
         fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov %s, dword [esp]\n" : "    mov %s, dword ptr [esp]\n", lo);
         fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov %s, dword [esp + 4]\n" : "    mov %s, dword ptr [esp + 4]\n", hi);
-        fprintf (state->ofp, "    add esp, 8\n");
+        fprintf (state->ofp, "    add esp, 12\n");
     
     } else {
     
-        fprintf (state->ofp, "    subl $8, %%esp\n");
+        fprintf (state->ofp, "    subl $12, %%esp\n");
+        fprintf (state->ofp, "    fnstcw 8(%%esp)\n");
+        fprintf (state->ofp, "    movw 8(%%esp), %%ax\n");
+        fprintf (state->ofp, "    orb $12, %%ah\n");
+        fprintf (state->ofp, "    movw %%ax, 10(%%esp)\n");
+        fprintf (state->ofp, "    fldcw 10(%%esp)\n");
         fprintf (state->ofp, "    fistpll (%%esp)\n");
+        fprintf (state->ofp, "    fldcw 8(%%esp)\n");
         fprintf (state->ofp, "    movl (%%esp), %%%s\n", lo);
         fprintf (state->ofp, "    movl 4(%%esp), %%%s\n", hi);
-        fprintf (state->ofp, "    addl $8, %%esp\n");
+        fprintf (state->ofp, "    addl $12, %%esp\n");
     
     }
 
