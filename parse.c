@@ -903,6 +903,7 @@ struct global_symbol_entry {
     int pointer_depth;
     int pointed_size;
     int pointed_is_floating;
+    int pointed_is_unsigned;
     int returns_void;
     
     int param_count;
@@ -1276,6 +1277,7 @@ static void set_global_symbol_pointer_info (const char *name, int pointer_depth,
         global_symbols[i].pointed_size = pointed_size;
         
         global_symbols[i].pointed_is_floating = pointer_depth > 0 ? (parsed_type_is_floating ? 1 : 0) : 0;
+        global_symbols[i].pointed_is_unsigned = pointer_depth > 0 ? (parsed_type_is_unsigned ? 1 : 0) : 0;
     
     }
 
@@ -1311,6 +1313,18 @@ static int get_global_symbol_pointed_is_floating (const char *name) {
     
     if (i >= 0) {
         return global_symbols[i].pointed_is_floating;
+    }
+    
+    return 0;
+
+}
+
+static int get_global_symbol_pointed_is_unsigned (const char *name) {
+
+    int i = find_global_symbol (name);
+    
+    if (i >= 0) {
+        return global_symbols[i].pointed_is_unsigned;
     }
     
     return 0;
@@ -1545,6 +1559,10 @@ static int add_global_symbol (const char *name, int kind, int is_extern, const c
     global_symbols[global_symbol_count].is_unsigned = 0;
     global_symbols[global_symbol_count].is_floating = 0;
     global_symbols[global_symbol_count].is_array = 0;
+    global_symbols[global_symbol_count].pointer_depth = 0;
+    global_symbols[global_symbol_count].pointed_size = 0;
+    global_symbols[global_symbol_count].pointed_is_floating = 0;
+    global_symbols[global_symbol_count].pointed_is_unsigned = 0;
     global_symbols[global_symbol_count].returns_void = 0;
     
     {
@@ -5892,6 +5910,7 @@ struct local_symbol {
     int pointer_depth;
     int pointed_size;
     int pointed_is_floating;
+    int pointed_is_unsigned;
     
     char *pointed_tag_name;
     char *tag_name;
@@ -6135,6 +6154,7 @@ static long add_local_symbol (const char *name, int size, int align, int is_unsi
     local_symbols[local_symbol_count].pointer_depth = 0;
     local_symbols[local_symbol_count].pointed_size = 0;
     local_symbols[local_symbol_count].pointed_is_floating = 0;
+    local_symbols[local_symbol_count].pointed_is_unsigned = 0;
     local_symbols[local_symbol_count].pointed_tag_name = 0;
     local_symbols[local_symbol_count].tag_name = 0;
     
@@ -6191,6 +6211,7 @@ static void add_static_local_symbol (const char *name, const char *label, int si
     local_symbols[local_symbol_count].pointer_depth = 0;
     local_symbols[local_symbol_count].pointed_size = 0;
     local_symbols[local_symbol_count].pointed_is_floating = 0;
+    local_symbols[local_symbol_count].pointed_is_unsigned = 0;
     local_symbols[local_symbol_count].pointed_tag_name = 0;
     local_symbols[local_symbol_count].tag_name = 0;
        
@@ -6263,6 +6284,7 @@ struct pending_param {
     int pointer_depth;
     int pointed_size;
     int pointed_is_floating;
+    int pointed_is_unsigned;
     
     char *pointed_tag_name;
 
@@ -6295,6 +6317,8 @@ static void clear_pending_params (void) {
         pending_params[i].is_floating = 0;
         pending_params[i].pointer_depth = 0;
         pending_params[i].pointed_size = 0;
+        pending_params[i].pointed_is_floating = 0;
+        pending_params[i].pointed_is_unsigned = 0;
         
         if (pending_params[i].pointed_tag_name) {
         
@@ -6309,7 +6333,7 @@ static void clear_pending_params (void) {
 
 }
 
-static void add_pending_param (const char *name, int size, int align, int is_unsigned, int is_floating, int pointer_depth, int pointed_size) {
+static void add_pending_param (const char *name, int size, int align, int is_unsigned, int is_floating, int pointer_depth, int pointed_size, int pointed_is_unsigned) {
 
     if (pointer_depth > 0 && parsed_type_is_aggregate && parsed_type_size > (DATA_PTR & 0x1f) && pointed_size <= (DATA_PTR & 0x1f)) {
         pointed_size = parsed_type_size;
@@ -6338,6 +6362,7 @@ static void add_pending_param (const char *name, int size, int align, int is_uns
     pending_params[pending_param_count].pointer_depth = pointer_depth;
     pending_params[pending_param_count].pointed_size = pointed_size > 0 ? pointed_size : 0;
     pending_params[pending_param_count].pointed_is_floating = pointer_depth > 0 ? (parsed_type_is_floating ? 1 : 0) : 0;
+    pending_params[pending_param_count].pointed_is_unsigned = pointer_depth > 0 ? (pointed_is_unsigned ? 1 : 0) : 0;
     pending_params[pending_param_count].pointed_tag_name = (pointer_depth > 0 && parsed_type_tag_name[0]) ? xstrdup (parsed_type_tag_name) : 0;
     
     pending_param_count++;
@@ -6372,7 +6397,7 @@ static int find_pending_param (const char *name) {
     return find_pending_param_from (name, 0);
 }
 
-static void update_pending_param (const char *name, int size, int align, int is_unsigned, int is_floating, int pointer_depth, int pointed_size) {
+static void update_pending_param (const char *name, int size, int align, int is_unsigned, int is_floating, int pointer_depth, int pointed_size, int pointed_is_unsigned) {
 
     int i = find_pending_param (name);
     
@@ -6399,6 +6424,7 @@ static void update_pending_param (const char *name, int size, int align, int is_
     pending_params[i].pointer_depth = pointer_depth;
     pending_params[i].pointed_size = pointed_size > 0 ? pointed_size : 0;
     pending_params[i].pointed_is_floating = pointer_depth > 0 ? (parsed_type_is_floating ? 1 : 0) : 0;
+    pending_params[i].pointed_is_unsigned = pointer_depth > 0 ? (pointed_is_unsigned ? 1 : 0) : 0;
     
     if (pending_params[i].pointed_tag_name) {
     
@@ -6529,6 +6555,7 @@ static void set_local_symbol_pointer_info (const char *name, int pointer_depth, 
         sym->pointed_size = pointed_size;
         
         sym->pointed_is_floating = pointer_depth > 0 ? (parsed_type_is_floating ? 1 : 0) : 0;
+        sym->pointed_is_unsigned = pointer_depth > 0 ? (parsed_type_is_unsigned ? 1 : 0) : 0;
         
         if (sym->pointed_tag_name) {
         
@@ -6579,6 +6606,7 @@ static void install_pending_params_as_locals (void) {
         local_symbols[local_symbol_count].is_floating = pending_params[i].is_floating;
         local_symbols[local_symbol_count].pointer_depth = pending_params[i].pointer_depth;
         local_symbols[local_symbol_count].pointed_is_floating = pending_params[i].pointed_is_floating;
+        local_symbols[local_symbol_count].pointed_is_unsigned = pending_params[i].pointed_is_unsigned;
         local_symbols[local_symbol_count].is_array = 0;
         local_symbols[local_symbol_count].array_element_size = 0;
         local_symbols[local_symbol_count].array_dimensions = 0;
@@ -8102,7 +8130,7 @@ static void parse_direct_declarator (char **out_name) {
                                 add_pending_param (param_name, param_size, type_alignment (param_size),
                                     (declarator_is_pointer || parsed_type_is_array_typedef ? 0 : parsed_type_is_unsigned),
                                         (declarator_is_pointer || declarator_has_array || declarator_has_function || parsed_type_is_array_typedef) ? 0 : parsed_type_is_floating,
-                                            declarator_pointer_depth, parsed_type_is_aggregate ? parsed_type_size : (parsed_type_size & 0x1f));
+                                            declarator_pointer_depth, parsed_type_is_aggregate ? parsed_type_size : (parsed_type_size & 0x1f), parsed_type_is_unsigned);
                             
                             }
                         
@@ -8169,7 +8197,7 @@ static void parse_direct_declarator (char **out_name) {
                                 if (find_pending_param_from (param_name, old_style_param_start) >= 0) {
                                     report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate parameter '%s'", param_name);
                                 } else {
-                                    add_pending_param (param_name, param_size, type_alignment (param_size), 0, 0, unknown_typedef_pointer ? 1 : 0, DATA_INT & 0x1f);
+                                    add_pending_param (param_name, param_size, type_alignment (param_size), 0, 0, unknown_typedef_pointer ? 1 : 0, DATA_INT & 0x1f, 0);
                                 }
                             
                             }
@@ -8189,7 +8217,7 @@ static void parse_direct_declarator (char **out_name) {
                                 if (find_pending_param_from (maybe_type_name, old_style_param_start) >= 0) {
                                     report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate parameter '%s'", maybe_type_name);
                                 } else {
-                                    add_pending_param (maybe_type_name, DATA_INT & 0x1f, type_alignment (DATA_INT & 0x1f), 0, 0, 0, 0);
+                                    add_pending_param (maybe_type_name, DATA_INT & 0x1f, type_alignment (DATA_INT & 0x1f), 0, 0, 0, 0, 0);
                                 }
                             
                             }
@@ -8376,7 +8404,7 @@ static void parse_old_style_param_decls (void) {
                 update_pending_param (name, param_size, type_alignment (param_size),
                     (declarator_is_pointer || declarator_has_array || declarator_has_function || parsed_type_is_array_typedef ? 0 : parsed_type_is_unsigned),
                         (declarator_is_pointer || declarator_has_array || declarator_has_function || parsed_type_is_array_typedef ? 0 : parsed_type_is_floating),
-                            param_pointer_depth, parsed_type_is_aggregate ? parsed_type_size : (parsed_type_size & 0x1f));
+                            param_pointer_depth, parsed_type_is_aggregate ? parsed_type_size : (parsed_type_size & 0x1f), parsed_type_is_unsigned);
                 
                 free (name);
             
@@ -13544,12 +13572,13 @@ static void emit_load_address_to_reg_now (const char *reg, const char *symbol) {
 
 }
 
+static void emit_load_deref_reg_ex_now (const char *reg, int size, int is_unsigned);
 static void emit_load_deref_reg_now (const char *reg, int size);
 
 static int emit_load_parenthesized_indirect_member_to_reg_now (const char *reg);
 static int emit_parse_postfix_copy_source_address_now (const char *reg, struct local_symbol *src, const char *src_name, const char *name_start, const char *name_caret, unsigned long name_line);
 
-static void emit_load_postfix_lvalue_address_to_pair_now (const char *lo, const char *hi, int size) {
+static void emit_load_postfix_lvalue_address_to_pair_ex_now (const char *lo, const char *hi, int size, int is_unsigned) {
 
     if (!state->ofp) {
         return;
@@ -13576,7 +13605,7 @@ static void emit_load_postfix_lvalue_address_to_pair_now (const char *lo, const 
     
     } else {
     
-        emit_load_deref_reg_now (lo, size);
+        emit_load_deref_reg_ex_now (lo, size, is_unsigned);
         
         if (state->syntax & ASM_SYNTAX_INTEL) {
             fprintf (state->ofp, "    xor %s, %s\n", hi, hi);
@@ -14388,7 +14417,7 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
                 
                 }
                 
-                emit_load_postfix_lvalue_address_to_pair_now (lo, hi, source_size);
+                emit_load_postfix_lvalue_address_to_pair_ex_now (lo, hi, source_size, src ? (src->pointer_depth > 0 ? src->pointed_is_unsigned : src->is_unsigned) : (get_global_symbol_pointer_depth (name) > 0 ? get_global_symbol_pointed_is_unsigned (name) : get_global_symbol_unsigned (name)));
                 
                 free (name);
                 return;
@@ -16033,20 +16062,26 @@ static int parenthesized_function_designator_call_now (void) {
 
 }
 
-static void emit_load_deref_reg_now (const char *reg, int size) {
+static void emit_load_deref_reg_ex_now (const char *reg, int size, int is_unsigned) {
 
+    const char *op8;
+    const char *op16;
+    
     if (!state->ofp) {
         return;
     }
+    
+    op8 = is_unsigned ? "movzx" : "movsx";
+    op16 = is_unsigned ? "movzx" : "movsx";
     
     if (state->syntax & ASM_SYNTAX_INTEL) {
     
         if (state->syntax & ASM_SYNTAX_NASM) {
         
             if (size == (DATA_CHAR & 0x1f)) {
-                fprintf (state->ofp, "    movsx %s, byte [%s]\n", reg, reg);
+                fprintf (state->ofp, "    %s %s, byte [%s]\n", op8, reg, reg);
             } else if (size == (DATA_SHORT & 0x1f)) {
-                fprintf (state->ofp, "    movsx %s, word [%s]\n", reg, reg);
+                fprintf (state->ofp, "    %s %s, word [%s]\n", op16, reg, reg);
             } else {
                 fprintf (state->ofp, "    mov %s, dword [%s]\n", reg, reg);
             }
@@ -16054,9 +16089,9 @@ static void emit_load_deref_reg_now (const char *reg, int size) {
         } else {
         
             if (size == (DATA_CHAR & 0x1f)) {
-                fprintf (state->ofp, "    movsx %s, byte ptr [%s]\n", reg, reg);
+                fprintf (state->ofp, "    %s %s, byte ptr [%s]\n", op8, reg, reg);
             } else if (size == (DATA_SHORT & 0x1f)) {
-                fprintf (state->ofp, "    movsx %s, word ptr [%s]\n", reg, reg);
+                fprintf (state->ofp, "    %s %s, word ptr [%s]\n", op16, reg, reg);
             } else {
                 fprintf (state->ofp, "    mov %s, dword ptr [%s]\n", reg, reg);
             }
@@ -16066,15 +16101,19 @@ static void emit_load_deref_reg_now (const char *reg, int size) {
     } else {
     
         if (size == (DATA_CHAR & 0x1f)) {
-            fprintf (state->ofp, "    movsbl (%%%s), %%%s\n", reg, reg);
+            fprintf (state->ofp, "    %s (%%%s), %%%s\n", is_unsigned ? "movzbl" : "movsbl", reg, reg);
         } else if (size == (DATA_SHORT & 0x1f)) {
-            fprintf (state->ofp, "    movswl (%%%s), %%%s\n", reg, reg);
+            fprintf (state->ofp, "    %s (%%%s), %%%s\n", is_unsigned ? "movzwl" : "movswl", reg, reg);
         } else {
             fprintf (state->ofp, "    movl (%%%s), %%%s\n", reg, reg);
         }
     
     }
 
+}
+
+static void emit_load_deref_reg_now (const char *reg, int size) {
+    emit_load_deref_reg_ex_now (reg, size, 0);
 }
 
 static void emit_store_reg_to_deref_reg_now (const char *addr_reg, const char *value_reg, int size) {
@@ -16128,7 +16167,7 @@ static void emit_store_reg_to_deref_reg_now (const char *addr_reg, const char *v
 
 }
 
-static int emit_handle_subscript_after_loaded_pointer_to_reg_now (const char *reg, int pointer_depth, int pointed_size) {
+static int emit_handle_subscript_after_loaded_pointer_to_reg_now (const char *reg, int pointer_depth, int pointed_size, int pointed_is_unsigned) {
 
     int subscript_elem_size;
     
@@ -16174,7 +16213,7 @@ static int emit_handle_subscript_after_loaded_pointer_to_reg_now (const char *re
     
     }
     
-    emit_load_deref_reg_now (reg, subscript_elem_size);
+    emit_load_deref_reg_ex_now (reg, subscript_elem_size, pointer_depth <= 1 ? pointed_is_unsigned : 0);
     
     if (pointer_depth > 1) {
         set_rhs_last_pointer_info (pointer_depth - 1, pointed_size);
@@ -20684,7 +20723,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                     clear_rhs_last_pointer_info ();
                 }
                 
-                if (emit_handle_subscript_after_loaded_pointer_to_reg_now (reg, lhs_sym->pointer_depth > 0 ? lhs_sym->pointer_depth - 1 : 0, lhs_sym->pointed_size)) {
+                if (emit_handle_subscript_after_loaded_pointer_to_reg_now (reg, lhs_sym->pointer_depth > 0 ? lhs_sym->pointer_depth - 1 : 0, lhs_sym->pointed_size, lhs_sym->pointed_is_unsigned)) {
                 
                     free (lhs_name);
                     return;
@@ -20703,6 +20742,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                 if (lhs_has_postfix) {
                 
                     emit_push_reg_now (reg);
+                    
                     emit_incdec_symbol_now (0, lhs_name, lhs_postfix_op, lhs_line, lhs_start, lhs_caret);
                     emit_pop_reg_now (reg);
                 
@@ -20722,7 +20762,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                     clear_rhs_last_pointer_info ();
                 }
                 
-                if (emit_handle_subscript_after_loaded_pointer_to_reg_now (reg, get_global_symbol_pointer_depth (lhs_name) > 0 ? get_global_symbol_pointer_depth (lhs_name) - 1 : 0, get_global_symbol_pointed_size (lhs_name))) {
+                if (emit_handle_subscript_after_loaded_pointer_to_reg_now (reg, get_global_symbol_pointer_depth (lhs_name) > 0 ? get_global_symbol_pointer_depth (lhs_name) - 1 : 0, get_global_symbol_pointed_size (lhs_name), get_global_symbol_pointed_is_unsigned (lhs_name))) {
                 
                     free (lhs_name);
                     return;
@@ -21529,7 +21569,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                         emit_load_local_to_reg (reg, src->offset, DATA_PTR);
                     }
                     
-                    saw_subscript = emit_parse_postfix_subscripts_to_reg_dims_now (reg, elem_size, src->pointer_depth, src->pointed_size, src->array_dimensions, src->is_unsigned);
+                    saw_subscript = emit_parse_postfix_subscripts_to_reg_dims_now (reg, elem_size, src->pointer_depth, src->pointed_size, src->array_dimensions, src->pointer_depth > 0 ? src->pointed_is_unsigned : src->is_unsigned);
                     
                     postfix_copy_lvalue_size = index_step_size (elem_size);
                     postfix_copy_lvalue_tag_name = src->is_array ? (src->tag_name ? src->tag_name : src->pointed_tag_name) : src->pointed_tag_name;
@@ -21596,7 +21636,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                         emit_load_global_to_reg (reg, name, DATA_PTR);
                     }
                     
-                    saw_subscript = emit_parse_postfix_subscripts_to_reg_dims_now (reg, elem_size, get_global_symbol_pointer_depth (name), get_global_symbol_pointed_size (name), get_global_symbol_array_dimensions (name), get_global_symbol_unsigned (name));
+                    saw_subscript = emit_parse_postfix_subscripts_to_reg_dims_now (reg, elem_size, get_global_symbol_pointer_depth (name), get_global_symbol_pointed_size (name), get_global_symbol_array_dimensions (name), get_global_symbol_pointer_depth (name) > 0 ? get_global_symbol_pointed_is_unsigned (name) : get_global_symbol_unsigned (name));
                     
                     postfix_copy_lvalue_size = index_step_size (elem_size);
                     postfix_copy_lvalue_tag_name = get_global_symbol_array (name) ? get_global_symbol_tag_name (name) : 0;
@@ -24811,6 +24851,28 @@ static void emit_push_pending_struct_return_address_now (int stack_arg_bytes) {
 
 }
 
+static int current_argument_is_bare_64bit_identifier_now (void) {
+
+    struct local_symbol *sym;
+    
+    if (tok.kind != TOK_IDENT || !tok.ident || !current_argument_is_bare_identifier_now ()) {
+        return 0;
+    }
+    
+    sym = find_local_symbol (tok.ident);
+    
+    if (sym) {
+        return sym->size == (DATA_LLONG & 0x1f) && !sym->is_floating;
+    }
+    
+    if (find_global_symbol (tok.ident) >= 0) {
+        return get_global_symbol_size (tok.ident) == (DATA_LLONG & 0x1f) && !get_global_symbol_floating (tok.ident);
+    }
+    
+    return 0;
+
+}
+
 static void emit_call_identifier_to_reg_now (const char *name, const char *reg, const char *name_start, const char *name_caret, unsigned long name_line) {
 
     int argc = 0;
@@ -24989,6 +25051,13 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                     
                     emit_load_assignment_rhs_expression_to_pair ("eax", "edx", get_global_symbol_param_unsigned (name, argc));
 
+                } else if (!use_inline && get_global_symbol_has_prototype (name) && get_global_symbol_is_variadic (name) && argc >= get_global_symbol_param_count (name) && current_argument_is_bare_64bit_identifier_now ()) {
+                
+                    arg_is_floating = 0;
+                    arg_bytes = DATA_LLONG & 0x1f;
+                        
+                    emit_load_assignment_rhs_expression_to_pair ("eax", "edx", rhs_current_operand_is_unsigned_now ());
+                
                 } else if (arg_is_floating) {
                     emit_load_floating_rhs_expression_now (DATA_DOUBLE & 0x1f);
                 } else {
@@ -29402,7 +29471,7 @@ static int parse_parenthesized_deref_subscript_statement (void) {
     }
     
     emit_load_deref_reg_now ("eax", DATA_PTR & 0x1f);
-    emit_handle_subscript_after_loaded_pointer_to_reg_now ("eax", pointer_depth - 1, pointed_size);
+    emit_handle_subscript_after_loaded_pointer_to_reg_now ("eax", pointer_depth - 1, pointed_size, src ? src->pointed_is_unsigned : get_global_symbol_pointed_is_unsigned (name));
     
     free (name);
     return 1;
@@ -36630,7 +36699,7 @@ static int parse_possible_knr_function (void) {
                         add_pending_param (param_name, param_size, type_alignment (param_size),
                             (declarator_is_pointer || declarator_has_array || declarator_has_function || parsed_type_is_array_typedef ? 0 : parsed_type_is_unsigned),
                                 (declarator_is_pointer || declarator_has_array || declarator_has_function || parsed_type_is_array_typedef ? 0 : parsed_type_is_floating),
-                                    param_pointer_depth, parsed_type_is_aggregate ? parsed_type_size : (parsed_type_size & 0x1f));
+                                    param_pointer_depth, parsed_type_is_aggregate ? parsed_type_size : (parsed_type_size & 0x1f), parsed_type_is_unsigned);
                     
                     }
                 
@@ -36651,7 +36720,7 @@ static int parse_possible_knr_function (void) {
                     report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate parameter '%s'", tok.ident);
                 } else {
                 
-                    add_pending_param (tok.ident, DATA_INT & 0x1f, type_alignment (DATA_INT & 0x1f), 0, 0, 0, 0);
+                    add_pending_param (tok.ident, DATA_INT & 0x1f, type_alignment (DATA_INT & 0x1f), 0, 0, 0, 0, 0);
                     declarator_function_param_count++;
                 
                 }
