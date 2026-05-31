@@ -598,6 +598,8 @@ static struct vector vec_pragmas = { 0 };
 # include       <sys/stat.h>
 # include       <unistd.h>
 
+# include       "hashtab.h"
+
 struct pragma_entry { unsigned long ino; };
 
 char *get_current_directory (void) {
@@ -643,9 +645,25 @@ int is_pragma_igored (const char *filename) {
 
 }
 
+struct temp_file {
+
+    char *name, *path;
+    FILE *fp;
+
+};
+
+static struct hashtab hashtab_tmpfiles = { 0 };
+
 FILE *scc_tmpfile (void) {
 
     char *temp_path, *template;
+    
+    struct hashtab_name *key;
+    struct temp_file *tmp;
+    
+    char *name;
+    FILE *fp;
+    
     int fd;
     
     if (!(temp_path = getenv ("TMPDIR"))) {
@@ -659,15 +677,109 @@ FILE *scc_tmpfile (void) {
         return 0;
     }
     
-    return fdopen (fd, "w+b");
+    if ((name = strrchr (template, '\\'))) {
+        name++;
+    } else {
+        name = template;
+    }
+    
+    if ((fp = fdopen (fd, "w+b"))) {
+        
+        if (!(key = hashtab_get_key (&hashtab_tmpfiles, name))) {
+        
+            if (!((key = hashtab_alloc_name (xstrdup (name))))) {
+            
+                remove (template);
+                fclose (fp);
+                
+                return 0;
+            
+            }
+        
+        }
+        
+        tmp = xmalloc (sizeof (*tmp));
+        tmp->fp = fp;
+        
+        tmp->path = xstrdup (template);
+        tmp->name = xstrdup (name);
+        
+        hashtab_put (&hashtab_tmpfiles, key, tmp);
+        return fp;
+    
+    }
+    
+    return 0;
 
 }
 
 int scc_close (FILE *fp) {
-    return fclose (fp);
+
+    struct hashtab_entry *entry;
+    struct temp_file *tmp;
+    
+    int ret, i;
+    
+    for (i = 0; i < hashtab_tmpfiles.capacity; i++) {
+    
+        if (!(entry = &hashtab_tmpfiles.entries[i])) {
+            continue;
+        }
+        
+        if (!entry->key || !entry->value) {
+            continue;
+        }
+        
+        tmp = (struct temp_file *) entry->value;
+        
+        if (tmp->fp == fp) {
+        
+            if ((ret = fclose (fp))) {
+                return ret;
+            }
+            
+            remove (tmp->path);
+            
+            hashtab_remove (&hashtab_tmpfiles, hashtab_get_key (&hashtab_tmpfiles, tmp->name));
+            return 0;
+        
+        }
+    
+    }
+    
+    return 0;
+
 }
 
-void cleanup_tempfiles (void) {};
+void cleanup_tempfiles (void) {
+
+    struct hashtab_entry *entry;
+    struct temp_file *tmp;
+    
+    int ret, i;
+    
+    for (i = 0; i < hashtab_tmpfiles.capacity; i++) {
+    
+        if (!(entry = &hashtab_tmpfiles.entries[i])) {
+            continue;
+        }
+        
+        if (!entry->key || !entry->value) {
+            continue;
+        }
+        
+        tmp = (struct temp_file *) entry->value;
+        
+        if ((ret = fclose (tmp->fp))) {
+            continue;
+        }
+        
+        remove (tmp->path);
+        hashtab_remove (&hashtab_tmpfiles, hashtab_get_key (&hashtab_tmpfiles, tmp->name));
+    
+    }
+
+}
 #elif       defined (_WIN32)
 # include       <windows.h>
 
