@@ -647,8 +647,8 @@ int is_pragma_igored (const char *filename) {
 
 struct temp_file {
 
-    char *name, *path;
     FILE *fp;
+    char name[1];
 
 };
 
@@ -661,9 +661,7 @@ FILE *scc_tmpfile (void) {
     struct hashtab_name *key;
     struct temp_file *tmp;
     
-    char *name;
     FILE *fp;
-    
     int fd;
     
     if (!(temp_path = getenv ("TMPDIR"))) {
@@ -677,17 +675,11 @@ FILE *scc_tmpfile (void) {
         return 0;
     }
     
-    if ((name = strrchr (template, '/'))) {
-        name++;
-    } else {
-        name = template;
-    }
-    
     if ((fp = fdopen (fd, "w+b"))) {
+    
+        if (!(key = hashtab_get_key (&hashtab_tmpfiles, template))) {
         
-        if (!(key = hashtab_get_key (&hashtab_tmpfiles, name))) {
-        
-            if (!((key = hashtab_alloc_name (xstrdup (name))))) {
+            if (!((key = hashtab_alloc_name (xstrdup (template))))) {
             
                 remove (template);
                 fclose (fp);
@@ -698,11 +690,10 @@ FILE *scc_tmpfile (void) {
         
         }
         
-        tmp = xmalloc (sizeof (*tmp));
-        tmp->fp = fp;
+        tmp = xmalloc (sizeof (*tmp) + strlen (template )+ 1);
         
-        tmp->path = xstrdup (template);
-        tmp->name = xstrdup (name);
+        sprintf (tmp->name, "%s", template);
+        tmp->fp = fp;
         
         hashtab_put (&hashtab_tmpfiles, key, tmp);
         return fp;
@@ -738,7 +729,7 @@ int scc_close (FILE *fp) {
                 return ret;
             }
             
-            remove (tmp->path);
+            remove (tmp->name);
             
             hashtab_remove (&hashtab_tmpfiles, hashtab_get_key (&hashtab_tmpfiles, tmp->name));
             return 0;
@@ -774,7 +765,7 @@ void cleanup_tempfiles (void) {
             continue;
         }
         
-        remove (tmp->path);
+        remove (tmp->name);
         hashtab_remove (&hashtab_tmpfiles, hashtab_get_key (&hashtab_tmpfiles, tmp->name));
     
     }
