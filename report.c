@@ -158,7 +158,7 @@ void report_at (const char *filename, unsigned long lineno, int type, const char
     output_message (filename, lineno, 0, type, fmt, ap);
     va_end (ap);
     
-    if (errors >= state->max_errors) {
+    if (state->max_errors > 0 && errors >= state->max_errors) {
         exit (EXIT_FAILURE);
     }
 
@@ -256,7 +256,7 @@ void report_line_at (const char *filename, unsigned long lineno, int type, const
     
     }
     
-    if (errors >= state->max_errors) {
+    if (state->max_errors > 0 && errors >= state->max_errors) {
         exit (EXIT_FAILURE);
     }
 
