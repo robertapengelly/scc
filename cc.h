@@ -28,6 +28,7 @@ struct cc_state {
     int long64;
     int syntax;
     
+    unsigned long max_errors;
     long version;
 
 };

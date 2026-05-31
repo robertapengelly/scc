@@ -38,13 +38,14 @@ struct cc_option {
 #define     CC_OPTION_NO_LEADING_UNDERSCORE                 5
 #define     CC_OPTION_NO_LINEMARKERS                        6
 #define     CC_OPTION_MASM                                  7
-#define     CC_OPTION_MLONG64                               8
-#define     CC_OPTION_OUTFILE                               9
-#define     CC_OPTION_PEDANTIC                              10
-#define     CC_OPTION_PREPOCESS                             11
-#define     CC_OPTION_STD                                   12
-#define     CC_OPTION_TRANDITIONAL_LINEMARKERS              13
-#define     CC_OPTION_UNDEF                                 14
+#define     CC_OPTION_MAX_ERRORS                            8
+#define     CC_OPTION_MLONG64                               9
+#define     CC_OPTION_OUTFILE                               10
+#define     CC_OPTION_PEDANTIC                              11
+#define     CC_OPTION_PREPOCESS                             12
+#define     CC_OPTION_STD                                   13
+#define     CC_OPTION_TRANDITIONAL_LINEMARKERS              14
+#define     CC_OPTION_UNDEF                                 15
 
 static struct cc_option opts[] = {
 
@@ -62,6 +63,7 @@ static struct cc_option opts[] = {
     {   "-S",                               CC_OPTION_COMPILE,                      CC_OPTION_NO_ARG        },
     
     {   "-fno-leading-underscore",          CC_OPTION_NO_LEADING_UNDERSCORE,        CC_OPTION_NO_ARG        },
+    {   "-fmax-errors",                     CC_OPTION_MAX_ERRORS,                   CC_OPTION_EQUALS_ARG    },
     {   "-mlong64",                         CC_OPTION_MLONG64,                      CC_OPTION_NO_ARG        },
     {   "-masm",                            CC_OPTION_MASM,                         CC_OPTION_EQUALS_ARG    },
     
@@ -114,9 +116,10 @@ static void print_usage (void) {
         fprintf (stderr, "                                      <standard>.\n");
         fprintf (stderr, "                                          Currently only C89 and C90 are\n");
         fprintf (stderr, "                                          supported.\n");
-        fprintf (stderr, "    -masm=<syntax>                    Output <systax> compatible syntax.\n");
+        fprintf (stderr, "    -masm=<syntax>                    Output <syntax> compatible syntax.\n");
         fprintf (stderr, "                                          Defaults to MASM but also supports\n");
         fprintf (stderr, "                                          GNU AT&T, GNU INTEL and NASM.\n");
+        fprintf (stderr, "    -fmax-errors=<count>              Stop execution after <count> errros.\n");
         fprintf (stderr, "\n");
         fprintf (stderr, "    -fno-leading-underscore           Don't prefix symbols with an underscore.\n");
         fprintf (stderr, "    -mlong64                          Convert long to 64-bit.\n");
@@ -406,6 +409,19 @@ void parse_args (int argc, char **argv, int optind) {
                 
                 report_at (program_name, 0, REPORT_ERROR, "unrecognised -masm= option");
                 exit (EXIT_FAILURE);
+            
+            }
+            
+            case CC_OPTION_MAX_ERRORS: {
+            
+                if (!(state->max_errors = atol (optarg))) {
+                
+                    report_at (program_name, 0, REPORT_ERROR, "invalid number for -fmax-errors=");
+                    exit (EXIT_FAILURE);    
+                
+                }
+                
+                break;
             
             }
             

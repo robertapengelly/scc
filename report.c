@@ -6,6 +6,7 @@
 #include    <stdlib.h>
 #include    <string.h>
 
+#include    "cc.h"
 #include    "ll.h"
 #include    "report.h"
 
@@ -156,6 +157,10 @@ void report_at (const char *filename, unsigned long lineno, int type, const char
     va_start (ap, fmt);
     output_message (filename, lineno, 0, type, fmt, ap);
     va_end (ap);
+    
+    if (errors >= state->max_errors) {
+        exit (EXIT_FAILURE);
+    }
 
 }
 
@@ -210,14 +215,9 @@ void report_line_at (const char *filename, unsigned long lineno, int type, const
     
     char *actual_line = get_actual_line (filename, lineno);
     
-    /*if (!(actual_line = get_actual_line (filename, lineno))) {
-    
-        filename = get_real_filename ();
-        lineno += (get_real_line_number () - lineno);
-    
-    }*/
-    
-    if (str && caret) { idx = (caret - str) + 1; }
+    if (str && caret) {
+        idx = (caret - str) + 1;
+    }
     
     va_start (ap, fmt);
     output_message (filename, lineno, idx, type, fmt, ap);
@@ -252,34 +252,12 @@ void report_line_at (const char *filename, unsigned long lineno, int type, const
             fprintf (stderr, "^\n");
             free (actual_line);
         
-        }/* else {
-        
-            if (lineno > 0) {
-                ident = fprintf (stderr, " %8lu | ", lineno);
-            } else {
-                ident = fprintf (stderr, "%*s", 12, "");
-            }
-            
-            fprintf (stderr, "%s", str);
-            
-            if (str[strlen (str) - 1] != '\n') {
-                fprintf (stderr, "\n");
-            }
-            
-            len = (idx + ident) - 1;
-            
-            for (i = 0; i < ident; i++) {
-                putc (' ', stderr);
-            }
-            
-            for (; i < len; i++) {
-                putc ('-', stderr);
-            }
-            
-            fprintf (stderr, "^\n");
-        
-        }*/
+        }
     
+    }
+    
+    if (errors >= state->max_errors) {
+        exit (EXIT_FAILURE);
     }
 
 }
