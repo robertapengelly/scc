@@ -55,4 +55,6 @@ int is_pragma_igored (const char *filename);
 FILE *scc_tmpfile (void);
 int scc_close (FILE *fp);
 
+void cleanup_tempfiles (void);
+
 #endif      /* _LIB_H */

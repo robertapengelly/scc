@@ -667,6 +667,7 @@ int scc_close (FILE *fp) {
     return fclose (fp);
 }
 
+void cleanup_tempfiles (void) {};
 #elif       defined (_WIN32)
 # include       <windows.h>
 
@@ -856,6 +857,36 @@ int scc_close (FILE *fp) {
     return 0;
 
 }
+
+void cleanup_tempfiles (void) {
+
+    struct hashtab_entry *entry;
+    struct temp_file *tmp;
+    
+    int ret, i;
+    
+    for (i = 0; i < hashtab_tmpfiles.capacity; i++) {
+    
+        if (!(entry = &hashtab_tmpfiles.entries[i])) {
+            continue;
+        }
+        
+        if (!entry->key || !entry->value) {
+            continue;
+        }
+        
+        tmp = (struct temp_file *) entry->value;
+        
+        if ((ret = fclose (tmp->fp))) {
+            continue;
+        }
+        
+        remove (tmp->path);
+        hashtab_remove (&hashtab_tmpfiles, hashtab_get_key (&hashtab_tmpfiles, tmp->name));
+    
+    }
+
+}
 #else
 # include       "hashtab.h"
 
@@ -981,6 +1012,36 @@ int scc_close (FILE *fp) {
     }
     
     return 0;
+
+}
+
+void cleanup_tempfiles (void) {
+
+    struct hashtab_entry *entry;
+    struct temp_file *tmp;
+    
+    int ret, i;
+    
+    for (i = 0; i < hashtab_tmpfiles.capacity; i++) {
+    
+        if (!(entry = &hashtab_tmpfiles.entries[i])) {
+            continue;
+        }
+        
+        if (!entry->key || !entry->value) {
+            continue;
+        }
+        
+        tmp = (struct temp_file *) entry->value;
+        
+        if ((ret = fclose (tmp->fp))) {
+            continue;
+        }
+        
+        remove (tmp->name);
+        hashtab_remove (&hashtab_tmpfiles, hashtab_get_key (&hashtab_tmpfiles, tmp->name));
+    
+    }
 
 }
 #endif
