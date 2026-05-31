@@ -677,7 +677,7 @@ FILE *scc_tmpfile (void) {
         return 0;
     }
     
-    if ((name = strrchr (template, '\\'))) {
+    if ((name = strrchr (template, '/'))) {
         name++;
     } else {
         name = template;
