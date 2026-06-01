@@ -204,14 +204,19 @@ int hashtab_put (struct hashtab *table, struct hashtab_name *key, void *value) {
 void hashtab_remove (struct hashtab *table, struct hashtab_name *key) {
 
     struct hashtab_entry *entry;
-    
-    if ((entry = find_entry (table->entries, table->capacity, key)) != NULL) {
-    
-        entry->key = 0;
-        entry->value = 0;
-        
-        --table->count;
-    
+
+    if (!table || table->count == 0) {
+        return;
     }
 
+    entry = find_entry (table->entries, table->capacity, key);
+
+    if (!entry->key) {
+        return;
+    }
+
+    entry->value = HASHTAB_TOMBSTONE;
+    entry->key = 0;
+
+    --table->count;
 }

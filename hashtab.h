@@ -25,9 +25,10 @@ struct hashtab {
 
 };
 
+#define     HASHTAB_TOMBSTONE           ((void *) -1)
 struct hashtab_name *hashtab_alloc_name (const char *str);
-struct hashtab_name *hashtab_get_key (struct hashtab *table, const char *name);
 
+struct hashtab_name *hashtab_get_key (struct hashtab *table, const char *name);
 void *hashtab_get (struct hashtab *table, struct hashtab_name *key);
 
 int hashtab_put (struct hashtab *table, struct hashtab_name *key, void *value);

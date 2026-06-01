@@ -647,8 +647,8 @@ int is_pragma_igored (const char *filename) {
 
 struct temp_file {
 
+    char *name, *path;
     FILE *fp;
-    char name[1];
 
 };
 
@@ -656,7 +656,7 @@ static struct hashtab hashtab_tmpfiles = { 0 };
 
 FILE *scc_tmpfile (void) {
 
-    char *temp_path, *template;
+    char *temp_path, *template, *name, *p;
     
     struct hashtab_name *key;
     struct temp_file *tmp;
@@ -669,36 +669,61 @@ FILE *scc_tmpfile (void) {
     }
     
     template = xmalloc (strlen (temp_path) + 1 + 10 + 1);
+    
+again:
+    
     sprintf (template, "%s/sccXXXXXX", temp_path);
     
     if ((fd = mkstemp (template)) < 0) {
         return 0;
     }
     
+    if ((p = strrchr (template, '/'))) {
+        name = xstrdup (p + 1);
+    } else {
+        name = xstrdup (template);
+    }
+    
+    if ((key = hashtab_get_key (&hashtab_tmpfiles, name))) {
+    
+        close (fd);
+        
+        remove (template);
+        free (name);
+        
+        goto again;
+    
+    }
+    
+    if (!((key = hashtab_alloc_name (name)))) {
+    
+        report_at (program_name, 0, REPORT_ERROR, "failed to allocate memory for key");
+        exit (EXIT_FAILURE);
+    
+    }
+    
     if ((fp = fdopen (fd, "w+b"))) {
     
-        if (!(key = hashtab_get_key (&hashtab_tmpfiles, template))) {
-        
-            if (!((key = hashtab_alloc_name (xstrdup (template))))) {
-            
-                remove (template);
-                fclose (fp);
-                
-                return 0;
-            
-            }
-        
-        }
-        
-        tmp = xmalloc (sizeof (*tmp) + strlen (template )+ 1);
-        
-        sprintf (tmp->name, "%s", template);
+        tmp = xmalloc (sizeof (*tmp));
         tmp->fp = fp;
         
+        tmp->path = xstrdup (template);
+        tmp->name = name;
+        
         hashtab_put (&hashtab_tmpfiles, key, tmp);
+        
+        free (template);
         return fp;
     
     }
+    
+    free (name);
+    free (key);
+    
+    close (fd);
+    
+    remove (template);
+    free (template);
     
     return 0;
 
@@ -717,7 +742,7 @@ int scc_close (FILE *fp) {
             continue;
         }
         
-        if (!entry->key || !entry->value) {
+        if (!entry->key || !entry->value || entry->value == HASHTAB_TOMBSTONE) {
             continue;
         }
         
@@ -729,9 +754,13 @@ int scc_close (FILE *fp) {
                 return ret;
             }
             
-            remove (tmp->name);
+            hashtab_remove (&hashtab_tmpfiles, entry->key);
+            remove (tmp->path);
             
-            hashtab_remove (&hashtab_tmpfiles, hashtab_get_key (&hashtab_tmpfiles, tmp->name));
+            free (tmp->path);
+            free (tmp->name);
+            
+            free (tmp);
             return 0;
         
         }
@@ -755,7 +784,7 @@ void cleanup_tempfiles (void) {
             continue;
         }
         
-        if (!entry->key || !entry->value) {
+        if (!entry->key || !entry->value || entry->value == HASHTAB_TOMBSTONE) {
             continue;
         }
         
@@ -765,8 +794,7 @@ void cleanup_tempfiles (void) {
             continue;
         }
         
-        remove (tmp->name);
-        hashtab_remove (&hashtab_tmpfiles, hashtab_get_key (&hashtab_tmpfiles, tmp->name));
+        remove (tmp->path);
     
     }
 
@@ -876,48 +904,54 @@ FILE *scc_tmpfile (void) {
     struct hashtab_name *key;
     struct temp_file *tmp;
     
-    char *name;
+    char *name, *p;
     FILE *fp;
     
     if (!GetTempPath (MAX_PATH + 1, temp_path)) {
         return 0;
     }
     
+again:
+    
     if (!GetTempFileName (temp_path, "scc", 0, full_path)) {
         return 0;
     }
     
-    if ((name = strrchr (full_path, '\\'))) {
-        name++;
+    if ((p = strrchr (full_path, '\\'))) {
+        name = xstrdup (p + 1);
     } else {
-        name = full_path;
+        name = xstrdup (full_path);
+    }
+    
+    if ((key = hashtab_get_key (&hashtab_tmpfiles, name))) {
+    
+        free (name);
+        goto again;
+    
+    }
+    
+    if (!((key = hashtab_alloc_name (name)))) {
+    
+        report_at (program_name, 0, REPORT_ERROR, "failed to allocate memory for key");
+        exit (EXIT_FAILURE);
+    
     }
     
     if ((fp = fopen (full_path, "w+b"))) {
-        
-        if (!(key = hashtab_get_key (&hashtab_tmpfiles, name))) {
-        
-            if (!((key = hashtab_alloc_name (xstrdup (name))))) {
-            
-                remove (full_path);
-                fclose (fp);
-                
-                return 0;
-            
-            }
-        
-        }
-        
+    
         tmp = xmalloc (sizeof (*tmp));
         tmp->fp = fp;
         
         tmp->path = xstrdup (full_path);
-        tmp->name = xstrdup (name);
+        tmp->name = name;
         
         hashtab_put (&hashtab_tmpfiles, key, tmp);
         return fp;
     
     }
+    
+    free (name);
+    free (key);
     
     return 0;
 
@@ -926,8 +960,9 @@ FILE *scc_tmpfile (void) {
 int scc_close (FILE *fp) {
 
     struct hashtab_entry *entry;
-    struct temp_file *tmp;
+    struct hashtab_name *key;
     
+    struct temp_file *tmp;
     int ret, i;
     
     for (i = 0; i < hashtab_tmpfiles.capacity; i++) {
@@ -936,7 +971,7 @@ int scc_close (FILE *fp) {
             continue;
         }
         
-        if (!entry->key || !entry->value) {
+        if (!entry->key || !entry->value || entry->value == HASHTAB_TOMBSTONE) {
             continue;
         }
         
@@ -948,9 +983,12 @@ int scc_close (FILE *fp) {
                 return ret;
             }
             
+            hashtab_remove (&hashtab_tmpfiles, entry->key);
             remove (tmp->path);
             
-            hashtab_remove (&hashtab_tmpfiles, hashtab_get_key (&hashtab_tmpfiles, tmp->name));
+            free (tmp->path);
+            free (tmp->name);
+            
             return 0;
         
         }
@@ -974,7 +1012,7 @@ void cleanup_tempfiles (void) {
             continue;
         }
         
-        if (!entry->key || !entry->value) {
+        if (!entry->key || !entry->value || entry->value == HASHTAB_TOMBSTONE) {
             continue;
         }
         
@@ -985,7 +1023,6 @@ void cleanup_tempfiles (void) {
         }
         
         remove (tmp->path);
-        hashtab_remove (&hashtab_tmpfiles, hashtab_get_key (&hashtab_tmpfiles, tmp->name));
     
     }
 
@@ -995,8 +1032,8 @@ void cleanup_tempfiles (void) {
 
 struct temp_file {
 
+    char *name;
     FILE *fp;
-    char name[1];
 
 };
 
@@ -1030,7 +1067,7 @@ FILE *scc_tmpfile (void) {
 
     static unsigned long temp_id = 1;
     
-    char name[64];
+    char name[64], *temp;
     unsigned long i;
     
     struct hashtab_name *key;
@@ -1049,30 +1086,36 @@ FILE *scc_tmpfile (void) {
         
         }
         
+        temp = xstrdup (name);
+        
+        if ((key = hashtab_get_key (&hashtab_tmpfiles, temp))) {
+        
+            free (temp);
+            continue;
+        
+        }
+        
+        if (!((key = hashtab_alloc_name (temp)))) {
+        
+            report_at (program_name, 0, REPORT_ERROR, "failed to allocate memory for key");
+            exit (EXIT_FAILURE);
+        
+        }
+        
         if ((fp = fopen (name, "w+b"))) {
             
-            if (!(key = hashtab_get_key (&hashtab_tmpfiles, name))) {
+            tmp = xmalloc (sizeof (*tmp));
             
-                if (!((key = hashtab_alloc_name (xstrdup (name))))) {
-                
-                    remove (name);
-                    fclose (fp);
-                    
-                    continue;
-                
-                }
-            
-            }
-            
-            tmp = xmalloc (sizeof (*tmp) + strlen (name) + 1);
-            sprintf (tmp->name, "%s", name);
-            
+            tmp->name = temp;
             tmp->fp = fp;
         
             hashtab_put (&hashtab_tmpfiles, key, tmp);
             return fp;
         
         }
+        
+        free (temp);
+        free (key);
     
     }
     
@@ -1083,8 +1126,9 @@ FILE *scc_tmpfile (void) {
 int scc_close (FILE *fp) {
 
     struct hashtab_entry *entry;
-    struct temp_file *tmp;
+    struct hashtab_name *key;
     
+    struct temp_file *tmp;
     int ret, i;
     
     for (i = 0; i < hashtab_tmpfiles.capacity; i++) {
@@ -1093,7 +1137,7 @@ int scc_close (FILE *fp) {
             continue;
         }
         
-        if (!entry->key || !entry->value) {
+        if (!entry->key || !entry->value || entry->value == HASHTAB_TOMBSTONE) {
             continue;
         }
         
@@ -1105,9 +1149,10 @@ int scc_close (FILE *fp) {
                 return ret;
             }
             
+            hashtab_remove (&hashtab_tmpfiles, entry->key);
             remove (tmp->name);
             
-            hashtab_remove (&hashtab_tmpfiles, hashtab_get_key (&hashtab_tmpfiles, tmp->name));
+            free (tmp->name);
             return 0;
         
         }
@@ -1131,7 +1176,7 @@ void cleanup_tempfiles (void) {
             continue;
         }
         
-        if (!entry->key || !entry->value) {
+        if (!entry->key || !entry->value || entry->value == HASHTAB_TOMBSTONE) {
             continue;
         }
         
@@ -1142,7 +1187,6 @@ void cleanup_tempfiles (void) {
         }
         
         remove (tmp->name);
-        hashtab_remove (&hashtab_tmpfiles, hashtab_get_key (&hashtab_tmpfiles, tmp->name));
     
     }
 
