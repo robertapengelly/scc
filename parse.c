@@ -25960,7 +25960,7 @@ static int source_lhs_has_char_pointer_cast_before_now (const char *p) {
     
     q = p;
     
-    while (limit-- > 0 && q > tok.start - 4096) {
+    while (limit-- > 0 && q > tok.start) {
     
         q--;
         
