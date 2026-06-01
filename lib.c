@@ -960,9 +960,8 @@ again:
 int scc_close (FILE *fp) {
 
     struct hashtab_entry *entry;
-    struct hashtab_name *key;
-    
     struct temp_file *tmp;
+    
     int ret, i;
     
     for (i = 0; i < hashtab_tmpfiles.capacity; i++) {
@@ -1126,9 +1125,8 @@ FILE *scc_tmpfile (void) {
 int scc_close (FILE *fp) {
 
     struct hashtab_entry *entry;
-    struct hashtab_name *key;
-    
     struct temp_file *tmp;
+    
     int ret, i;
     
     for (i = 0; i < hashtab_tmpfiles.capacity; i++) {
