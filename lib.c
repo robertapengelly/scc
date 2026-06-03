@@ -1087,7 +1087,7 @@ FILE *scc_tmpfile (void) {
             name[index] = (j % 26) + 'A';
             index--;
         
-        } while ((j /= 26) >= 26);
+        } while ((j /= 26) > 0);
         
         temp = xstrdup (name);
         
