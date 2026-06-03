@@ -11028,6 +11028,66 @@ static void parse_block (void) {
                         
                         expect (TOK_RBRACE, "}");
                     
+                    } else if (object_is_auto && declarator_has_array && !declarator_is_pointer && (parsed_type_size & 0x1f) == (DATA_CHAR & 0x1f) && is_string_token ()) {
+                    
+                        int first_init_index = init_count;
+                        int value_count = 0;
+                        
+                        int64_s values[MAX_STRING_INIT_BYTES];
+                        int i;
+                        
+                        parse_string_initializer_values (values, MAX_STRING_INIT_BYTES, &value_count);
+                        
+                        if (declarator_array_unsized && value_count > 0 && value_count > object_size) {
+                        
+                            long old_offset = object_offset;
+                            long new_offset;
+                            long delta;
+                            
+                            int adj_i;
+                            current_local_stack_size += value_count - object_size;
+                            
+                            if (current_local_stack_size > current_function_frame_size) {
+                                current_function_frame_size = current_local_stack_size;
+                            }
+                            
+                            new_offset = -current_local_stack_size;
+                            delta = new_offset - old_offset;
+                            object_offset = new_offset;
+                            declarator_array_count = value_count;
+                            
+                            if (local_symbol_count > 0 && name && local_symbols[local_symbol_count - 1].name && strcmp (local_symbols[local_symbol_count - 1].name, name) == 0) {
+                            
+                                local_symbols[local_symbol_count - 1].offset = object_offset;
+                                local_symbols[local_symbol_count - 1].size = object_size;
+                            
+                            }
+                            
+                            for (adj_i = first_init_index; adj_i < init_count; adj_i++) {
+                                inits[adj_i].offset += delta;
+                            }
+                        
+                        }
+                        
+                        for (i = 0; i < object_size; i++) {
+                        
+                            if (init_count >= MAX_LOCAL_INITS) {
+                                continue;
+                            }
+                            
+                            inits[init_count].offset = object_offset + i;
+                            inits[init_count].size = 1;
+                            inits[init_count].kind = LOCAL_INIT_CONST;
+                            inits[init_count].symbol = 0;
+                            inits[init_count].value.low = (i < value_count) ? (values[i].low & 0xffUL) : 0;
+                            inits[init_count].value.high = 0;
+                            inits[init_count].source_offset = 0;
+                            inits[init_count].source_size = 0;
+                            
+                            init_count++;
+                        
+                        }
+                    
                     } else if (object_is_auto && !declarator_is_pointer && (parsed_type_is_aggregate || declarator_has_array) && tok.kind == TOK_LBRACE) {
                         parse_local_aggregate_initializer_values (inits, &init_count, MAX_LOCAL_INITS, object_offset, object_fields, object_field_count);
                     } else if (object_is_auto && auto_initializer_needs_runtime_now ()) {
