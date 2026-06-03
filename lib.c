@@ -988,6 +988,7 @@ int scc_close (FILE *fp) {
             free (tmp->path);
             free (tmp->name);
             
+            free (tmp);
             return 0;
         
         }
@@ -1064,31 +1065,43 @@ int is_pragma_igored (const char *filename) {
 
 FILE *scc_tmpfile (void) {
 
-    static unsigned long temp_id = 1;
+    static char name[64] = { 0 };
     
-    char name[64], *temp;
-    unsigned long i;
+    char *temp;
+    unsigned long index, i, j;
     
     struct hashtab_name *key;
     struct temp_file *tmp;
     
     FILE *fp;
     
-    for (i = 0; i < 1000; i++) {
+    for (i = 0; i < 456976; i++) {
     
-        sprintf (name, "scc_tmp_%lu.tmp", temp_id++);
+        sprintf (name, "scc_AAAA.tmp");
         
-        if ((fp = fopen (name, "rb"))) {
+        index = 7;
+        j = i;
         
-            fclose (fp);
-            continue;
+        do {
         
-        }
+            name[index] = (j % 26) + 'A';
+            index--;
+        
+        } while ((j /= 26) >= 26);
         
         temp = xstrdup (name);
         
         if ((key = hashtab_get_key (&hashtab_tmpfiles, temp))) {
         
+            free (temp);
+            continue;
+        
+        }
+        
+        if ((fp = fopen (temp, "rb"))) {
+        
+            fclose (fp);
+            
             free (temp);
             continue;
         
@@ -1101,7 +1114,7 @@ FILE *scc_tmpfile (void) {
         
         }
         
-        if ((fp = fopen (name, "w+b"))) {
+        if ((fp = fopen (temp, "w+b"))) {
             
             tmp = xmalloc (sizeof (*tmp));
             
@@ -1151,6 +1164,8 @@ int scc_close (FILE *fp) {
             remove (tmp->name);
             
             free (tmp->name);
+            free (tmp);
+            
             return 0;
         
         }
