@@ -96,6 +96,7 @@ enum token_kind {
     TOK_SIGNED,
     TOK_SIZEOF,
     TOK_STATIC,
+    TOK_STDCALL,
     TOK_STRUCT,
     TOK_SWITCH,
     TOK_TYPEDEF,

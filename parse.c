@@ -12,6 +12,8 @@
 #include    "report.h"
 #include    "token.h"
 
+static enum token_kind parsed_calling_convention = TOK_EOF;
+
 static struct vector vec_dllexports = { 0 };
 static int parsed_dllexport = 0;
 
@@ -89,6 +91,9 @@ static int current_function_is_floating = 0;
 static int current_function_return_size = DATA_NONE;
 static int current_function_return_is_unsigned = 0;
 static int current_function_returns_aggregate = 0;
+static int current_function_param_stack_bytes = 0;
+
+static enum token_kind current_function_calling_convention = TOK_EOF;
 
 static struct local_symbol *pending_struct_return_lhs = 0;
 static const char *pending_struct_return_global_name = 0;
@@ -135,6 +140,8 @@ static int declarator_array_unsized = 0;
 static int declarator_is_pointer = 0;
 static int declarator_pointer_depth = 0;
 static int declarator_has_array = 0;
+
+static enum token_kind declarator_calling_convention = TOK_EOF;
 
 static int global_initializer_accept_symbol_addresses = 0;
 static void masm_flush_data_line (void);
@@ -207,6 +214,7 @@ struct member_info_entry {
     char *tag_name;
     char *owner_tag_name;
     
+    enum token_kind calling_convention;
     int owner_size;
 
 };
@@ -223,6 +231,9 @@ static const char *postfix_copy_lvalue_tag_name = 0;
 
 static const char *last_found_member_tag_name = 0;
 static int last_found_member_is_unsigned = 0;
+
+static enum token_kind last_found_member_calling_convention = TOK_EOF;
+static enum token_kind postfix_member_calling_convention = TOK_EOF;
 
 static int postfix_member_offset = 0;
 static int postfix_member_size = 0;
@@ -248,6 +259,7 @@ static void remember_member_info_ex (const char *name, int offset, int size, int
     member_infos[member_info_count].is_array = is_array;
     member_infos[member_info_count].is_floating = is_floating ? 1 : 0;
     member_infos[member_info_count].is_unsigned = parsed_type_is_unsigned ? 1 : 0;
+    member_infos[member_info_count].calling_convention = (declarator_calling_convention != TOK_EOF) ? declarator_calling_convention : parsed_calling_convention;
     member_infos[member_info_count].tag_name = parsed_type_tag_name[0] ? xstrdup (parsed_type_tag_name) : 0;
     member_infos[member_info_count].owner_size = 0;
     member_infos[member_info_count].owner_tag_name = 0;
@@ -263,6 +275,7 @@ static int find_member_info_ex (const char *name, int *offset, int *size, int *e
     
     last_found_member_tag_name = 0;
     last_found_member_is_unsigned = 0;
+    last_found_member_calling_convention = TOK_EOF;
     
     if (!name) {
         return 0;
@@ -287,6 +300,7 @@ static int find_member_info_ex (const char *name, int *offset, int *size, int *e
     
     last_found_member_tag_name = member_infos[best].tag_name;
     last_found_member_is_unsigned = member_infos[best].is_unsigned ? 1 : 0;
+    last_found_member_calling_convention = member_infos[best].calling_convention;
 
     if (offset) {
         *offset = member_infos[best].offset;
@@ -327,6 +341,7 @@ static int find_member_info_ex_bounded (const char *name, int max_size, const ch
     
     last_found_member_tag_name = 0;
     last_found_member_is_unsigned = 0;
+    last_found_member_calling_convention = TOK_EOF;
     
     if (!name) {
         return 0;
@@ -393,6 +408,7 @@ static int find_member_info_ex_bounded (const char *name, int max_size, const ch
     
         last_found_member_tag_name = member_infos[best].tag_name;
         last_found_member_is_unsigned = member_infos[best].is_unsigned ? 1 : 0;
+        last_found_member_calling_convention = member_infos[best].calling_convention;
         
         if (offset) {
             *offset = member_infos[best].offset;
@@ -554,6 +570,8 @@ struct typedef_entry {
     
     char *tag_name;
     long array_count;
+    
+    enum token_kind calling_convention;
 
 };
 
@@ -580,6 +598,8 @@ static void clear_typedef_names (void) {
         typedef_names[i].is_array = 0;
         typedef_names[i].array_count = 1;
         typedef_names[i].array_element_size = DATA_NONE;
+        
+        typedef_names[i].calling_convention = TOK_EOF;
     
     }
     
@@ -624,7 +644,7 @@ static int is_current_typedef_name (void) {
 
 }
 
-static void save_typedef_name (const char *name, int size, int is_unsigned, int is_void, int is_aggregate, int is_array, long array_count, int array_element_size, const int *field_sizes, int field_count) {
+static void save_typedef_name (const char *name, int size, int is_unsigned, int is_void, int is_aggregate, int is_array, long array_count, int array_element_size, enum token_kind calling_convention, const int *field_sizes, int field_count) {
 
     struct typedef_entry *entry;
     int i;
@@ -647,6 +667,7 @@ static void save_typedef_name (const char *name, int size, int is_unsigned, int 
         entry = &typedef_names[typedef_name_count++];
         entry->name = xstrdup (name);
         entry->tag_name = 0;
+        entry->calling_convention = TOK_EOF;
     
     }
     
@@ -673,6 +694,7 @@ static void save_typedef_name (const char *name, int size, int is_unsigned, int 
     entry->is_array = is_array ? 1 : 0;
     entry->array_count = array_count > 0 ? array_count : 1;
     entry->array_element_size = array_element_size > 0 ? array_element_size : DATA_INT;
+    entry->calling_convention = calling_convention;
     
     for (i = 0; i < field_count && i < MAX_AGG_FIELDS; i++) {
         entry->field_sizes[entry->field_count++] = field_sizes[i];
@@ -716,6 +738,7 @@ static void update_typedef_name_from_aggregate_tag (const char *name, int size, 
     entry->is_array = 0;
     entry->array_count = 1;
     entry->array_element_size = DATA_NONE;
+    entry->calling_convention = TOK_EOF;
     entry->field_count = 0;
     
     if (entry->tag_name) {
@@ -751,6 +774,7 @@ static void load_typedef_name (struct typedef_entry *entry) {
         parsed_type_is_array_typedef = 0;
         parsed_type_array_count = 1;
         parsed_type_array_element_size = DATA_NONE;
+        parsed_calling_convention = TOK_EOF;
         
         append_parsed_field (DATA_INT & 0x1f);
         return;
@@ -766,6 +790,7 @@ static void load_typedef_name (struct typedef_entry *entry) {
     parsed_type_is_array_typedef = entry->is_array;
     parsed_type_array_count = entry->array_count > 0 ? entry->array_count : 1;
     parsed_type_array_element_size = entry->array_element_size > 0 ? entry->array_element_size : DATA_INT;
+    parsed_calling_convention = entry->calling_convention;
     
     parsed_type_has_tag = 0;
     parsed_type_tag_name[0] = '\0';
@@ -917,6 +942,7 @@ struct global_symbol_entry {
     int is_implicit;
     int extern_emitted;
     
+    enum token_kind calling_convention;
     char *tag_name;
 
 };
@@ -957,6 +983,8 @@ static void clear_global_symbols (void) {
         global_symbols[i].is_unsigned = 0;
         global_symbols[i].is_floating = 0;
         global_symbols[i].returns_void = 0;
+        
+        global_symbols[i].calling_convention = TOK_EOF;
         
         {
         
@@ -1374,6 +1402,28 @@ static void set_global_symbol_returns_void (const char *name, int returns_void) 
 
 }
 
+static void set_global_symbol_calling_convention (const char *name, enum token_kind calling_convention) {
+
+    int i = find_global_symbol (name);
+    
+    if (i >= 0) {
+        global_symbols[i].calling_convention = calling_convention;
+    }
+
+}
+
+static enum token_kind get_global_symbol_calling_convention (const char *name) {
+
+    int i = find_global_symbol (name);
+    
+    if (i >= 0) {
+        return global_symbols[i].calling_convention;
+    }
+    
+    return TOK_EOF;
+
+}
+
 static int get_global_symbol_returns_void (const char *name) {
 
     int i = find_global_symbol (name);
@@ -1564,6 +1614,7 @@ static int add_global_symbol (const char *name, int kind, int is_extern, const c
     global_symbols[global_symbol_count].pointed_is_floating = 0;
     global_symbols[global_symbol_count].pointed_is_unsigned = 0;
     global_symbols[global_symbol_count].returns_void = 0;
+    global_symbols[global_symbol_count].calling_convention = TOK_EOF;
     
     {
     
@@ -1613,6 +1664,7 @@ static void ensure_global_function_symbol (const char *name, const char *line_st
         
         if (i >= 0) {
         
+            global_symbols[i].calling_convention = TOK_EOF;
             global_symbols[i].size = DATA_INT & 0x1f;
             global_symbols[i].is_unsigned = 0;
             global_symbols[i].is_floating = 0;
@@ -7322,6 +7374,7 @@ static void parse_type_spec (void) {
     parsed_type_is_void = 0;
     parsed_type_only_qualifiers = 0;
     parsed_type_size = DATA_NONE;
+    parsed_calling_convention = TOK_EOF;
     
     clear_parsed_fields ();
     
@@ -7331,7 +7384,7 @@ static void parse_type_spec (void) {
            tok.kind == TOK_SHORT || tok.kind == TOK_LONG || tok.kind == TOK_CHAR ||
            tok.kind == TOK_INT || tok.kind == TOK_VOID || tok.kind == TOK_FLOAT ||
            tok.kind == TOK_DOUBLE || tok.kind == TOK_INLINE || tok.kind == TOK_RESTRICT ||
-           tok.kind == TOK_DLLEXPORT || token_is_ms_int_type_name ()) {
+           tok.kind == TOK_DLLEXPORT || tok.kind == TOK_STDCALL || token_is_ms_int_type_name ()) {
         
         saw = 1;
         
@@ -7342,7 +7395,15 @@ static void parse_type_spec (void) {
             saw_real_type = 1;
         }
         
-        if (tok.kind == TOK_DLLEXPORT) {
+        if (tok.kind == TOK_STDCALL) {
+        
+            if (parsed_calling_convention == TOK_STDCALL) {
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate '__stdcall'");
+            } else {
+                parsed_calling_convention = TOK_STDCALL;
+            }
+        
+        } else if (tok.kind == TOK_DLLEXPORT) {
         
             if (parsed_dllexport) {
                 report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate '__dllexport'");
@@ -8061,6 +8122,7 @@ static void parse_direct_declarator (char **out_name) {
                     
                     } else if (is_type_start (tok.kind)) {
                     
+                        enum token_kind saved_calling_convention = declarator_calling_convention;
                         long saved_array_count = declarator_array_count;
                         
                         int saved_type_size = parsed_type_size;
@@ -8151,6 +8213,7 @@ static void parse_direct_declarator (char **out_name) {
                         parsed_type_has_tag = saved_has_tag;
                         parsed_type_is_inline = saved_is_inline;
                         
+                        declarator_calling_convention = saved_calling_convention;
                         declarator_is_pointer = saved_is_pointer;
                         declarator_pointer_depth = saved_pointer_depth;
                         declarator_has_array = saved_has_array;
@@ -8254,6 +8317,13 @@ static void parse_direct_declarator (char **out_name) {
 
 static void parse_declarator_inner (char **out_name) {
 
+    while (tok.kind == TOK_STDCALL) {
+    
+        declarator_calling_convention = tok.kind;
+        get_token ();
+    
+    }
+    
     while (tok.kind == TOK_STAR) {
     
         declarator_is_pointer = 1;
@@ -8261,8 +8331,14 @@ static void parse_declarator_inner (char **out_name) {
         
         get_token ();
         
-        while (tok.kind == TOK_CONST || tok.kind == TOK_VOLATILE || tok.kind == TOK_RESTRICT) {
+        while (tok.kind == TOK_CONST || tok.kind == TOK_VOLATILE || tok.kind == TOK_RESTRICT || tok.kind == TOK_STDCALL) {
+        
+            if (tok.kind == TOK_STDCALL) {
+                declarator_calling_convention = tok.kind;
+            }
+            
             get_token ();
+        
         }
     
     }
@@ -8281,6 +8357,7 @@ static void parse_declarator (char **out_name) {
     const char *saved_captured_declarator_name_start = captured_declarator_name_start;
     const char *saved_captured_declarator_name_caret = captured_declarator_name_caret;
 
+    enum token_kind saved_declarator_calling_convention = declarator_calling_convention;
     unsigned long saved_captured_declarator_name_line = captured_declarator_name_line;
     
     if (top_level) {
@@ -8289,6 +8366,7 @@ static void parse_declarator (char **out_name) {
             clear_pending_params ();
         }
         
+        declarator_calling_convention = TOK_EOF;
         capture_declarator_name_location = 1;
         
         captured_declarator_name_location = 0;
@@ -8349,6 +8427,8 @@ static void parse_declarator (char **out_name) {
         captured_declarator_name_caret = saved_captured_declarator_name_caret;
         captured_declarator_name_line = saved_captured_declarator_name_line;
     
+    } else {
+        declarator_calling_convention = saved_declarator_calling_convention;
     }
 
 }
@@ -8895,7 +8975,12 @@ static void emit_function_end (void) {
         }
         
         fprintf (state->ofp, "    leave\n");
-        fprintf (state->ofp, "    ret\n");
+        
+        if (current_function_calling_convention == TOK_STDCALL && current_function_param_stack_bytes > 0) {
+            fprintf (state->ofp, "    ret %d\n", current_function_param_stack_bytes);
+        } else {
+            fprintf (state->ofp, "    ret\n");
+        }
     
     } else {
     
@@ -8916,7 +9001,18 @@ static void emit_function_end (void) {
         }
         
         fprintf (state->ofp, "    leave\n");
-        fprintf (state->ofp, "    ret\n");
+        
+        if (current_function_calling_convention == TOK_STDCALL && current_function_param_stack_bytes > 0) {
+        
+            if (state->syntax & ASM_SYNTAX_INTEL) {
+                fprintf (state->ofp, "    ret %d\n", current_function_param_stack_bytes);
+            } else {
+                fprintf (state->ofp, "    ret $%d\n", current_function_param_stack_bytes);
+            }
+        
+        } else {
+            fprintf (state->ofp, "    ret\n");
+        }
     
     }
 
@@ -10777,7 +10873,8 @@ static void parse_block (void) {
                                 (!declarator_is_pointer && (parsed_type_is_aggregate || declarator_has_array)),
                                     (!declarator_is_pointer && declarator_has_array),
                                         declarator_array_count, parsed_type_size,
-                                            object_fields, object_field_count);
+                                            (declarator_calling_convention != TOK_EOF) ? declarator_calling_convention : parsed_calling_convention,
+                                                object_fields, object_field_count);
                 
                 } else if (name && parsed_storage_class == STORAGE_EXTERN) {
                 
@@ -15361,6 +15458,8 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
     postfix_member_size = 0;
     postfix_member_is_floating = 0;
     postfix_member_is_unsigned = 0;
+    
+    postfix_member_calling_convention = TOK_EOF;
 
     {
     
@@ -15454,6 +15553,7 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
             postfix_member_size = size;
             postfix_member_is_floating = is_floating;
             postfix_member_is_unsigned = is_unsigned;
+            postfix_member_calling_convention = last_found_member_calling_convention;
             
             if (pointer_depth > 0 || is_array) {
                 current_object_size = elem_size;
@@ -24615,6 +24715,8 @@ static int emit_push_global_aggregate_argument_now (const char *name) {
 
 static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result_reg) {
 
+    enum token_kind saved_calling_convention = postfix_member_calling_convention;
+    
     int argc = 0;
     int total_arg_bytes = 0;
     int arg_bytes;
@@ -24801,7 +24903,12 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
             }
             
             fprintf (state->ofp, "    call ecx\n");
-            fprintf (state->ofp, "    add esp, %d\n", total_arg_bytes + (DATA_PTR & 0x1f));
+            
+            if (saved_calling_convention == TOK_STDCALL) {
+                fprintf (state->ofp, "    add esp, %d\n", (DATA_PTR & 0x1f));
+            } else {
+                fprintf (state->ofp, "    add esp, %d\n", total_arg_bytes + (DATA_PTR & 0x1f));
+            }
             
             if (strcmp (result_reg, "eax") != 0) {
                 fprintf (state->ofp, "    mov %s, eax\n", result_reg);
@@ -24811,7 +24918,12 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
         
             fprintf (state->ofp, "    movl %d(%%esp), %%ecx\n", total_arg_bytes);
             fprintf (state->ofp, "    call *%%ecx\n");
-            fprintf (state->ofp, "    addl $%d, %%esp\n", total_arg_bytes + (DATA_PTR & 0x1f));
+            
+            if (saved_calling_convention == TOK_STDCALL) {
+                fprintf (state->ofp, "    addl $%d, %%esp\n", (DATA_PTR & 0x1f));
+            } else {
+                fprintf (state->ofp, "    addl $%d, %%esp\n", total_arg_bytes + (DATA_PTR & 0x1f));
+            }
             
             if (strcmp (result_reg, "eax") != 0) {
                 fprintf (state->ofp, "    movl %%eax, %%%s\n", result_reg);
@@ -25366,7 +25478,7 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                 fprintf (state->ofp, "    call %s\n", asm_name);
             }
             
-            if (total_arg_bytes > 0) {
+            if (total_arg_bytes > 0 && get_global_symbol_calling_convention (name) != TOK_STDCALL) {
                 fprintf (state->ofp, "    add esp, %d\n", total_arg_bytes);
             }
             
@@ -25390,7 +25502,7 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                 fprintf (state->ofp, "    call %s\n", asm_name);
             }
             
-            if (total_arg_bytes > 0) {
+            if (total_arg_bytes > 0 && get_global_symbol_calling_convention (name) != TOK_STDCALL) {
                 fprintf (state->ofp, "    addl $%d, %%esp\n", total_arg_bytes);
             }
             
@@ -30194,6 +30306,8 @@ static int parse_identifier_assignment_statement (void) {
                 
                 if (tok.kind == TOK_LPAREN) {
                 
+                    enum token_kind member_calling_convention = last_found_member_calling_convention;
+                    
                     FILE **arg_tmp_ofps = 0;
                     FILE **new_arg_tmp_ofps;
                     FILE *arg_tmp_ofp;
@@ -30306,13 +30420,23 @@ static int parse_identifier_assignment_statement (void) {
                             }
                             
                             fprintf (state->ofp, "    call ecx\n");
-                            fprintf (state->ofp, "    add esp, %d\n", total_arg_bytes + (DATA_PTR & 0x1f));
+                            
+                            if (member_calling_convention == TOK_STDCALL) {
+                                fprintf (state->ofp, "    add esp, %d\n", (DATA_PTR & 0x1f));
+                            } else {
+                                fprintf (state->ofp, "    add esp, %d\n", total_arg_bytes + (DATA_PTR & 0x1f));
+                            }
                         
                         } else {
                         
                             fprintf (state->ofp, "    movl %d(%%esp), %%ecx\n", total_arg_bytes);
                             fprintf (state->ofp, "    call *%%ecx\n");
-                            fprintf (state->ofp, "    addl $%d, %%esp\n", total_arg_bytes + (DATA_PTR & 0x1f));
+                            
+                            if (member_calling_convention == TOK_STDCALL) {
+                                fprintf (state->ofp, "    addl $%d, %%esp\n", (DATA_PTR & 0x1f));
+                            } else {
+                                fprintf (state->ofp, "    addl $%d, %%esp\n", total_arg_bytes + (DATA_PTR & 0x1f));
+                            }
                         
                         }
                     
@@ -32064,40 +32188,12 @@ static int source_condition_logical_rhs_is_enum_compare_now (const char *p) {
         return 0;
     }
     
-    if ((p[0] == '&' && p[1] == '&') || (p[0] == '|' && p[1] == '|')) {
-        p += 2;
-    } else {
-        return 0;
-    }
-    
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
-        p++;
-    }
-    
-    if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
-        return 0;
-    }
-    
-    while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_') {
-        p++;
-    }
-    
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
-        p++;
-    }
-    
-    if (*p == '(') {
-        return 0;
-    }
-    
     for (;;) {
     
-        if (*p == '.') {
-            p++;
-        } else if (p[0] == '-' && p[1] == '>') {
+        if ((p[0] == '&' && p[1] == '&') || (p[0] == '|' && p[1] == '|')) {
             p += 2;
         } else {
-            break;
+            return 0;
         }
         
         while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
@@ -32115,27 +32211,69 @@ static int source_condition_logical_rhs_is_enum_compare_now (const char *p) {
         while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
             p++;
         }
+        
+        if (*p == '(') {
+            return 0;
+        }
+        
+        for (;;) {
+        
+            if (*p == '.') {
+                p++;
+            } else if (p[0] == '-' && p[1] == '>') {
+                p += 2;
+            } else {
+                break;
+            }
+            
+            while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+                p++;
+            }
+            
+            if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
+                return 0;
+            }
+            
+            while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_') {
+                p++;
+            }
+            
+            while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+                p++;
+            }
+        
+        }
+        
+        if ((p[0] == '=' && p[1] == '=') || (p[0] == '!' && p[1] == '=') ||
+            (p[0] == '<' && p[1] == '=') || (p[0] == '>' && p[1] == '=')) {
+            p += 2;
+        } else if (*p == '<' || *p == '>') {
+            p++;
+        } else {
+            return 0;
+        }
+        
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+        
+        if (!source_condition_skip_rhs_const_or_enum_now (&p)) {
+            return 0;
+        }
+        
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+        
+        if (source_condition_tail_end_now (p)) {
+            return 1;
+        }
+        
+        if (!((p[0] == '&' && p[1] == '&') || (p[0] == '|' && p[1] == '|'))) {
+            return 0;
+        }
     
     }
-    
-    if ((p[0] == '=' && p[1] == '=') || (p[0] == '!' && p[1] == '=') ||
-        (p[0] == '<' && p[1] == '=') || (p[0] == '>' && p[1] == '=')) {
-        p += 2;
-    } else if (*p == '<' || *p == '>') {
-        p++;
-    } else {
-        return 0;
-    }
-    
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
-        p++;
-    }
-    
-    if (!source_condition_skip_rhs_const_or_enum_now (&p)) {
-        return 0;
-    }
-    
-    return 1;
 
 }
 
@@ -36502,6 +36640,7 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
         set_global_symbol_unsigned (name, 0);
         set_global_symbol_floating (name, return_is_floating);
         set_global_symbol_returns_void (name, return_is_void);
+        set_global_symbol_calling_convention (name, (declarator_calling_convention != TOK_EOF) ? declarator_calling_convention : parsed_calling_convention);
         set_global_symbol_param_count (name, saved_declarator_function_param_count, saved_declarator_function_has_prototype || saved_declarator_function_param_count > 0, saved_declarator_function_is_variadic);
         
         if (is_inline) {
@@ -36525,6 +36664,8 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     current_function_return_is_unsigned = return_is_unsigned;
     current_function_return_size = return_size;
     current_function_returns_aggregate = (!return_is_void && !return_is_floating && return_size > (DATA_LLONG & 0x1f));
+    current_function_calling_convention = (declarator_calling_convention != TOK_EOF) ? declarator_calling_convention : parsed_calling_convention;
+    current_function_param_stack_bytes = saved_declarator_function_param_count * (DATA_PTR & 0x1f);
     current_function_has_return_statement = 0;
     
     parse_old_style_param_decls ();
@@ -38198,7 +38339,8 @@ static void parse_external_after_type (void) {
                             (!declarator_is_pointer && (parsed_type_is_aggregate || declarator_has_array)),
                                 (!declarator_is_pointer && declarator_has_array),
                                     declarator_array_count, parsed_type_size,
-                                        object_fields, object_field_count);
+                                        (declarator_calling_convention != TOK_EOF) ? declarator_calling_convention : parsed_calling_convention,
+                                            object_fields, object_field_count);
             
             }
             
