@@ -7464,8 +7464,42 @@ static void parse_enum_body (void) {
 
 }
 
-static void parse_declarator (char **out_name);
 static void parse_declarator_inner (char **out_name);
+static void parse_declarator (char **out_name);
+
+static void parse_decl_modifier (void) {
+
+    if (tok.kind == TOK_STDCALL) {
+    
+        if (parsed_calling_convention == TOK_EOF && declarator_calling_convention == TOK_EOF) {
+            parsed_calling_convention = TOK_STDCALL;
+        }
+    
+    } else if (tok.kind == TOK_DLLEXPORT) {
+    
+        if (parsed_dllexport) {
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate '__dllexport'");
+        } else if (parsed_dllimport) {
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "'__dllexport' and '__dllimport' cannot both be specified");
+        } else {
+            parsed_dllexport = 1;
+        }
+    
+    } else if (tok.kind == TOK_DLLIMPORT) {
+    
+        if (parsed_dllimport) {
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate '__dllimport'");
+        } else if (parsed_dllexport) {
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "'__dllexport' and '__dllimport' cannot both be specified");
+        } else {
+            parsed_dllimport = 1;
+        }
+    
+    }
+    
+    get_token ();
+
+}
 
 static void parse_type_spec (void) {
 
@@ -7514,33 +7548,10 @@ static void parse_type_spec (void) {
             saw_real_type = 1;
         }
         
-        if (tok.kind == TOK_STDCALL) {
+        if (tok.kind == TOK_STDCALL || tok.kind == TOK_DLLEXPORT || tok.kind == TOK_DLLIMPORT) {
         
-            if (parsed_calling_convention == TOK_STDCALL) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate '__stdcall'");
-            } else {
-                parsed_calling_convention = TOK_STDCALL;
-            }
-        
-        } else if (tok.kind == TOK_DLLEXPORT) {
-        
-            if (parsed_dllexport) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate '__dllexport'");
-            } else if (parsed_dllimport) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "'__dllexport' and '__dllimport' cannot both be specified");
-            } else {
-                parsed_dllexport = 1;
-            }
-        
-        } else if (tok.kind == TOK_DLLIMPORT) {
-        
-            if (parsed_dllimport) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate '__dllimport'");
-            } else if (parsed_dllexport) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "'__dllexport' and '__dllimport' cannot both be specified");
-            } else {
-                parsed_dllimport = 1;
-            }
+            parse_decl_modifier ();
+            continue;
         
         } else if (tok.kind == TOK_EXTERN) {
         
@@ -8451,10 +8462,19 @@ static void parse_direct_declarator (char **out_name) {
 
 static void parse_declarator_inner (char **out_name) {
 
-    while (tok.kind == TOK_STDCALL) {
+    while (tok.kind == TOK_STDCALL || tok.kind == TOK_DLLEXPORT || tok.kind == TOK_DLLIMPORT) {
     
-        declarator_calling_convention = tok.kind;
-        get_token ();
+        if (tok.kind == TOK_STDCALL) {
+        
+            if (declarator_calling_convention == TOK_EOF && parsed_calling_convention == TOK_EOF) {
+                declarator_calling_convention = tok.kind;
+            }
+            
+            get_token ();
+        
+        } else {
+            parse_decl_modifier ();
+        }
     
     }
     
@@ -8465,13 +8485,21 @@ static void parse_declarator_inner (char **out_name) {
         
         get_token ();
         
-        while (tok.kind == TOK_CONST || tok.kind == TOK_VOLATILE || tok.kind == TOK_RESTRICT || tok.kind == TOK_STDCALL) {
+        while (tok.kind == TOK_CONST || tok.kind == TOK_VOLATILE || tok.kind == TOK_RESTRICT || tok.kind == TOK_STDCALL || tok.kind == TOK_DLLEXPORT || tok.kind == TOK_DLLIMPORT) {
         
             if (tok.kind == TOK_STDCALL) {
-                declarator_calling_convention = tok.kind;
-            }
             
-            get_token ();
+                if (declarator_calling_convention == TOK_EOF && parsed_calling_convention == TOK_EOF) {
+                    declarator_calling_convention = tok.kind;
+                }
+                
+                get_token ();
+            
+            } else if (tok.kind == TOK_DLLEXPORT || tok.kind == TOK_DLLIMPORT) {
+                parse_decl_modifier ();
+            } else {
+                get_token ();
+            }
         
         }
     
