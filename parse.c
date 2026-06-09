@@ -16,6 +16,7 @@ static enum token_kind parsed_calling_convention = TOK_EOF;
 
 static struct vector vec_dllexports = { 0 };
 static int parsed_dllexport = 0;
+static int parsed_dllimport = 0;
 
 #define     SECTION_NONE                0
 #define     SECTION_TEXT                1
@@ -916,6 +917,7 @@ struct global_symbol_entry {
     char *name;
     
     int is_unsigned, is_extern;
+    int is_dllimport;
     int kind, size;
     
     int array_element_size;
@@ -979,6 +981,7 @@ static void clear_global_symbols (void) {
         global_symbols[i].is_array = 0;
         global_symbols[i].array_dimensions = 0;
         
+        global_symbols[i].is_dllimport = 0;
         global_symbols[i].is_extern = 0;
         global_symbols[i].is_unsigned = 0;
         global_symbols[i].is_floating = 0;
@@ -1156,6 +1159,38 @@ static const char *asm_global_symbol_name (const char *name) {
 
 }
 
+static const char *asm_global_import_symbol_name (const char *name) {
+
+    static char buffers[8][512];
+    static int index = 0;
+    
+    const char *decorated;
+    char *out;
+    
+    unsigned long len;
+    
+    if (!(decorated = asm_global_symbol_name (name)) || asm_symbol_is_internal (name)) {
+        return decorated;
+    }
+    
+    index = (index + 1) & 7;
+    
+    out = buffers[index];
+    len = strlen (decorated);
+    
+    if (len > sizeof (buffers[0]) - 7) {
+        len = sizeof (buffers[0]) - 7;
+    }
+    
+    sprintf (out, "__imp_");
+    
+    memcpy (out + 6, decorated, len);
+    out[len + 6] = 0;
+    
+    return out;
+
+}
+
 static int get_global_symbol_kind (const char *name) {
 
     int i = find_global_symbol (name);
@@ -1184,6 +1219,34 @@ static int get_global_symbol_unsigned (const char *name) {
     
     if (i >= 0) {
         return global_symbols[i].is_unsigned;
+    }
+    
+    return 0;
+
+}
+
+static void set_global_symbol_dllimport (const char *name, int is_dllimport) {
+
+    int i = find_global_symbol (name);
+    
+    if (i >= 0) {
+    
+        global_symbols[i].is_dllimport = is_dllimport ? 1 : 0;
+        
+        if (is_dllimport) {
+            global_symbols[i].is_extern = 1;
+        }
+    
+    }
+
+}
+
+static int get_global_symbol_dllimport (const char *name) {
+
+    int i = find_global_symbol (name);
+    
+    if (i >= 0) {
+        return global_symbols[i].is_dllimport ? 1 : 0;
     }
     
     return 0;
@@ -1658,6 +1721,7 @@ static int add_global_symbol (const char *name, int kind, int is_extern, const c
     global_symbols[global_symbol_count].name = xstrdup (name);
     global_symbols[global_symbol_count].kind = kind;
     global_symbols[global_symbol_count].is_extern = is_extern;
+    global_symbols[global_symbol_count].is_dllimport = 0;
     global_symbols[global_symbol_count].is_unsigned = 0;
     global_symbols[global_symbol_count].is_floating = 0;
     global_symbols[global_symbol_count].is_array = 0;
@@ -6822,7 +6886,8 @@ static int is_type_start (enum token_kind k) {
             return 0;
         
         case TOK_AUTO:          case TOK_REGISTER:      case TOK_STATIC:
-        case TOK_DLLEXPORT:     case TOK_EXTERN:        case TOK_TYPEDEF:       case TOK_INLINE:
+        case TOK_DLLEXPORT:     case TOK_DLLIMPORT:
+        case TOK_EXTERN:        case TOK_TYPEDEF:       case TOK_INLINE:
         case TOK_CONST:         case TOK_VOLATILE:      case TOK_RESTRICT:
         case TOK_SIGNED:        case TOK_UNSIGNED:
         case TOK_SHORT:         case TOK_LONG:
@@ -7427,6 +7492,8 @@ static void parse_type_spec (void) {
     parsed_type_only_qualifiers = 0;
     parsed_type_size = DATA_NONE;
     parsed_calling_convention = TOK_EOF;
+    parsed_dllexport = 0;
+    parsed_dllimport = 0;
     
     clear_parsed_fields ();
     
@@ -7436,7 +7503,7 @@ static void parse_type_spec (void) {
            tok.kind == TOK_SHORT || tok.kind == TOK_LONG || tok.kind == TOK_CHAR ||
            tok.kind == TOK_INT || tok.kind == TOK_VOID || tok.kind == TOK_FLOAT ||
            tok.kind == TOK_DOUBLE || tok.kind == TOK_INLINE || tok.kind == TOK_RESTRICT ||
-           tok.kind == TOK_DLLEXPORT || tok.kind == TOK_STDCALL || token_is_ms_int_type_name ()) {
+           tok.kind == TOK_DLLEXPORT || tok.kind == TOK_DLLIMPORT || tok.kind == TOK_STDCALL || token_is_ms_int_type_name ()) {
         
         saw = 1;
         
@@ -7459,8 +7526,20 @@ static void parse_type_spec (void) {
         
             if (parsed_dllexport) {
                 report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate '__dllexport'");
+            } else if (parsed_dllimport) {
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "'__dllexport' and '__dllimport' cannot both be specified");
             } else {
                 parsed_dllexport = 1;
+            }
+        
+        } else if (tok.kind == TOK_DLLIMPORT) {
+        
+            if (parsed_dllimport) {
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate '__dllimport'");
+            } else if (parsed_dllexport) {
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "'__dllexport' and '__dllimport' cannot both be specified");
+            } else {
+                parsed_dllimport = 1;
             }
         
         } else if (tok.kind == TOK_EXTERN) {
@@ -10886,6 +10965,8 @@ static void parse_block (void) {
                 char *init_symbols[MAX_AGG_FIELDS];
                 char static_label[128];
                 
+                int declaration_dllimport = parsed_dllimport;
+                
                 for (i = 0; i < MAX_AGG_FIELDS; i++) {
                     init_symbols[i] = 0;
                 }
@@ -10931,9 +11012,11 @@ static void parse_block (void) {
                                             (declarator_calling_convention != TOK_EOF) ? declarator_calling_convention : parsed_calling_convention,
                                                 object_fields, object_field_count);
                 
-                } else if (name && parsed_storage_class == STORAGE_EXTERN) {
+                } else if (name && (parsed_storage_class == STORAGE_EXTERN || declaration_dllimport)) {
                 
-                    if (add_global_symbol (name, (declarator_has_function && !declarator_function_is_pointer) ? GLOBAL_SYMBOL_FUNCTION : GLOBAL_SYMBOL_OBJECT, 1, name_start, name_caret, name_line)) {
+                    add_global_symbol (name, (declarator_has_function && !declarator_function_is_pointer) ? GLOBAL_SYMBOL_FUNCTION : GLOBAL_SYMBOL_OBJECT, 1, name_start, name_caret, name_line);
+                    
+                    if (find_global_symbol (name) >= 0) {
                     
                         set_global_symbol_size (name, (declarator_has_function && !declarator_is_pointer && !declarator_function_is_pointer) ? parsed_type_size : ((declarator_has_function || declarator_is_pointer) ? DATA_PTR : declarator_object_size (parsed_type_size)));
                         set_global_symbol_pointer_info (name, declarator_effective_pointer_depth_now (),
@@ -10946,10 +11029,15 @@ static void parse_block (void) {
                         if (declarator_has_function) {
                         
                             set_global_symbol_param_count (name, declarator_function_param_count, declarator_function_has_prototype || declarator_function_param_count > 0, declarator_function_is_variadic);
+                            
+                            set_global_symbol_calling_convention (name, (declarator_calling_convention != TOK_EOF) ? declarator_calling_convention : parsed_calling_convention);
+                            set_global_symbol_dllimport (name, declaration_dllimport);
+                            
                             copy_pending_params_to_global_symbol (name);
                         
                         }
                         
+                        set_global_symbol_dllimport (name, declaration_dllimport);
                         switch_section (SECTION_TEXT);
                     
                     }
@@ -11036,7 +11124,7 @@ static void parse_block (void) {
                         ensure_block_stack_allocated (block_stack_start, &block_stack_bytes, &block_stack_emitted);
                     }
                     
-                    if (parsed_storage_class == STORAGE_EXTERN) {
+                    if ((parsed_storage_class == STORAGE_EXTERN || parsed_dllimport)) {
                     
                         report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret, "extern declaration '%s' is initialized", name ? name : "");
                         skip_initializer ();
@@ -11615,6 +11703,41 @@ static void emit_load_global_to_reg_ex (const char *reg, const char *symbol, int
     }
     
     emit_extern_reference_symbol (symbol, size);
+    
+    if (get_global_symbol_dllimport (symbol) && get_global_symbol_kind (symbol) == GLOBAL_SYMBOL_OBJECT) {
+    
+        asm_symbol = asm_global_import_symbol_name (symbol);
+        
+        if (state->syntax & ASM_SYNTAX_INTEL) {
+        
+            fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    mov %s, dword [%s]\n" : "    mov %s, dword ptr %s\n"), reg, asm_symbol);
+            
+            if (size == (DATA_CHAR & 0x1f)) {
+                fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    %s %s, byte [%s]\n" : "    %s %s, byte ptr [%s]\n"), is_unsigned ? "movzx" : "movsx", reg, reg);
+            } else if (size == (DATA_SHORT & 0x1f)) {
+                fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    %s %s, word [%s]\n" : "    %s %s, word ptr [%s]\n"), is_unsigned ? "movzx" : "movsx", reg, reg);
+            } else {
+                fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    mov %s, dword [%s]\n" : "    mov %s, dword ptr [%s]\n"), reg, reg);
+            }
+        
+        } else {
+        
+            fprintf (state->ofp, "    movl %s, %%%s\n", asm_symbol, reg);
+            
+            if (size == (DATA_CHAR & 0x1f)) {
+                fprintf (state->ofp, "    %s (%%%s), %%%s\n", is_unsigned ? "movzbl" : "movsbl", reg, reg);
+            } else if (size == (DATA_SHORT & 0x1f)) {
+                fprintf (state->ofp, "    %s (%%%s), %%%s\n", is_unsigned ? "movzwl" : "movswl", reg, reg);
+            } else {
+                fprintf (state->ofp, "    movl (%%%s), %%%s\n", reg, reg);
+            }
+        
+        }
+        
+        return;
+    
+    }
+    
     asm_symbol = asm_global_symbol_name (symbol);
     
     if (state->syntax & ASM_SYNTAX_INTEL) {
@@ -11685,6 +11808,43 @@ static void emit_store_reg_to_global (const char *symbol, int size, const char *
     
     if (!state->ofp || !symbol || !reg) {
         return;
+    }
+    
+    if (get_global_symbol_dllimport (symbol) && get_global_symbol_kind (symbol) == GLOBAL_SYMBOL_OBJECT) {
+    
+        const char *addr_reg = (strcmp (reg, "ecx") == 0) ? "edx" : "ecx";
+        
+        asm_symbol = asm_global_import_symbol_name (symbol);
+        emit_extern_reference_symbol (symbol, size);
+        
+        if (state->syntax & ASM_SYNTAX_INTEL) {
+        
+            fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    mov %s, dword [%s]\n" : "    mov %s, dword ptr %s\n"), addr_reg, asm_symbol);
+            
+            if (size == (DATA_CHAR & 0x1f)) {
+                fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    mov byte [%s], %cl\n" : "    mov byte ptr [%s], %cl\n"), addr_reg, reg[1]);
+            } else if (size == (DATA_SHORT & 0x1f)) {
+                fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    mov word [%s], %cx\n" : "    mov word ptr [%s], %cx\n"), addr_reg, reg[1]);
+            } else {
+                fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    mov dword [%s], %s\n" : "    mov dword ptr [%s], %s\n"), addr_reg, reg);
+            }
+        
+        } else {
+        
+            fprintf (state->ofp, "    movl %s, %%%s\n", asm_symbol, addr_reg);
+            
+            if (size == (DATA_CHAR & 0x1f)) {
+                fprintf (state->ofp, "    movb %%%cl, (%%%s)\n", reg[1], addr_reg);
+            } else if (size == (DATA_SHORT & 0x1f)) {
+                fprintf (state->ofp, "    movw %%%cx, (%%%s)\n", reg[1], addr_reg);
+            } else {
+                fprintf (state->ofp, "    movl %%%s, (%%%s)\n", reg, addr_reg);
+            }
+        
+        }
+        
+        return;
+    
     }
     
     asm_symbol = asm_global_symbol_name (symbol);
@@ -25529,6 +25689,8 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                 emit_load_global_to_reg ("ecx", name, DATA_PTR);
                 fprintf (state->ofp, "    call ecx\n");
             
+            } else if (get_global_symbol_dllimport (name)) {
+                fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    call dword [%s]\n" : "    call dword ptr %s\n"), asm_global_import_symbol_name (name));
             } else {
                 fprintf (state->ofp, "    call %s\n", asm_name);
             }
@@ -25553,6 +25715,8 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                 emit_load_global_to_reg ("ecx", name, DATA_PTR);
                 fprintf (state->ofp, "    call *%%ecx\n");
             
+            } else if (get_global_symbol_dllimport (name)) {
+                fprintf (state->ofp, "    call *%s\n", asm_global_import_symbol_name (name));
             } else {
                 fprintf (state->ofp, "    call %s\n", asm_name);
             }
@@ -36689,6 +36853,10 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     
     if (emit_body) {
     
+        if (parsed_dllimport) {
+            report_line_at (get_filename (), last_declarator_name_line, REPORT_ERROR, last_declarator_name_start, last_declarator_name_caret, "function '%s' cannot be defined with '__dllimport'", name);
+        }
+        
         should_emit = add_global_symbol (name, GLOBAL_SYMBOL_FUNCTION, 0, last_declarator_name_start, last_declarator_name_caret, last_declarator_name_line);
         
         set_global_symbol_size (name, return_is_void ? DATA_VOID : return_size);
@@ -36696,6 +36864,7 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
         set_global_symbol_floating (name, return_is_floating);
         set_global_symbol_returns_void (name, return_is_void);
         set_global_symbol_calling_convention (name, (declarator_calling_convention != TOK_EOF) ? declarator_calling_convention : parsed_calling_convention);
+        set_global_symbol_dllimport (name, 0);
         set_global_symbol_param_count (name, saved_declarator_function_param_count, saved_declarator_function_has_prototype || saved_declarator_function_param_count > 0, saved_declarator_function_is_variadic);
         
         if (is_inline) {
@@ -38252,7 +38421,14 @@ static const char *masm_extern_type_name (int size, int is_function) {
 
 static void emit_extern_line (const char *name, int size, int is_function) {
 
-    const char *asm_name = asm_global_symbol_name (name);
+    const char *asm_name = get_global_symbol_dllimport (name) ? asm_global_import_symbol_name (name) : asm_global_symbol_name (name);
+    
+    if (get_global_symbol_dllimport (name)) {
+    
+        size = DATA_PTR & 0x1f;
+        is_function = 0;
+    
+    }
     
     if (state->syntax & ASM_SYNTAX_MASM) {
         fprintf (state->ofp, "extrn %s:%s\n", asm_name, masm_extern_type_name (size, is_function));
@@ -38339,6 +38515,7 @@ static void parse_external_after_type (void) {
         
         int declaration_is_inline;
         int declaration_storage;
+        int declaration_dllimport = 0;
         
         int decl_is_pointer;
         int decl_pointer_depth;
@@ -38362,6 +38539,7 @@ static void parse_external_after_type (void) {
         
         declaration_is_inline = parsed_type_is_inline;
         declaration_storage = parsed_storage_class;
+        declaration_dllimport = parsed_dllimport;
         
         parse_declarator (&name);
         apply_typedef_array_to_declarator ();
@@ -38553,7 +38731,9 @@ static void parse_external_after_type (void) {
                  * through add_global_symbol(), which already handles replacing
                  * an extern declaration with the definition.
                  */
-                if (add_global_symbol (name, GLOBAL_SYMBOL_FUNCTION, 1, name_start, name_caret, name_line)) {
+                add_global_symbol (name, GLOBAL_SYMBOL_FUNCTION, 1, name_start, name_caret, name_line);
+                
+                if (find_global_symbol (name) >= 0) {
                 
                     set_global_symbol_size (name, declarator_is_pointer ? DATA_PTR : (parsed_type_is_void ? DATA_VOID : parsed_type_size));
                     set_global_symbol_pointer_info (name, declarator_effective_pointer_depth_now (),
@@ -38565,13 +38745,17 @@ static void parse_external_after_type (void) {
                     set_global_symbol_param_count (name, declarator_function_param_count, declarator_function_has_prototype || declarator_function_param_count > 0, declarator_function_is_variadic);
                     
                     set_global_symbol_calling_convention (name, (declarator_calling_convention != TOK_EOF) ? declarator_calling_convention : parsed_calling_convention);
+                    set_global_symbol_dllimport (name, declaration_dllimport);
+                    
                     copy_pending_params_to_global_symbol (name);
                 
                 }
             
-            } else if (declaration_storage == STORAGE_EXTERN && init_value_count == 0) {
+            } else if ((declaration_storage == STORAGE_EXTERN || declaration_dllimport) && init_value_count == 0) {
             
-                if (add_global_symbol (name, GLOBAL_SYMBOL_OBJECT, 1, name_start, name_caret, name_line)) {
+                add_global_symbol (name, GLOBAL_SYMBOL_OBJECT, 1, name_start, name_caret, name_line);
+                
+                if (find_global_symbol (name) >= 0) {
                 
                     set_global_symbol_size (name, declarator_is_pointer ? DATA_PTR : declarator_object_size (parsed_type_size));
                     set_global_symbol_pointer_info (name, declarator_effective_pointer_depth_now (),
@@ -38582,6 +38766,7 @@ static void parse_external_after_type (void) {
                     set_global_symbol_array_count (name, declarator_has_array ? declarator_array_count : 0);
                     set_global_symbol_array_dimensions (name, declarator_has_array ? declarator_array_dimensions : 0);
                     set_global_symbol_array_element_size (name, declarator_array_element_size_now (parsed_type_size));
+                    set_global_symbol_dllimport (name, declaration_dllimport);
                 
                 }
             
