@@ -1065,13 +1065,44 @@ static int asm_symbol_is_internal (const char *name) {
 
 }
 
+static int global_symbol_stdcall_stack_bytes (const char *name) {
+
+    int i = find_global_symbol (name);
+    int pi;
+    int bytes = 0;
+    
+    if (i < 0 || global_symbols[i].kind != GLOBAL_SYMBOL_FUNCTION || global_symbols[i].calling_convention != TOK_STDCALL ||
+    
+        global_symbols[i].is_variadic) {
+        return 0;
+    
+    }
+    
+    for (pi = 0; pi < global_symbols[i].param_count && pi < 128; pi++) {
+    
+        int size = global_symbols[i].param_sizes[pi];
+        
+        if (size < 1) {
+            size = DATA_PTR & 0x1f;
+        }
+        
+        bytes += ((size + (DATA_PTR & 0x1f) - 1) / (DATA_PTR & 0x1f)) * (DATA_PTR & 0x1f);
+    
+    }
+    
+    return bytes;
+
+}
+
 static const char *asm_global_symbol_name (const char *name) {
 
     static char buffers[8][512];
     static int index = 0;
     
-    char *out;
-    unsigned long len;
+    char *out, suffix[32];
+    int stdcall_bytes;
+    
+    unsigned long avail, len;
     
     if (asm_symbol_is_internal (name)) {
         return name;
@@ -1082,12 +1113,25 @@ static const char *asm_global_symbol_name (const char *name) {
     out = buffers[index];
     len = strlen (name);
     
-    if (len > sizeof (buffers[0]) - 2) {
-        len = sizeof (buffers[0]) - 2;
+    stdcall_bytes = global_symbol_stdcall_stack_bytes (name);
+    suffix[0] = '\0';
+    
+    if (stdcall_bytes > 0) {
+        sprintf (suffix, "@%d", stdcall_bytes);
     }
+    
+    avail = sizeof (buffers[0]) - 1 - strlen (suffix);
     
     if (!state->no_leading_underscore) {
     
+        if (avail > 0) {
+            avail--;
+        }
+        
+        if (len > avail) {
+            len = avail;
+        }
+        
         out[0] = '_';
         
         memcpy (out + 1, name, len);
@@ -1095,9 +1139,17 @@ static const char *asm_global_symbol_name (const char *name) {
     
     } else {
     
+        if (len > avail) {
+            len = avail;
+        }
+        
         memcpy (out, name, len);
         out[len] = 0;
     
+    }
+    
+    if (suffix[0]) {
+        strcat (out, suffix);
     }
     
     return out;
@@ -8123,6 +8175,8 @@ static void parse_direct_declarator (char **out_name) {
                     } else if (is_type_start (tok.kind)) {
                     
                         enum token_kind saved_calling_convention = declarator_calling_convention;
+                        enum token_kind saved_parsed_calling_convention = parsed_calling_convention;
+                        
                         long saved_array_count = declarator_array_count;
                         
                         int saved_type_size = parsed_type_size;
@@ -8204,6 +8258,7 @@ static void parse_direct_declarator (char **out_name) {
                             free (param_name);
                         }
                         
+                        parsed_calling_convention = saved_parsed_calling_convention;
                         parsed_type_size = saved_type_size;
                         parsed_storage_class = saved_storage_class;
                         parsed_type_is_aggregate = saved_is_aggregate;
@@ -36665,7 +36720,7 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     current_function_return_size = return_size;
     current_function_returns_aggregate = (!return_is_void && !return_is_floating && return_size > (DATA_LLONG & 0x1f));
     current_function_calling_convention = (declarator_calling_convention != TOK_EOF) ? declarator_calling_convention : parsed_calling_convention;
-    current_function_param_stack_bytes = saved_declarator_function_param_count * (DATA_PTR & 0x1f);
+    current_function_param_stack_bytes = 0;
     current_function_has_return_statement = 0;
     
     parse_old_style_param_decls ();
@@ -36682,6 +36737,8 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     if (emit_body && should_emit) {
         copy_pending_params_to_global_symbol (name);
     }
+    
+    current_function_param_stack_bytes = global_symbol_stdcall_stack_bytes (name);
     
     reset_local_symbols ();
     reset_goto_labels ();
@@ -38506,6 +38563,9 @@ static void parse_external_after_type (void) {
                     set_global_symbol_floating (name, declarator_is_pointer ? 0 : parsed_type_is_floating);
                     set_global_symbol_returns_void (name, parsed_type_is_void && !declarator_is_pointer && !declarator_function_is_pointer);
                     set_global_symbol_param_count (name, declarator_function_param_count, declarator_function_has_prototype || declarator_function_param_count > 0, declarator_function_is_variadic);
+                    
+                    set_global_symbol_calling_convention (name, (declarator_calling_convention != TOK_EOF) ? declarator_calling_convention : parsed_calling_convention);
+                    copy_pending_params_to_global_symbol (name);
                 
                 }
             
