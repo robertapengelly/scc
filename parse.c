@@ -941,6 +941,7 @@ struct global_symbol_entry {
     int param_unsigneds[128];
     int param_floatings[128];
     
+    int import_call_stack_bytes;
     int is_implicit;
     int extern_emitted;
     
@@ -1003,6 +1004,7 @@ static void clear_global_symbols (void) {
         
         }
         
+        global_symbols[i].import_call_stack_bytes = 0;
         global_symbols[i].param_count = 0;
         global_symbols[i].has_prototype = 0;
         global_symbols[i].is_variadic = 0;
@@ -1093,7 +1095,29 @@ static int global_symbol_stdcall_stack_bytes (const char *name) {
     
     }
     
+    if (bytes <= 0 && global_symbols[i].import_call_stack_bytes > 0) {
+        bytes = global_symbols[i].import_call_stack_bytes;
+    }
+    
     return bytes;
+
+}
+
+static void remember_global_symbol_import_call_stack_bytes (const char *name, int bytes) {
+
+    int i = find_global_symbol (name);
+    
+    if (i < 0 || bytes <= 0) {
+        return;
+    }
+    
+    if (global_symbols[i].kind != GLOBAL_SYMBOL_FUNCTION || !global_symbols[i].is_dllimport || global_symbols[i].calling_convention != TOK_STDCALL) {
+        return;
+    }
+    
+    if (global_symbol_stdcall_stack_bytes (name) <= 0) {
+        global_symbols[i].import_call_stack_bytes = bytes;
+    }
 
 }
 
@@ -1746,6 +1770,7 @@ static int add_global_symbol (const char *name, int kind, int is_extern, const c
     
     }
     
+    global_symbols[global_symbol_count].import_call_stack_bytes = 0;
     global_symbols[global_symbol_count].param_count = 0;
     global_symbols[global_symbol_count].has_prototype = 0;
     global_symbols[global_symbol_count].is_variadic = 0;
@@ -7525,7 +7550,13 @@ static void parse_type_spec (void) {
     parsed_type_is_void = 0;
     parsed_type_only_qualifiers = 0;
     parsed_type_size = DATA_NONE;
+    
     parsed_calling_convention = TOK_EOF;
+    
+    if (declarator_depth == 0) {
+        declarator_calling_convention = TOK_EOF;
+    }
+    
     parsed_dllexport = 0;
     parsed_dllimport = 0;
     
@@ -25718,7 +25749,10 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                 fprintf (state->ofp, "    call ecx\n");
             
             } else if (get_global_symbol_dllimport (name)) {
+            
+                remember_global_symbol_import_call_stack_bytes (name, total_arg_bytes);
                 fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    call dword [%s]\n" : "    call dword ptr %s\n"), asm_global_import_symbol_name (name));
+            
             } else {
                 fprintf (state->ofp, "    call %s\n", asm_name);
             }
@@ -25744,7 +25778,10 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                 fprintf (state->ofp, "    call *%%ecx\n");
             
             } else if (get_global_symbol_dllimport (name)) {
+            
+                remember_global_symbol_import_call_stack_bytes (name, total_arg_bytes);
                 fprintf (state->ofp, "    call *%s\n", asm_global_import_symbol_name (name));
+            
             } else {
                 fprintf (state->ofp, "    call %s\n", asm_name);
             }
