@@ -142,6 +142,9 @@ static int declarator_is_pointer = 0;
 static int declarator_pointer_depth = 0;
 static int declarator_has_array = 0;
 
+static int declarator_dllexport = 0;
+static int declarator_dllimport = 0;
+
 static enum token_kind declarator_calling_convention = TOK_EOF;
 
 static int global_initializer_accept_symbol_addresses = 0;
@@ -1127,7 +1130,7 @@ static const char *asm_global_symbol_name (const char *name) {
     static int index = 0;
     
     char *out, suffix[32];
-    int stdcall_bytes;
+    int stdcall_bytes, symbol_index;
     
     unsigned long avail, len;
     
@@ -1143,7 +1146,9 @@ static const char *asm_global_symbol_name (const char *name) {
     stdcall_bytes = global_symbol_stdcall_stack_bytes (name);
     suffix[0] = '\0';
     
-    if (stdcall_bytes > 0) {
+    symbol_index = find_global_symbol (name);
+    
+    if (symbol_index >= 0 && global_symbols[symbol_index].kind == GLOBAL_SYMBOL_FUNCTION  && global_symbols[symbol_index].calling_convention == TOK_STDCALL && !global_symbols[symbol_index].is_variadic) {
         sprintf (suffix, "@%d", stdcall_bytes);
     }
     
@@ -7507,7 +7512,10 @@ static void parse_decl_modifier (void) {
         } else if (parsed_dllimport) {
             report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "'__dllexport' and '__dllimport' cannot both be specified");
         } else {
+        
+            declarator_dllexport = 1;
             parsed_dllexport = 1;
+        
         }
     
     } else if (tok.kind == TOK_DLLIMPORT) {
@@ -7517,7 +7525,10 @@ static void parse_decl_modifier (void) {
         } else if (parsed_dllexport) {
             report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "'__dllexport' and '__dllimport' cannot both be specified");
         } else {
+        
+            declarator_dllimport = 1;
             parsed_dllimport = 1;
+        
         }
     
     }
@@ -8551,6 +8562,10 @@ static void parse_declarator (char **out_name) {
     const char *saved_captured_declarator_name_caret = captured_declarator_name_caret;
 
     enum token_kind saved_declarator_calling_convention = declarator_calling_convention;
+    
+    int saved_declarator_dllexport = declarator_dllexport;
+    int saved_declarator_dllimport = declarator_dllimport;
+    
     unsigned long saved_captured_declarator_name_line = captured_declarator_name_line;
     
     if (top_level) {
@@ -8561,6 +8576,9 @@ static void parse_declarator (char **out_name) {
         
         declarator_calling_convention = TOK_EOF;
         capture_declarator_name_location = 1;
+        
+        declarator_dllexport = 0;
+        declarator_dllimport = 0;
         
         captured_declarator_name_location = 0;
         captured_declarator_name_start = 0;
@@ -8621,7 +8639,11 @@ static void parse_declarator (char **out_name) {
         captured_declarator_name_line = saved_captured_declarator_name_line;
     
     } else {
+    
         declarator_calling_convention = saved_declarator_calling_convention;
+        declarator_dllexport = saved_declarator_dllexport;
+        declarator_dllimport = saved_declarator_dllimport;
+    
     }
 
 }
@@ -11031,6 +11053,8 @@ static void parse_block (void) {
                 }
                 
                 parse_declarator (&name);
+                
+                declaration_dllimport = declaration_dllimport || parsed_dllimport || declarator_dllimport;
                 apply_typedef_array_to_declarator ();
                 
                 if (declarator_has_array && declarator_array_unsized && tok.kind == TOK_ASSIGN) {
@@ -37237,9 +37261,11 @@ static int parse_possible_knr_function (void) {
     
         parse_function_body (name, STORAGE_NONE, 0, 0, 0, 0, DATA_INT & 0x1f, name_line, name_start, name_caret);
         
-        if (parsed_dllexport) {
+        if (parsed_dllexport || declarator_dllexport) {
         
             vec_push (&vec_dllexports, xstrdup (name));
+            
+            declarator_dllexport = 0;
             parsed_dllexport = 0;
         
         }
@@ -38607,6 +38633,8 @@ static void parse_external_after_type (void) {
         declaration_dllimport = parsed_dllimport;
         
         parse_declarator (&name);
+        
+        declaration_dllimport = declaration_dllimport || parsed_dllimport || declarator_dllimport;
         apply_typedef_array_to_declarator ();
         
         decl_is_pointer = declarator_is_pointer;
@@ -38665,9 +38693,11 @@ static void parse_external_after_type (void) {
         
         if (name && declarator_has_function && (tok.kind == TOK_LBRACE || is_type_start (tok.kind))) {
         
-            if (parsed_dllexport) {
+            if (parsed_dllexport || declarator_dllexport) {
             
                 vec_push (&vec_dllexports, xstrdup (name));
+                
+                declarator_dllexport = 0;
                 parsed_dllexport = 0;
             
             }
