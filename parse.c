@@ -6475,16 +6475,18 @@ static void set_local_symbol_floating (const char *name, int is_floating) {
 struct pending_param {
 
     char *name;
-    
     int align, size;
+    
     int is_unsigned;
     int is_floating;
+    
     int pointer_depth;
     int pointed_size;
     int pointed_is_floating;
     int pointed_is_unsigned;
     
     char *pointed_tag_name;
+    int knr_declared;
 
 };
 
@@ -6517,6 +6519,7 @@ static void clear_pending_params (void) {
         pending_params[i].pointed_size = 0;
         pending_params[i].pointed_is_floating = 0;
         pending_params[i].pointed_is_unsigned = 0;
+        pending_params[i].knr_declared = 0;
         
         if (pending_params[i].pointed_tag_name) {
         
@@ -6557,6 +6560,7 @@ static void add_pending_param (const char *name, int size, int align, int is_uns
     pending_params[pending_param_count].align = align;
     pending_params[pending_param_count].is_unsigned = is_unsigned ? 1 : 0;
     pending_params[pending_param_count].is_floating = is_floating ? 1 : 0;
+    pending_params[pending_param_count].knr_declared = 0;
     pending_params[pending_param_count].pointer_depth = pointer_depth;
     pending_params[pending_param_count].pointed_size = pointed_size > 0 ? pointed_size : 0;
     pending_params[pending_param_count].pointed_is_floating = pointer_depth > 0 ? (parsed_type_is_floating ? 1 : 0) : 0;
@@ -6634,6 +6638,29 @@ static void update_pending_param (const char *name, int size, int align, int is_
     if (pointer_depth > 0 && parsed_type_tag_name[0]) {
         pending_params[i].pointed_tag_name = xstrdup (parsed_type_tag_name);
     }
+
+}
+
+static int mark_pending_param_knr_declared (const char *name, const char *name_start, const char *name_caret, unsigned long name_line) {
+
+    int i = find_pending_param (name);
+    
+    if (i < 0) {
+    
+        report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret, "K&R parameter '%s' is not in function parameter list", name);
+        return 0;
+    
+    }
+    
+    if (pending_params[i].knr_declared) {
+    
+        report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret, "duplicate K&R parameter declaration for '%s'", name);
+        return 0;
+    
+    }
+    
+    pending_params[i].knr_declared = 1;
+    return 1;
 
 }
 
@@ -8696,10 +8723,14 @@ static void parse_old_style_param_decls (void) {
                     param_pointer_depth = 1;
                 }
                 
-                update_pending_param (name, param_size, type_alignment (param_size),
-                    (declarator_is_pointer || declarator_has_array || declarator_has_function || parsed_type_is_array_typedef ? 0 : parsed_type_is_unsigned),
-                        (declarator_is_pointer || declarator_has_array || declarator_has_function || parsed_type_is_array_typedef ? 0 : parsed_type_is_floating),
-                            param_pointer_depth, parsed_type_is_aggregate ? parsed_type_size : (parsed_type_size & 0x1f), parsed_type_is_unsigned);
+                if (mark_pending_param_knr_declared (name, last_declarator_name_start, last_declarator_name_caret, last_declarator_name_line)) {
+                
+                    update_pending_param (name, param_size, type_alignment (param_size),
+                        (declarator_is_pointer || declarator_has_array || declarator_has_function || parsed_type_is_array_typedef ? 0 : parsed_type_is_unsigned),
+                            (declarator_is_pointer || declarator_has_array || declarator_has_function || parsed_type_is_array_typedef ? 0 : parsed_type_is_floating),
+                                param_pointer_depth, parsed_type_is_aggregate ? parsed_type_size : (parsed_type_size & 0x1f), parsed_type_is_unsigned);
+                
+                }
                 
                 free (name);
             
