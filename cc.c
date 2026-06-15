@@ -140,7 +140,12 @@ int main (int argc, char **argv) {
         return EXIT_FAILURE;
     }
     
-    compile_translation_unit ();
+    if (state->bits == 32) {
+        compile_translation_unit32 ();
+    } else if (state->bits == 64) {
+        compile_translation_unit64 ();
+    }
+    
     return (get_error_count () > 0 ? EXIT_FAILURE : EXIT_SUCCESS);
 
 }

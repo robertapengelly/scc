@@ -24,7 +24,8 @@ struct cc_state {
     
     int pedantic;
     int mode;
-    int std;
+    
+    int bits, std;
     int long64;
     int syntax;
     

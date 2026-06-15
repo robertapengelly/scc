@@ -31,24 +31,29 @@ struct cc_option {
 #define     CC_OPTION_EQUALS_ARG        3
 
 #define     CC_OPTION_NONE                                  0
-#define     CC_OPTION_COMPILE                               1
-#define     CC_OPTION_DEFINE                                2
-#define     CC_OPTION_HELP                                  3
-#define     CC_OPTION_INCLUDE                               4
-#define     CC_OPTION_NO_LEADING_UNDERSCORE                 5
-#define     CC_OPTION_NO_LINEMARKERS                        6
-#define     CC_OPTION_MASM                                  7
-#define     CC_OPTION_MAX_ERRORS                            8
-#define     CC_OPTION_MLONG64                               9
-#define     CC_OPTION_OUTFILE                               10
-#define     CC_OPTION_PEDANTIC                              11
-#define     CC_OPTION_PREPOCESS                             12
-#define     CC_OPTION_STD                                   13
-#define     CC_OPTION_TRANDITIONAL_LINEMARKERS              14
-#define     CC_OPTION_UNDEF                                 15
+#define     CC_OPTION_BITS32                                1
+#define     CC_OPTION_BITS64                                2
+#define     CC_OPTION_COMPILE                               3
+#define     CC_OPTION_DEFINE                                4
+#define     CC_OPTION_HELP                                  5
+#define     CC_OPTION_INCLUDE                               6
+#define     CC_OPTION_NO_LEADING_UNDERSCORE                 7
+#define     CC_OPTION_NO_LINEMARKERS                        8
+#define     CC_OPTION_MASM                                  9
+#define     CC_OPTION_MAX_ERRORS                            10
+#define     CC_OPTION_MLONG64                               11
+#define     CC_OPTION_OUTFILE                               12
+#define     CC_OPTION_PEDANTIC                              13
+#define     CC_OPTION_PREPOCESS                             14
+#define     CC_OPTION_STD                                   15
+#define     CC_OPTION_TRANDITIONAL_LINEMARKERS              16
+#define     CC_OPTION_UNDEF                                 17
 
 static struct cc_option opts[] = {
 
+    {   "-m32",                             CC_OPTION_BITS32,                       CC_OPTION_NO_ARG        },
+    {   "-m64",                             CC_OPTION_BITS64,                       CC_OPTION_NO_ARG        },
+    
     {   "-pedantic",                        CC_OPTION_PEDANTIC,                     CC_OPTION_NO_ARG        },
     {   "-std",                             CC_OPTION_STD,                          CC_OPTION_EQUALS_ARG    },
     
@@ -110,6 +115,10 @@ static void print_usage (void) {
         fprintf (stderr, "\n");
         fprintf (stderr, "    -E                                Preprocess only; do not compile.\n");
         fprintf (stderr, "    -S                                Compile only.\n");
+        
+        fprintf (stderr, "\n");
+        fprintf (stderr, "    -m32                              Generate code for Intel 386.\n");
+        fprintf (stderr, "    -m64                              Generate code for AMD64.\n");
         
         fprintf (stderr, "\n");
         fprintf (stderr, "    -std=<standard>                   Assume that the input sources are for\n");
@@ -266,6 +275,8 @@ void parse_args (int argc, char **argv, int optind) {
     
     }
     
+    state->bits = 32;
+    
     while (optind < argc) {
     
         r = argv[optind++];
@@ -342,6 +353,20 @@ void parse_args (int argc, char **argv, int optind) {
         
         switch (popt->idx) {
         
+            case CC_OPTION_BITS32: {
+            
+                state->bits = 32;
+                break;
+            
+            }
+            
+            case CC_OPTION_BITS64: {
+            
+                state->bits = 64;
+                break;
+            
+            }
+            
             case CC_OPTION_COMPILE: {
             
                 state->mode = CC_MODE_COMPILE;
@@ -349,7 +374,7 @@ void parse_args (int argc, char **argv, int optind) {
             
             }
             
-            case CC_OPTION_DEFINE : {
+            case CC_OPTION_DEFINE: {
             
                 char *arg;
                 
