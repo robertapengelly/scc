@@ -140,6 +140,134 @@ static int postfix_member_size = 0;
 static int postfix_member_is_floating = 0;
 static int postfix_member_is_unsigned = 0;
 
+static void clear_postfix_member_info (void) {
+
+    postfix_member_pointer_depth = 0;
+    postfix_member_pointed_size = 0;
+    postfix_member_seen = 0;
+    postfix_copy_lvalue_size = 0;
+    postfix_copy_lvalue_tag_name = 0;
+    postfix_member_offset = 0;
+    postfix_member_size = 0;
+    postfix_member_is_floating = 0;
+    postfix_member_is_unsigned = 0;
+
+}
+
+static int amd64_member_layout_alignment (int size) {
+
+    size &= 0x1f;
+    
+    if (size >= (DATA_PTR & 0x1f)) {
+        return DATA_PTR & 0x1f;
+    }
+    
+    if (size >= (DATA_INT & 0x1f)) {
+        return DATA_INT & 0x1f;
+    }
+    
+    if (size >= (DATA_SHORT & 0x1f)) {
+        return DATA_SHORT & 0x1f;
+    }
+    
+    return 1;
+
+}
+
+static int amd64_align_member_offset (int offset, int align) {
+
+    if (align <= 1) {
+        return offset;
+    }
+    
+    return (offset + align - 1) & ~(align - 1);
+
+}
+
+static int amd64_member_owner_matches (int mi, int owner_size, const char *owner_tag_name) {
+
+    if (member_infos[mi].owner_size != owner_size) {
+        return 0;
+    }
+    
+    if (owner_tag_name && owner_tag_name[0]) {
+    
+        return member_infos[mi].owner_tag_name
+            && strcmp (member_infos[mi].owner_tag_name, owner_tag_name) == 0;
+    
+    }
+    
+    return member_infos[mi].owner_tag_name == 0;
+
+}
+
+static int amd64_relayout_aggregate_members (int owner_size, const char *owner_tag_name, const char *typedef_name) {
+
+    int mi;
+    int offset = 0;
+    int max_align = 1;
+    int matched = 0;
+    
+    /*
+     * Fix the aggregate layout metadata itself instead of rounding member
+     * offsets at every access site.  The parser's old i386 layout rules used
+     * 4-byte alignment for pointer-sized fields.  On AMD64 the member table
+     * must record the real 8-byte-aligned offsets so every later access,
+     * initializer, copy, and typedef lookup sees the same layout.
+     */
+    for (mi = 0; mi < member_info_count; mi++) {
+    
+        int size;
+        int align;
+        
+        if (!amd64_member_owner_matches (mi, owner_size, owner_tag_name)) {
+            continue;
+        }
+        
+        size = member_infos[mi].size & 0x1f;
+        
+        if (size <= 0) {
+            size = DATA_INT & 0x1f;
+        }
+        
+        align = amd64_member_layout_alignment (size);
+        
+        if (align > max_align) {
+            max_align = align;
+        }
+        
+        offset = amd64_align_member_offset (offset, align);
+        member_infos[mi].offset = offset;
+        
+        offset += size;
+        matched++;
+    
+    }
+    
+    if (!matched) {
+        return owner_size;
+    }
+    
+    offset = amd64_align_member_offset (offset, max_align);
+    
+    for (mi = 0; mi < member_info_count; mi++) {
+    
+        if (!amd64_member_owner_matches (mi, owner_size, owner_tag_name)) {
+            continue;
+        }
+        
+        member_infos[mi].owner_size = offset;
+        
+        if (!member_infos[mi].owner_tag_name && typedef_name && typedef_name[0]) {
+            member_infos[mi].owner_tag_name = xstrdup (typedef_name);
+        }
+    
+    }
+    
+    return offset;
+
+}
+
 static int find_member_info (const char *name, int *offset, int *size) {
     return find_member_info_ex (name, offset, size, 0, 0, 0, 0);
 }
@@ -180,6 +308,10 @@ static void save_typedef_name (const char *name, int size, int is_unsigned, int 
     
     if (!name || !*name) {
         return;
+    }
+    
+    if (is_aggregate && !is_array) {
+        size = amd64_relayout_aggregate_members (size, parsed_type_tag_name[0] ? parsed_type_tag_name : 0, name);
     }
     
     entry = find_typedef_name (name);
@@ -12441,6 +12573,20 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
         
         }
         
+        if (unary_op == TOK_XMARK) {
+        
+            /*
+             * Logical-not produces a plain int boolean.  The operand loader may
+             * have left pointer/member metadata live for expressions such as
+             * !Drive->Media->LastBlock.  Clear it so the enclosing expression
+             * parser does not treat the 0/1 result as a pending member address
+             * and emit a bogus load through address 0 or 1.
+             */
+            clear_rhs_last_pointer_info ();
+            clear_postfix_member_info ();
+        
+        }
+        
         return;
     
     }
@@ -12727,7 +12873,7 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
         } else {
         
             emit_copy_reg_now (lo, addr_reg);
-            emit_load_deref_reg_now (lo, va_size);
+            emit_load_deref_reg_ex_now (lo, va_size, va_unsigned);
             
             emit_extend_pair_high_from_low (lo, hi, va_size, va_unsigned);
         
@@ -12767,7 +12913,7 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
             } else {
             
                 emit_copy_reg_now (lo, addr_reg);
-                emit_load_deref_reg_now (lo, va_size);
+                emit_load_deref_reg_ex_now (lo, va_size, va_unsigned);
                 emit_extend_pair_high_from_low (lo, hi, va_size, va_unsigned);
             
             }
@@ -12934,7 +13080,31 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
                 
                 }
                 
-                source_size = postfix_copy_lvalue_size;
+                /*
+                 * A postfix member expression followed by '(' is a call
+                 * through a function-pointer member, for example:
+                 *
+                 *     BootServices->OpenProtocol(...)
+                 *
+                 * emit_parse_postfix_copy_source_address_now() leaves the
+                 * address of the member in lo.  The old 64-bit RHS path then
+                 * treated that as a plain lvalue and returned without
+                 * consuming the argument list, so the statement parser stopped
+                 * at the open parenthesis and reported "expected ;".
+                 * Load the function pointer stored in that member and let the
+                 * existing indirect-call helper consume the full call.
+                 */
+                if (postfix_member_seen && tok.kind == TOK_LPAREN) {
+                
+                    emit_load_deref_reg_now (lo, DATA_PTR & 0x1f);
+                    emit_call_pointer_in_reg_now (lo, lo);
+                    
+                    free (name);
+                    return;
+                
+                }
+                
+                source_size = postfix_member_seen ? postfix_member_size : postfix_copy_lvalue_size;
                 
                 if (source_size <= 0) {
                     source_size = DATA_INT & 0x1f;
@@ -12997,7 +13167,10 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
                 
                 }
                 
-                emit_load_postfix_lvalue_address_to_pair_ex_now (lo, hi, source_size, src ? (src->pointer_depth > 0 ? src->pointed_is_unsigned : src->is_unsigned) : (get_global_symbol_pointer_depth (name) > 0 ? get_global_symbol_pointed_is_unsigned (name) : get_global_symbol_unsigned (name)));
+                emit_load_postfix_lvalue_address_to_pair_ex_now (lo, hi, source_size,
+                    postfix_member_seen ? postfix_member_is_unsigned :
+                        (src ? (src->pointer_depth > 0 ? src->pointed_is_unsigned : src->is_unsigned) :
+                           (get_global_symbol_pointer_depth (name) > 0 ? get_global_symbol_pointed_is_unsigned (name) : get_global_symbol_unsigned (name))));
                 
                 free (name);
                 return;
@@ -15655,6 +15828,14 @@ static int emit_parse_postfix_copy_source_address_now (const char *reg, struct l
     int current_object_size = 0;
     
     postfix_copy_lvalue_size = DATA_INT & 0x1f;
+    postfix_member_pointer_depth = 0;
+    postfix_member_pointed_size = 0;
+    postfix_member_seen = 0;
+    postfix_member_offset = 0;
+    postfix_member_size = 0;
+    postfix_member_is_floating = 0;
+    postfix_member_is_unsigned = 0;
+    postfix_member_calling_convention = TOK_EOF;
     
     if (!reg) {
         reg = "rax";
@@ -15901,6 +16082,26 @@ static int emit_parse_postfix_copy_source_address_now (const char *reg, struct l
             }
             
             free (member);
+            
+            /*
+             * Keep the same member metadata that the normal RHS postfix path
+             * records.  The copy-source-address path is also used for
+             * lvalue/callee expressions such as:
+             *
+             *     BootServices->HandleProtocol(...)
+             *
+             * Without this, the caller cannot see that the last postfix item
+             * was a member, so it treats the expression as a plain lvalue and
+             * leaves the following '(' unconsumed.
+             */
+            postfix_member_seen = 1;
+            postfix_member_pointer_depth = member_is_array ? 1 : member_pointer_depth;
+            postfix_member_pointed_size = member_elem_size;
+            postfix_member_offset = member_offset;
+            postfix_member_size = member_size;
+            postfix_member_is_floating = 0;
+            postfix_member_is_unsigned = last_found_member_is_unsigned;
+            postfix_member_calling_convention = last_found_member_calling_convention;
             
             if (!have_address) {
             
@@ -16185,6 +16386,17 @@ static int parse_builtin_va_arg_type_now (int *out_size, int *out_unsigned, int 
     
     if (out_floating) {
         *out_floating = is_floating;
+    }
+    
+    /*
+     * AMD64 varargs are still C varargs: integer types narrower than int are
+     * passed after the default argument promotions.  The va_list slot is
+     * 8 bytes wide, but the object to fetch for char/short is at least a
+     * 32-bit int.  Loading only byte/word from the slot breaks cases such as
+     * va_arg(ap, uint16_t) and casted va_arg uses in printf code.
+     */
+    if (pointer_depth == 0 && !is_floating && base_size > 0 && base_size < (DATA_INT & 0x1f)) {
+        base_size = DATA_INT & 0x1f;
     }
     
     if (out_size) {
@@ -19558,6 +19770,16 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         
         }
         
+        /*
+         * Logical-not produces a plain int boolean.  The operand loader may
+         * have left pointer/member metadata live for expressions such as
+         * !Drive->Media->LastBlock.  Clear it so the enclosing expression
+         * parser does not treat the 0/1 result as a pending member address
+         * and emit a bogus load through address 0 or 1.
+         */
+        clear_rhs_last_pointer_info ();
+        clear_postfix_member_info ();
+        
         return;
     
     } else if (tok.kind == TOK_INCR || tok.kind == TOK_DECR) {
@@ -19752,7 +19974,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         get_token ();
         
         emit_parse_builtin_va_arg_address_to_reg_now (reg, &va_size, &va_unsigned, &va_pointer, &va_floating);
-        emit_load_deref_reg_now (reg, va_size);
+        emit_load_deref_reg_ex_now (reg, va_size, va_unsigned);
         
         if (va_pointer > 0) {
             set_rhs_last_pointer_info (va_pointer, DATA_INT & 0x1f);
@@ -19788,7 +20010,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             int va_floating = 0;
             
             emit_parse_builtin_va_arg_address_to_reg_now (reg, &va_size, &va_unsigned, &va_pointer, &va_floating);
-            emit_load_deref_reg_now (reg, va_size);
+            emit_load_deref_reg_ex_now (reg, va_size, va_unsigned);
             
             if (va_pointer > 0) {
                 set_rhs_last_pointer_info (va_pointer, DATA_INT & 0x1f);
@@ -20074,11 +20296,13 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         if (is_assignment_operator (tok.kind)) {
         
             enum token_kind assign_op = tok.kind;
-            struct local_symbol *dst;
+            
             int global_index;
             int dst_size;
             int dst_is_floating;
+            int dst_is_pointerlike;
             
+            struct local_symbol *dst;
             get_token ();
             
             dst = find_local_symbol (name);
@@ -20105,6 +20329,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             
             dst_size = dst ? dst->size : get_global_symbol_size (name);
             dst_is_floating = dst ? dst->is_floating : get_global_symbol_floating (name);
+            dst_is_pointerlike = dst ? (dst->is_array || dst->pointer_depth > 0) : (get_global_symbol_array (name) || get_global_symbol_pointer_depth (name) > 0);
             
             if (dst_is_floating) {
             
@@ -20116,7 +20341,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             
             }
             
-            if (dst_size == (DATA_LLONG & 0x1f)) {
+            if (dst_size == (DATA_LLONG & 0x1f) && !dst_is_pointerlike) {
             
                 report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret, "64-bit assignment expression not implemented");
                 skip_balanced_until (TOK_RPAREN, TOK_SEMI, TOK_EOF);
@@ -22960,10 +23185,6 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
         return;
     }
     
-    if (state->ofp) {
-        amd64_emit_push_reg_now (fn_reg);
-    }
-    
     saved_arg_assignment32_stop_before_condition_operator = assignment32_stop_before_condition_operator;
     saved_arg_assignment64_stop_before_condition_operator = assignment64_stop_before_condition_operator;
     
@@ -23002,7 +23223,33 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
             postfix_member_pointer_depth = 0;
             postfix_member_pointed_size = 0;
             
-            if (tok.kind == TOK_IDENT && tok.ident && current_argument_is_bare_identifier_now () && find_local_symbol (tok.ident) && emit_push_aggregate_argument_now (tok.ident, find_local_symbol (tok.ident))) {
+            if (tok.kind == TOK_IDENT && tok.ident && current_argument_is_bare_identifier_now () && find_local_symbol (tok.ident) && find_local_symbol (tok.ident)->is_array) {
+            
+                struct local_symbol *arg_sym = find_local_symbol (tok.ident);
+                
+                arg_bytes = DATA_PTR & 0x1f;
+                arg_is_floating = 0;
+                
+                if (arg_sym->is_static && arg_sym->static_label) {
+                    emit_load_address_to_reg_now ("rax", arg_sym->static_label);
+                } else {
+                    emit_load_local_address_to_reg_now ("rax", arg_sym->offset);
+                }
+                
+                get_token ();
+            
+            } else if (tok.kind == TOK_IDENT && tok.ident && current_argument_is_bare_identifier_now () &&
+                       !find_local_symbol (tok.ident) &&
+                       get_global_symbol_kind (tok.ident) == GLOBAL_SYMBOL_OBJECT &&
+                       get_global_symbol_array (tok.ident)) {
+                
+                arg_bytes = DATA_PTR & 0x1f;
+                arg_is_floating = 0;
+                
+                emit_load_address_to_reg_now ("rax", tok.ident);
+                get_token ();
+            
+            } else if (tok.kind == TOK_IDENT && tok.ident && current_argument_is_bare_identifier_now () && find_local_symbol (tok.ident) && emit_push_aggregate_argument_now (tok.ident, find_local_symbol (tok.ident))) {
             
                 struct local_symbol *arg_sym = find_local_symbol (tok.ident);
                 
@@ -23169,11 +23416,13 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
     if (state->ofp) {
     
         /*
-         * The function pointer itself was saved before evaluating arguments,
-         * because argument evaluation is allowed to clobber its register.
          * For the Microsoft x64 ABI, reserve the 32-byte home area plus any
          * overflow argument slots, then replay each argument left-to-right into
          * RCX/RDX/R8/R9 or the overflow stack area.
+         *
+         * Also reserve one pointer-sized slot inside this same aligned frame
+         * for the indirect function pointer.  That avoids a separate PUSH and
+         * keeps the generated call frame as one balanced sub/add pair.
          */
         amd64_call_stack_bytes = 32;
         
@@ -23181,14 +23430,24 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
             amd64_call_stack_bytes += (argc - 4) * 8;
         }
         
-        /*
-         * The saved function pointer is already on the stack above this
-         * reservation.  Account for that extra 8-byte push when choosing the
-         * call-frame size; otherwise indirect calls enter with RSP 8 bytes off
-         * the Microsoft x64 16-byte call-site alignment.
-         */
+        amd64_call_stack_bytes += DATA_PTR & 0x1f;
+        
         amd64_call_stack_bytes = amd64_align_call_stack_bytes (amd64_call_stack_bytes);
         amd64_emit_sub_rsp_bytes (amd64_call_stack_bytes);
+        
+        saved_pointer_offset = amd64_call_stack_bytes - (DATA_PTR & 0x1f);
+        
+        if (state->syntax & ASM_SYNTAX_INTEL) {
+        
+            if (state->syntax & ASM_SYNTAX_NASM) {
+                fprintf (state->ofp, "    mov qword [rsp + %d], %s\n", saved_pointer_offset, fn_reg);
+            } else {
+                fprintf (state->ofp, "    mov qword ptr [rsp + %d], %s\n", saved_pointer_offset, fn_reg);
+            }
+        
+        } else {
+            fprintf (state->ofp, "    movq %%%s, %d(%%rsp)\n", fn_reg, saved_pointer_offset);
+        }
         
         for (i = 0; i < argc; i++) {
         
@@ -23244,8 +23503,6 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
         
         }
         
-        saved_pointer_offset = amd64_call_stack_bytes;
-        
         if (state->syntax & ASM_SYNTAX_INTEL) {
         
             if (state->syntax & ASM_SYNTAX_NASM) {
@@ -23255,7 +23512,7 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
             }
             
             fprintf (state->ofp, "    call r11\n");
-            amd64_emit_add_rsp_bytes (amd64_call_stack_bytes + (DATA_PTR & 0x1f));
+            amd64_emit_add_rsp_bytes (amd64_call_stack_bytes);
             
             if (strcmp (result_reg, "rax") != 0) {
                 fprintf (state->ofp, "    mov %s, rax\n", result_reg);
@@ -23266,7 +23523,7 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
             fprintf (state->ofp, "    movq %d(%%rsp), %%r11\n", saved_pointer_offset);
             fprintf (state->ofp, "    call *%%r11\n");
             
-            amd64_emit_add_rsp_bytes (amd64_call_stack_bytes + (DATA_PTR & 0x1f));
+            amd64_emit_add_rsp_bytes (amd64_call_stack_bytes);
             
             if (strcmp (result_reg, "rax") != 0) {
                 fprintf (state->ofp, "    movq %%rax, %%%s\n", result_reg);
@@ -24869,7 +25126,33 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
             postfix_member_pointer_depth = 0;
             postfix_member_pointed_size = 0;
             
-            if (!use_inline && tok.kind == TOK_IDENT && tok.ident && current_argument_is_bare_identifier_now () && find_local_symbol (tok.ident) && emit_push_aggregate_argument_now (tok.ident, find_local_symbol (tok.ident))) {
+            if (tok.kind == TOK_IDENT && tok.ident && current_argument_is_bare_identifier_now () && find_local_symbol (tok.ident) && find_local_symbol (tok.ident)->is_array) {
+            
+                struct local_symbol *arg_sym = find_local_symbol (tok.ident);
+                
+                arg_bytes = DATA_PTR & 0x1f;
+                arg_is_floating = 0;
+                
+                if (arg_sym->is_static && arg_sym->static_label) {
+                    emit_load_address_to_reg_now ("rax", arg_sym->static_label);
+                } else {
+                    emit_load_local_address_to_reg_now ("rax", arg_sym->offset);
+                }
+                
+                get_token ();
+            
+            } else if (tok.kind == TOK_IDENT && tok.ident && current_argument_is_bare_identifier_now () &&
+                       !find_local_symbol (tok.ident) &&
+                       get_global_symbol_kind (tok.ident) == GLOBAL_SYMBOL_OBJECT &&
+                       get_global_symbol_array (tok.ident)) {
+            
+                arg_bytes = DATA_PTR & 0x1f;
+                arg_is_floating = 0;
+                
+                emit_load_address_to_reg_now ("rax", tok.ident);
+                get_token ();
+            
+            } else if (!use_inline && tok.kind == TOK_IDENT && tok.ident && current_argument_is_bare_identifier_now () && find_local_symbol (tok.ident) && emit_push_aggregate_argument_now (tok.ident, find_local_symbol (tok.ident))) {
             
                 struct local_symbol *arg_sym = find_local_symbol (tok.ident);
                 
@@ -26060,8 +26343,24 @@ static int emit_load_assignment_binary_expression_prec_to_reg (const char *reg, 
     if (postfix_member_seen
         && postfix_member_pointer_depth == 0
         && postfix_member_size == (DATA_LLONG & 0x1f)
-        && !postfix_member_is_floating) {
-    
+        && !postfix_member_is_floating
+        && is_arithmetic_binary_operator (tok.kind)) {
+
+        /*
+         * Only collapse a pending 64-bit member address to a 32-bit scalar
+         * when this path is actually about to perform old 32-bit arithmetic
+         * on it.  For a plain rvalue/call argument such as:
+         *
+         *     LoadedImage->DeviceHandle
+         *
+         * the member load has already produced the qword value in REG.  Loading
+         * through that value again turns an EFI_HANDLE into:
+         *
+         *     mov rax, qword ptr [rax + 24]
+         *     movsxd rax, dword ptr [rax]
+         *
+         * which dereferences the handle and breaks HandleProtocol.
+         */
         emit_load_deref_reg_now (reg, DATA_INT & 0x1f);
         postfix_member_size = DATA_INT & 0x1f;
     
@@ -31310,8 +31609,25 @@ static void emit_statement_const32_to_rdx (int64_s v) {
         return;
     }
     
+    /*
+     * This helper is used by statement-condition compare paths such as:
+     *
+     *     Status != EFI_BUFFER_TOO_SMALL
+     * 
+     * The old AMD64 backend always emitted EDX and discarded v.high.  That is
+     * only valid for real 32-bit constants.  EFI_STATUS error constants are
+     * UINTN-sized on AMD64, for example 0x8000000000000005LLU, and must be
+     * compared as full 64-bit values.
+     */
+    if ((v.high & U32_MASK) != 0) {
+    
+        amd64_emit_mov_i64_to_qword_reg_now ("rdx", v);
+        return;
+    
+    }
+    
     if (state->syntax & ASM_SYNTAX_INTEL) {
-       fprintf (state->ofp, "    mov edx, %lu\n", v.low & U32_MASK);
+        fprintf (state->ofp, "    mov edx, %lu\n", v.low & U32_MASK);
     } else {
         fprintf (state->ofp, "    movl $%lu, %%edx\n", v.low & U32_MASK);
     }
@@ -33165,6 +33481,7 @@ static void parse_for_header_expression_until (enum token_kind end_token) {
     
     int lhs_size;
     int lhs_is_floating;
+    int lhs_is_pointerlike;
     
 #define     FINISH_FOR_HEADER_EXPR(free_name)                                   \
     do {                                                                        \
@@ -33304,6 +33621,7 @@ static void parse_for_header_expression_until (enum token_kind end_token) {
     
         lhs_size = lhs ? lhs->size : get_global_symbol_size (name);
         lhs_is_floating = lhs ? lhs->is_floating : get_global_symbol_floating (name);
+        lhs_is_pointerlike = lhs ? (lhs->is_array || lhs->pointer_depth > 0) : (get_global_symbol_array (name) || get_global_symbol_pointer_depth (name) > 0);
         
         if (lhs_is_floating) {
         
@@ -33328,7 +33646,7 @@ static void parse_for_header_expression_until (enum token_kind end_token) {
             
             }
         
-        } else if (lhs_size == (DATA_LLONG & 0x1f)) {
+        } else if (lhs_size == (DATA_LLONG & 0x1f) && !lhs_is_pointerlike) {
         
             if (op == TOK_ASSIGN) {
                 emit_load_assignment_rhs_expression_to_pair ("rax", "rdx", lhs ? lhs->is_unsigned : get_global_symbol_unsigned (name));
