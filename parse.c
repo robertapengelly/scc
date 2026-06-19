@@ -1042,7 +1042,7 @@ int find_member_info_ex_bounded (const char *name, int max_size, const char *own
         for (i = member_info_count - 1; i >= 0; i--) {
         
             if (member_infos[i].name && strcmp (member_infos[i].name, name) == 0
-                && member_infos[i].owner_size == max_size) {
+                && (member_infos[i].owner_size == max_size || member_infos[i].owner_size == -max_size)) {
             
                 if (best < 0 || member_infos[i].offset < member_infos[best].offset) {
                     best = i;
@@ -2324,12 +2324,18 @@ long align_up_long (long value, int align) {
 
 int type_alignment (int size) {
 
+    size &= 0x1f;
+    
     if (size <= 1) {
         return 1;
     }
     
     if (size == 2) {
         return 2;
+    }
+    
+    if (size >= DATA_PTR) {
+        return DATA_PTR;
     }
     
     return 4;
@@ -2895,7 +2901,20 @@ void parse_type_spec (void) {
                 for (mi = member_info_start; mi < member_info_count; mi++) {
                 
                     if (member_infos[mi].owner_size == 0) {
-                        member_infos[mi].owner_size = aggregate_size;
+                    
+                        /*
+                         * Keep union members overlaid.
+                         *
+                         * The backend may re-layout aggregate member metadata for
+                         * target alignment.  That is valid for structs, but not for
+                         * unions: all direct union members must remain at offset 0.
+                         * Store a negative owner size for union member records so
+                         * size-only backend relayout code will not mistake the union
+                         * for a struct with the same total size.  Parser lookups that
+                         * need the size still treat +/-aggregate_size as matching.
+                         */
+                        member_infos[mi].owner_size = is_union ? -aggregate_size : aggregate_size;
+                    
                     }
                     
                     if (owner_name && member_infos[mi].owner_tag_name == 0) {

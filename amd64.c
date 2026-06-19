@@ -311,7 +311,14 @@ static void save_typedef_name (const char *name, int size, int is_unsigned, int 
     }
     
     if (is_aggregate && !is_array) {
-        size = amd64_relayout_aggregate_members (size, parsed_type_tag_name[0] ? parsed_type_tag_name : 0, name);
+    
+        const char *owner_tag_name = parsed_type_tag_name[0] ? parsed_type_tag_name : 0;
+        int fixed_size = amd64_relayout_aggregate_members (size, owner_tag_name, name);
+        
+        if (fixed_size > 0) {
+            size = fixed_size;
+        }
+    
     }
     
     entry = find_typedef_name (name);
@@ -1443,19 +1450,15 @@ static void append_inline_text (char **dst, const char *start, size_t len);
 static long function_frame_saved_assignment64_bytes (void) {
 
     /*
-     * Deferred frame restoration only knows whether assignment64 register
-     * preservation was requested, not which operator triggered it.
+     * If the deferred frame path needs any callee-saved scratch register,
+     * save a fixed 32-byte set: RBX, RSI, RDI and R12.
      *
-     * emit_preserve_assignment64_regs() saves:
-     *   - RBX only for most operators (8 bytes)
-     *   - RBX+RSI+RDI for multiply/divide/modulo paths (24 bytes)
-     *
-     * Returning a hard-coded 24 here over-allocates the frame and causes the
-     * deferred epilogue to restore registers that were never saved.
-     *
-     * Until the exact save set is tracked, defer only the always-saved RBX.
+     * The previous deferred-preserve patch saved either 8 bytes or 24 bytes
+     * and placed those pushes before the local-frame allocation.  That lets
+     * saved RBX occupy [RBP - 8], which is also where the first compiler local
+     * can live, and the 24-byte save case also breaks 16-byte call alignment.
      */
-    return current_function_preserve_assignment64_regs == 2 ? 24 : (current_function_preserve_assignment64_regs ? 8 : 0);
+    return current_function_preserve_assignment64_regs ? 32 : 0;
 
 }
 
@@ -1463,10 +1466,8 @@ static void emit_function_frame_adjust_text (char **dst, long frame_size) {
 
     char buf[128];
     
-    long save_bytes;
-    long total_frame_bytes;
-    
     int n;
+    long save_bytes;
     
     if (!dst) {
         return;
@@ -1474,24 +1475,18 @@ static void emit_function_frame_adjust_text (char **dst, long frame_size) {
     
     save_bytes = function_frame_saved_assignment64_bytes ();
     
-    /*
-     * AMD64 calls must see RSP 16-byte aligned at the call instruction.
-     * After the usual "push rbp" prologue, RSP is aligned.  Any local
-     * frame allocation plus any callee-save pushes emitted here must therefore
-     * consume a multiple of 16 bytes in total.
-     *
-     * The old code rounded only the local frame to 4 bytes and ignored the
-     * optional rbx/rsi/rdi saves.  With those three pushes, a function with no
-     * locals consumed 24 bytes and every later call was misaligned.
-     */
     if (frame_size < 0) {
         frame_size = 0;
     }
     
-    total_frame_bytes = frame_size + save_bytes;
-    total_frame_bytes = (total_frame_bytes + 15) & ~15L;
-    
-    frame_size = total_frame_bytes - save_bytes;
+    /*
+     * Locals are addressed from RBP downward.  Do not push saved registers
+     * immediately below RBP, because that collides with local slots such as
+     * [RBP - 8].  Reserve the local frame first, then save callee-saved
+     * registers below it.  The save set is fixed at 32 bytes, so RSP remains
+     * 16-byte aligned before calls.
+     */
+    frame_size = (frame_size + 15) & ~15L;
     
     if (frame_size <= 0 && save_bytes <= 0) {
         return;
@@ -1503,45 +1498,37 @@ static void emit_function_frame_adjust_text (char **dst, long frame_size) {
     
     if (state->syntax & ASM_SYNTAX_INTEL) {
     
-        if (save_bytes) {
-        
-            append_inline_text (dst, "    push rbx\n", strlen ("    push rbx\n"));
-            
-            if (save_bytes == 24) {
-            
-                append_inline_text (dst, "    push rsi\n", strlen ("    push rsi\n"));
-                append_inline_text (dst, "    push rdi\n", strlen ("    push rdi\n"));
-            
-            }
-        
-        }
-        
         if (frame_size > 0) {
         
             n = sprintf (buf, "    sub rsp, %ld\n", frame_size);
             append_inline_text (dst, buf, (size_t) n);
         
         }
+        
+        if (save_bytes) {
+        
+            append_inline_text (dst, "    push rbx\n", strlen ("    push rbx\n"));
+            append_inline_text (dst, "    push rsi\n", strlen ("    push rsi\n"));
+            append_inline_text (dst, "    push rdi\n", strlen ("    push rdi\n"));
+            append_inline_text (dst, "    push r12\n", strlen ("    push r12\n"));
+        
+        }
     
     } else {
     
-        if (save_bytes) {
-        
-            append_inline_text (dst, "    pushq %rbx\n", strlen ("    pushq %rbx\n"));
-            
-            if (save_bytes == 24) {
-            
-                append_inline_text (dst, "    pushq %rsi\n", strlen ("    pushq %rsi\n"));
-                append_inline_text (dst, "    pushq %rdi\n", strlen ("    pushq %rdi\n"));
-            
-            }
-        
-        }
-        
         if (frame_size > 0) {
         
             n = sprintf (buf, "    subq $%ld, %%rsp\n", frame_size);
             append_inline_text (dst, buf, (size_t) n);
+        
+        }
+        
+        if (save_bytes) {
+        
+            append_inline_text (dst, "    pushq %rbx\n", strlen ("    pushq %rbx\n"));
+            append_inline_text (dst, "    pushq %rsi\n", strlen ("    pushq %rsi\n"));
+            append_inline_text (dst, "    pushq %rdi\n", strlen ("    pushq %rdi\n"));
+            append_inline_text (dst, "    pushq %r12\n", strlen ("    pushq %r12\n"));
         
         }
     
@@ -1553,10 +1540,8 @@ static void emit_function_frame_restore_text (char **dst, long frame_size) {
 
     char buf[128];
     
-    long save_bytes;
-    long total_frame_bytes;
-    
     int n;
+    long save_bytes;
     
     if (!dst) {
         return;
@@ -1568,10 +1553,7 @@ static void emit_function_frame_restore_text (char **dst, long frame_size) {
         frame_size = 0;
     }
     
-    total_frame_bytes = frame_size + save_bytes;
-    total_frame_bytes = (total_frame_bytes + 15) & ~15L;
-    
-    frame_size = total_frame_bytes - save_bytes;
+    frame_size = (frame_size + 15) & ~15L;
     
     if (frame_size > 2147483647L) {
         frame_size = 2147483647L;
@@ -1579,45 +1561,37 @@ static void emit_function_frame_restore_text (char **dst, long frame_size) {
     
     if (state->syntax & ASM_SYNTAX_INTEL) {
     
+        if (save_bytes) {
+        
+            append_inline_text (dst, "    pop r12\n", strlen ("    pop r12\n"));
+            append_inline_text (dst, "    pop rdi\n", strlen ("    pop rdi\n"));
+            append_inline_text (dst, "    pop rsi\n", strlen ("    pop rsi\n"));
+            append_inline_text (dst, "    pop rbx\n", strlen ("    pop rbx\n"));
+        
+        }
+        
         if (frame_size > 0) {
         
             n = sprintf (buf, "    add rsp, %ld\n", frame_size);
             append_inline_text (dst, buf, (size_t) n);
         
         }
-        
-        if (save_bytes) {
-        
-            if (save_bytes == 24) {
-            
-                append_inline_text (dst, "    pop rdi\n", strlen ("    pop rdi\n"));
-                append_inline_text (dst, "    pop rsi\n", strlen ("    pop rsi\n"));
-            
-            }
-            
-            append_inline_text (dst, "    pop rbx\n", strlen ("    pop rbx\n"));
-        
-        }
     
     } else {
     
+        if (save_bytes) {
+        
+            append_inline_text (dst, "    popq %r12\n", strlen ("    popq %r12\n"));
+            append_inline_text (dst, "    popq %rdi\n", strlen ("    popq %rdi\n"));
+            append_inline_text (dst, "    popq %rsi\n", strlen ("    popq %rsi\n"));
+            append_inline_text (dst, "    popq %rbx\n", strlen ("    popq %rbx\n"));
+        
+        }
+        
         if (frame_size > 0) {
         
             n = sprintf (buf, "    addq $%ld, %%rsp\n", frame_size);
             append_inline_text (dst, buf, (size_t) n);
-        
-        }
-        
-        if (save_bytes) {
-        
-            if (save_bytes == 24) {
-            
-                append_inline_text (dst, "    popq %rdi\n", strlen ("    popq %rdi\n"));
-                append_inline_text (dst, "    popq %rsi\n", strlen ("    popq %rsi\n"));
-            
-            }
-            
-            append_inline_text (dst, "    popq %rbx\n", strlen ("    popq %rbx\n"));
         
         }
     
@@ -6159,6 +6133,24 @@ struct local_init {
 
 };
 
+#define     MAX_PENDING_STRING_LITERALS                 4096
+
+struct pending_string_literal {
+
+    char *label;
+    int elem_size;
+    int value_count;
+    int64_s *values;
+
+};
+
+static struct pending_string_literal pending_string_literals[MAX_PENDING_STRING_LITERALS];
+static int pending_string_literal_count = 0;
+
+static void clear_pending_string_literals (void);
+static void queue_string_literal_global (const char *label, const int64_s *values, int value_count, int elem_size);
+static void emit_pending_string_literals (void);
+
 static void switch_section (int sec) {
 
     if (!state->ofp || current_section == sec) {
@@ -7927,6 +7919,20 @@ static void make_declarator_fields (int *out_fields, int *out_count, const int *
     long r;
     
     *out_count = 0;
+    
+    if (base_is_aggregate && !declarator_is_pointer) {
+
+        const char *owner_tag_name = parsed_type_tag_name[0] ? parsed_type_tag_name : 0;
+        int fixed_size = amd64_relayout_aggregate_members (base_size, owner_tag_name, 0);
+        
+        if (fixed_size > 0) {
+        
+            base_size = fixed_size;
+            parsed_type_size = fixed_size;
+        
+        }
+    
+    }
     
     if (declarator_is_pointer) {
     
@@ -12256,6 +12262,30 @@ static void emit_load_postfix_lvalue_address_to_pair_ex_now (const char *lo, con
         return;
     }
     
+    /*
+     * Some postfix member paths already leave a scalar qword member value in
+     * LO, rather than the address of the member.  Do not dereference that
+     * scalar again when widening it for the 64-bit expression path; that
+     * produced bad sequences such as:
+     *
+     *     mov rax, qword ptr [rax + 40]   ; p->size
+     *     movsxd rax, dword ptr [rax]     ; bogus: treat size as pointer
+     *
+     * Pointer members still have postfix_member_pointer_depth > 0 and must
+     * continue through the normal lvalue-address load below.
+     */
+    if (postfix_member_seen && postfix_member_pointer_depth == 0 && (postfix_member_size == (DATA_PTR & 0x1f) || postfix_member_size == (DATA_LLONG & 0x1f))) {
+    
+        if (state->syntax & ASM_SYNTAX_INTEL) {
+            fprintf (state->ofp, "    xor %s, %s\n", hi, hi);
+        } else {
+            fprintf (state->ofp, "    xorq %%%s, %%%s\n", hi, hi);
+        }
+        
+        return;
+    
+    }
+    
     if (size > (DATA_PTR & 0x1f)) {
     
         emit_push_reg_now (lo);
@@ -12428,7 +12458,21 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
                     
                     if (applied_postfix && postfix_member_seen) {
                     
-                        if (postfix_member_size == (DATA_LLONG & 0x1f) && !postfix_member_is_floating) {
+                        /*
+                         * emit_apply_postfix_member_access_to_reg_now() has
+                         * already loaded scalar member values into LO.  Do not
+                         * treat a 64-bit scalar member value as an address and
+                         * load from [LO] again; that generated sequences like:
+                         *
+                         *     mov rax, qword ptr [rax + 40]
+                         *     movsxd rax, dword ptr [rax]
+                         *
+                         * for current->size.  Only real pointer members should
+                         * be left as pointer values for later operators.
+                         */
+                        if (postfix_member_size == (DATA_LLONG & 0x1f) && !postfix_member_is_floating && postfix_member_pointer_depth == 0) {
+                            /* LO already contains the full 64-bit scalar. */
+                        } else if (postfix_member_size == (DATA_LLONG & 0x1f) && !postfix_member_is_floating) {
                         
                             const char *addr_reg = (strcmp (lo, "rcx") != 0 && strcmp (hi, "rcx") != 0) ? "rcx" : "rsi";
                             
@@ -12483,7 +12527,14 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
             
             if (applied_postfix && postfix_member_seen) {
             
-                if (postfix_member_size == (DATA_LLONG & 0x1f) && !postfix_member_is_floating) {
+                /*
+                 * Scalar 64-bit members are already loaded by the postfix
+                 * member path.  Loading again through LO dereferences the
+                 * scalar value as if it were a pointer.
+                 */
+                if (postfix_member_size == (DATA_LLONG & 0x1f) && !postfix_member_is_floating && postfix_member_pointer_depth == 0) {
+                    /* LO already contains the full 64-bit scalar. */
+                } else if (postfix_member_size == (DATA_LLONG & 0x1f) && !postfix_member_is_floating) {
                 
                     const char *addr_reg = (strcmp (lo, "rcx") != 0 && strcmp (hi, "rcx") != 0) ? "rcx" : "rsi";
                     
@@ -16740,7 +16791,15 @@ static int emit_load_parenthesized_indirect_member_to_reg_now (const char *reg) 
     
     free (name);
     
-    emit_load_deref_reg_now (reg, DATA_PTR);
+    /*
+     * For an expression of the form (*p).member, p already contains the
+     * address of the aggregate object.  The old AMD64 path loaded qword [p]
+     * here, treating the first field of the aggregate as another pointer.
+     * That turned scalar member loads into a second bogus dereference, e.g.
+     *     mov rax, qword ptr [rax + 40]
+     *     movsxd rax, dword ptr [rax]
+     * instead of loading the member directly from p + offset.
+     */
     first_member = 1;
     
     last_member_size = DATA_INT & 0x1f;
@@ -23156,7 +23215,6 @@ static int emit_push_global_aggregate_argument_now (const char *name) {
 static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result_reg) {
 
     int argc = 0;
-    int total_arg_bytes = 0;
     int arg_bytes;
     int arg_is_floating;
     int i;
@@ -23351,8 +23409,6 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
                 }
             
             }
-            
-            total_arg_bytes += arg_bytes;
             
             if (arg_saved_ofp) {
             
@@ -26332,40 +26388,22 @@ static int emit_load_assignment_binary_expression_prec_to_reg (const char *reg, 
     }
     
     /*
-     * The postfix member helper deliberately leaves aggregates and 64-bit
-     * scalar members as an address because the pair/aggregate paths may need
-     * the full object.  This single-register expression path, however, only
-     * has EAX/EDX-style 32-bit arithmetic available.  When such a member is
-     * used inside ordinary arithmetic/comparison code (for example the
-     * CHECK_READ macro in pdld with address_type fields), load the low word
-     * from the member address instead of adding the member address itself.
+     * Scalar 64-bit postfix members are already values in REG.
+     *
+     * Do not collapse them by loading through REG when an arithmetic operator
+     * follows.  That was still producing:
+     *
+     *     mov rax, qword ptr [rax + 40]   ; p->size value
+     *     movsxd rax, dword ptr [rax]     ; bogus dereference of size
+     *
+     * for expressions such as:
+     *
+     *     p->size - bytes
+     *     n->size + p->size
+     *
+     * The normal arithmetic path below can operate on the qword value already
+     * held in REG.
      */
-    if (postfix_member_seen
-        && postfix_member_pointer_depth == 0
-        && postfix_member_size == (DATA_LLONG & 0x1f)
-        && !postfix_member_is_floating
-        && is_arithmetic_binary_operator (tok.kind)) {
-
-        /*
-         * Only collapse a pending 64-bit member address to a 32-bit scalar
-         * when this path is actually about to perform old 32-bit arithmetic
-         * on it.  For a plain rvalue/call argument such as:
-         *
-         *     LoadedImage->DeviceHandle
-         *
-         * the member load has already produced the qword value in REG.  Loading
-         * through that value again turns an EFI_HANDLE into:
-         *
-         *     mov rax, qword ptr [rax + 24]
-         *     movsxd rax, dword ptr [rax]
-         *
-         * which dereferences the handle and breaks HandleProtocol.
-         */
-        emit_load_deref_reg_now (reg, DATA_INT & 0x1f);
-        postfix_member_size = DATA_INT & 0x1f;
-    
-    }
-    
     if (postfix_member_seen && postfix_member_is_unsigned) {
         is_unsigned = 1;
     }
@@ -27004,6 +27042,7 @@ static void emit_assignment64_logical_op_to_pair_now (enum token_kind op, const 
 
     int true_label;
     int false_label;
+    int rhs_label;
     int end_label;
     
     if (!state->ofp) {
@@ -27012,79 +27051,73 @@ static void emit_assignment64_logical_op_to_pair_now (enum token_kind op, const 
     
     true_label = anon_label++;
     false_label = anon_label++;
+    rhs_label = anon_label++;
     end_label = anon_label++;
     
+    /*
+     * AMD64 scalar 64-bit values and pointers live in one register.
+     * The old pair truth test treated RDX/RCX as a high word, but those
+     * registers are often just stale scratch values after loading a pointer.
+     * That made NULL pointers test true and let mem_init dereference 0.
+     */
     if (state->syntax & ASM_SYNTAX_INTEL) {
     
-        fprintf (state->ofp, "    test rdx, rdx\n");
-        fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jnz L%d\n" : "    jnz .L%d\n"), op == TOK_LOGOR ? true_label : end_label);
         fprintf (state->ofp, "    test rax, rax\n");
-        fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jnz L%d\n" : "    jnz .L%d\n"), op == TOK_LOGOR ? true_label : end_label);
         
-        if (op == TOK_LOGAND) {
+        if (op == TOK_LOGOR) {
         
-            fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jmp L%d\n" : "    jmp .L%d\n"), false_label);
-            fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "L%d:\n" : ".L%d:\n"), end_label);
-            fprintf (state->ofp, "    test rcx, rcx\n");
             fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jnz L%d\n" : "    jnz .L%d\n"), true_label);
             fprintf (state->ofp, "    test rbx, rbx\n");
             fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jnz L%d\n" : "    jnz .L%d\n"), true_label);
-            fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "L%d:\n" : ".L%d:\n"), false_label);
-            fprintf (state->ofp, "    xor rax, rax\n");
-            fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jmp L%d\n" : "    jmp .L%d\n"), end_label + 1);
-            fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "L%d:\n" : ".L%d:\n"), true_label);
-            fprintf (state->ofp, "    mov eax, 1\n");
-            fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "L%d:\n" : ".L%d:\n"), end_label + 1);
+            fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jmp L%d\n" : "    jmp .L%d\n"), false_label);
         
         } else {
         
-            fprintf (state->ofp, "    test rcx, rcx\n");
-            fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jnz L%d\n" : "    jnz .L%d\n"), true_label);
+            fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jz L%d\n" : "    jz .L%d\n"), false_label);
+            fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jmp L%d\n" : "    jmp .L%d\n"), rhs_label);
+            fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "L%d:\n" : ".L%d:\n"), rhs_label);
             fprintf (state->ofp, "    test rbx, rbx\n");
-            fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jnz L%d\n" : "    jnz .L%d\n"), true_label);
-            fprintf (state->ofp, "    xor rax, rax\n");
-            fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jmp L%d\n" : "    jmp .L%d\n"), end_label);
-            fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "L%d:\n" : ".L%d:\n"), true_label);
-            fprintf (state->ofp, "    mov eax, 1\n");
-            fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "L%d:\n" : ".L%d:\n"), end_label);
+            fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jz L%d\n" : "    jz .L%d\n"), false_label);
+            fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jmp L%d\n" : "    jmp .L%d\n"), true_label);
         
         }
+        
+        fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "L%d:\n" : ".L%d:\n"), false_label);
+        fprintf (state->ofp, "    xor rax, rax\n");
+        fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jmp L%d\n" : "    jmp .L%d\n"), end_label);
+        fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "L%d:\n" : ".L%d:\n"), true_label);
+        fprintf (state->ofp, "    mov eax, 1\n");
+        fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "L%d:\n" : ".L%d:\n"), end_label);
     
     } else {
     
-        fprintf (state->ofp, "    testq %%rdx, %%rdx\n");
-        fprintf (state->ofp, op == TOK_LOGOR ? "    jnz .L%d\n" : "    jnz .L%d\n", op == TOK_LOGOR ? true_label : end_label);
         fprintf (state->ofp, "    testq %%rax, %%rax\n");
         fprintf (state->ofp, op == TOK_LOGOR ? "    jnz .L%d\n" : "    jnz .L%d\n", op == TOK_LOGOR ? true_label : end_label);
         
-        if (op == TOK_LOGAND) {
+        if (op == TOK_LOGOR) {
         
-            fprintf (state->ofp, "    jmp .L%d\n", false_label);
-            fprintf (state->ofp, ".L%d:\n", end_label);
-            fprintf (state->ofp, "    testq %%rcx, %%rcx\n");
             fprintf (state->ofp, "    jnz .L%d\n", true_label);
             fprintf (state->ofp, "    testq %%rbx, %%rbx\n");
             fprintf (state->ofp, "    jnz .L%d\n", true_label);
-            fprintf (state->ofp, ".L%d:\n", false_label);
-            fprintf (state->ofp, "    xorq %%rax, %%rax\n");
-            fprintf (state->ofp, "    jmp .L%d\n", end_label + 1);
-            fprintf (state->ofp, ".L%d:\n", true_label);
-            fprintf (state->ofp, "    movl $1, %%eax\n");
-            fprintf (state->ofp, ".L%d:\n", end_label + 1);
+            fprintf (state->ofp, "    jmp .L%d\n", false_label);
         
         } else {
         
-            fprintf (state->ofp, "    testq %%rcx, %%rcx\n");
-            fprintf (state->ofp, "    jnz .L%d\n", true_label);
+            fprintf (state->ofp, "    jz .L%d\n", false_label);
+            fprintf (state->ofp, "    jmp .L%d\n", rhs_label);
+            fprintf (state->ofp, ".L%d:\n", rhs_label);
             fprintf (state->ofp, "    testq %%rbx, %%rbx\n");
-            fprintf (state->ofp, "    jnz .L%d\n", true_label);
-            fprintf (state->ofp, "    xorq %%rax, %%rax\n");
-            fprintf (state->ofp, "    jmp .L%d\n", end_label);
-            fprintf (state->ofp, ".L%d:\n", true_label);
-            fprintf (state->ofp, "    movl $1, %%eax\n");
-            fprintf (state->ofp, ".L%d:\n", end_label);
+            fprintf (state->ofp, "    jz .L%d\n", false_label);
+            fprintf (state->ofp, "    jmp .L%d\n", true_label);
         
         }
+        
+        fprintf (state->ofp, ".L%d:\n", false_label);
+        fprintf (state->ofp, "    xor %%rax, %%rax\n");
+        fprintf (state->ofp, "    jmp .L%d\n", end_label);
+        fprintf (state->ofp, ".L%d:\n", true_label);
+        fprintf (state->ofp, "    mov $1, %%eax\n");
+        fprintf (state->ofp, ".L%d:\n", end_label);
     
     }
     
@@ -33025,236 +33058,62 @@ static void emit_statement_cmp_rax_rdx_jump_if_false (enum token_kind op, int is
 
 static void emit_statement_cmp64_to_rax (enum token_kind op, int is_unsigned) {
 
-    int true_label;
-    int false_label;
-    int end_label;
+    const char *setcc;
     
     if (!state->ofp) {
         return;
     }
     
-    true_label = anon_label++;
-    false_label = anon_label++;
-    end_label = anon_label++;
+    /*
+     * AMD64 scalar integers and pointers are held in one 64-bit register.
+     * The old i386 long-long path treated a value as a high/low pair:
+     *
+     *     left  = rdx:rax
+     *     right = rcx:rbx
+     *
+     * but most AMD64 expression code only keeps the real value in RAX/RBX.
+     * RDX/RCX are scratch/stale.  Emitting a high-half compare here made
+     * expressions such as:
+     *
+     *     (size % 60) == 0
+     *
+     * depend on garbage in RCX/RDX, which broke kmalloc's size rounding and
+     * eventually made it return NULL.  Compare the actual 64-bit scalar
+     * registers only.
+     */
+    if (is_value_compare_operator (op)) {
     
-    if ((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) {
-    
-        switch (op) {
+        setcc = value_compare_set_mnemonic (op, is_unsigned);
         
-            case TOK_LESS:
-            
-                fprintf (state->ofp, "    cmp rdx, rcx\n");
-                fprintf (state->ofp, is_unsigned ? "    jb L%d\n" : "    jl L%d\n", true_label);
-                fprintf (state->ofp, is_unsigned ? "    ja L%d\n" : "    jg L%d\n", false_label);
-                fprintf (state->ofp, "    cmp rax, rbx\n");
-                fprintf (state->ofp, "    jb L%d\n", true_label);
-                break;
-            
-            case TOK_LTEQ:
-            
-                fprintf (state->ofp, "    cmp rdx, rcx\n");
-                fprintf (state->ofp, is_unsigned ? "    jb L%d\n" : "    jl L%d\n", true_label);
-                fprintf (state->ofp, is_unsigned ? "    ja L%d\n" : "    jg L%d\n", false_label);
-                fprintf (state->ofp, "    cmp rax, rbx\n");
-                fprintf (state->ofp, "    jbe L%d\n", true_label);
-                break;
-            
-            case TOK_GREATER:
-            
-                fprintf (state->ofp, "    cmp rdx, rcx\n");
-                fprintf (state->ofp, is_unsigned ? "    ja L%d\n" : "    jg L%d\n", true_label);
-                fprintf (state->ofp, is_unsigned ? "    jb L%d\n" : "    jl L%d\n", false_label);
-                fprintf (state->ofp, "    cmp rax, rbx\n");
-                fprintf (state->ofp, "    ja L%d\n", true_label);
-                break;
-            
-            case TOK_GTEQ:
-            
-                fprintf (state->ofp, "    cmp rdx, rcx\n");
-                fprintf (state->ofp, is_unsigned ? "    ja L%d\n" : "    jg L%d\n", true_label);
-                fprintf (state->ofp, is_unsigned ? "    jb L%d\n" : "    jl L%d\n", false_label);
-                fprintf (state->ofp, "    cmp rax, rbx\n");
-                fprintf (state->ofp, "    jae L%d\n", true_label);
-                break;
-            
-            case TOK_EQEQ:
-            
-                fprintf (state->ofp, "    cmp rdx, rcx\n");
-                fprintf (state->ofp, "    jne L%d\n", false_label);
-                fprintf (state->ofp, "    cmp rax, rbx\n");
-                fprintf (state->ofp, "    je L%d\n", true_label);
-                break;
-            
-            case TOK_NOTEQ:
-            
-                fprintf (state->ofp, "    cmp rdx, rcx\n");
-                fprintf (state->ofp, "    jne L%d\n", true_label);
-                fprintf (state->ofp, "    cmp rax, rbx\n");
-                fprintf (state->ofp, "    jne L%d\n", true_label);
-                break;
-            
-            default:
-            
-                fprintf (state->ofp, "    test rdx, rdx\n");
-                fprintf (state->ofp, "    jnz L%d\n", true_label);
-                fprintf (state->ofp, "    test rax, rax\n");
-                fprintf (state->ofp, "    jnz L%d\n", true_label);
-                break;
+        if (state->syntax & ASM_SYNTAX_INTEL) {
+        
+            fprintf (state->ofp, "    cmp rax, rbx\n");
+            fprintf (state->ofp, "    %s al\n", setcc);
+            fprintf (state->ofp, "    movzx eax, al\n");
+        
+        } else {
+        
+            fprintf (state->ofp, "    cmpq %%rbx, %%rax\n");
+            fprintf (state->ofp, "    %s %%al\n", setcc);
+            fprintf (state->ofp, "    movzbl %%al, %%eax\n");
         
         }
         
-        fprintf (state->ofp, "L%d:\n", false_label);
-        fprintf (state->ofp, "    xor rax, rax\n");
-        fprintf (state->ofp, "    jmp L%d\n", end_label);
-        fprintf (state->ofp, "L%d:\n", true_label);
-        fprintf (state->ofp, "    mov eax, 1\n");
-        fprintf (state->ofp, "L%d:\n", end_label);
+        return;
     
-    } else if (state->syntax & ASM_SYNTAX_INTEL) {
+    }
     
-        switch (op) {
-        
-            case TOK_LESS:
-            
-                fprintf (state->ofp, "    cmp rdx, rcx\n");
-                fprintf (state->ofp, is_unsigned ? "    jb .L%d\n" : "    jl .L%d\n", true_label);
-                fprintf (state->ofp, is_unsigned ? "    ja .L%d\n" : "    jg .L%d\n", false_label);
-                fprintf (state->ofp, "    cmp rax, rbx\n");
-                fprintf (state->ofp, "    jb .L%d\n", true_label);
-                break;
-            
-            case TOK_LTEQ:
-            
-                fprintf (state->ofp, "    cmp rdx, rcx\n");
-                fprintf (state->ofp, is_unsigned ? "    jb .L%d\n" : "    jl .L%d\n", true_label);
-                fprintf (state->ofp, is_unsigned ? "    ja .L%d\n" : "    jg .L%d\n", false_label);
-                fprintf (state->ofp, "    cmp rax, rbx\n");
-                fprintf (state->ofp, "    jbe .L%d\n", true_label);
-                break;
-            
-            case TOK_GREATER:
-            
-                fprintf (state->ofp, "    cmp rdx, rcx\n");
-                fprintf (state->ofp, is_unsigned ? "    ja .L%d\n" : "    jg .L%d\n", true_label);
-                fprintf (state->ofp, is_unsigned ? "    jb .L%d\n" : "    jl .L%d\n", false_label);
-                fprintf (state->ofp, "    cmp rax, rbx\n");
-                fprintf (state->ofp, "    ja .L%d\n", true_label);
-                break;
-            
-            case TOK_GTEQ:
-            
-                fprintf (state->ofp, "    cmp rdx, rcx\n");
-                fprintf (state->ofp, is_unsigned ? "    ja .L%d\n" : "    jg .L%d\n", true_label);
-                fprintf (state->ofp, is_unsigned ? "    jb .L%d\n" : "    jl .L%d\n", false_label);
-                fprintf (state->ofp, "    cmp rax, rbx\n");
-                fprintf (state->ofp, "    jae .L%d\n", true_label);
-                break;
-            
-            case TOK_EQEQ:
-            
-                fprintf (state->ofp, "    cmp rdx, rcx\n");
-                fprintf (state->ofp, "    jne .L%d\n", false_label);
-                fprintf (state->ofp, "    cmp rax, rbx\n");
-                fprintf (state->ofp, "    je .L%d\n", true_label);
-                break;
-            
-            case TOK_NOTEQ:
-            
-                fprintf (state->ofp, "    cmp rdx, rcx\n");
-                fprintf (state->ofp, "    jne .L%d\n", true_label);
-                fprintf (state->ofp, "    cmp rax, rbx\n");
-                fprintf (state->ofp, "    jne .L%d\n", true_label);
-                break;
-            
-            default:
-            
-                fprintf (state->ofp, "    test rdx, rdx\n");
-                fprintf (state->ofp, "    jnz .L%d\n", true_label);
-                fprintf (state->ofp, "    test rax, rax\n");
-                fprintf (state->ofp, "    jnz .L%d\n", true_label);
-                break;
-        
-        }
-        
-        fprintf (state->ofp, ".L%d:\n", false_label);
-        fprintf (state->ofp, "    xor rax, rax\n");
-        fprintf (state->ofp, "    jmp .L%d\n", end_label);
-        fprintf (state->ofp, ".L%d:\n", true_label);
-        fprintf (state->ofp, "    mov eax, 1\n");
-        fprintf (state->ofp, ".L%d:\n", end_label);
+    if (state->syntax & ASM_SYNTAX_INTEL) {
+    
+        fprintf (state->ofp, "    test rax, rax\n");
+        fprintf (state->ofp, "    setne al\n");
+        fprintf (state->ofp, "    movzx eax, al\n");
     
     } else {
     
-        switch (op) {
-        
-            case TOK_LESS:
-            
-                fprintf (state->ofp, "    cmpq %%rcx, %%rdx\n");
-                fprintf (state->ofp, is_unsigned ? "    jb .L%d\n" : "    jl .L%d\n", true_label);
-                fprintf (state->ofp, is_unsigned ? "    ja .L%d\n" : "    jg .L%d\n", false_label);
-                fprintf (state->ofp, "    cmpq %%rbx, %%rax\n");
-                fprintf (state->ofp, "    jb .L%d\n", true_label);
-                break;
-            
-            case TOK_LTEQ:
-            
-                fprintf (state->ofp, "    cmpq %%rcx, %%rdx\n");
-                fprintf (state->ofp, is_unsigned ? "    jb .L%d\n" : "    jl .L%d\n", true_label);
-                fprintf (state->ofp, is_unsigned ? "    ja .L%d\n" : "    jg .L%d\n", false_label);
-                fprintf (state->ofp, "    cmpq %%rbx, %%rax\n");
-                fprintf (state->ofp, "    jbe .L%d\n", true_label);
-                break;
-            
-            case TOK_GREATER:
-            
-                fprintf (state->ofp, "    cmpq %%rcx, %%rdx\n");
-                fprintf (state->ofp, is_unsigned ? "    ja .L%d\n" : "    jg .L%d\n", true_label);
-                fprintf (state->ofp, is_unsigned ? "    jb .L%d\n" : "    jl .L%d\n", false_label);
-                fprintf (state->ofp, "    cmpq %%rbx, %%rax\n");
-                fprintf (state->ofp, "    ja .L%d\n", true_label);
-                break;
-            
-            case TOK_GTEQ:
-            
-                fprintf (state->ofp, "    cmpq %%rcx, %%rdx\n");
-                fprintf (state->ofp, is_unsigned ? "    ja .L%d\n" : "    jg .L%d\n", true_label);
-                fprintf (state->ofp, is_unsigned ? "    jb .L%d\n" : "    jl .L%d\n", false_label);
-                fprintf (state->ofp, "    cmpq %%rbx, %%rax\n");
-                fprintf (state->ofp, "    jae .L%d\n", true_label);
-                break;
-            
-            case TOK_EQEQ:
-            
-                fprintf (state->ofp, "    cmpq %%rcx, %%rdx\n");
-                fprintf (state->ofp, "    jne .L%d\n", false_label);
-                fprintf (state->ofp, "    cmpq %%rbx, %%rax\n");
-                fprintf (state->ofp, "    je .L%d\n", true_label);
-                break;
-            
-            case TOK_NOTEQ:
-            
-                fprintf (state->ofp, "    cmpq %%rcx, %%rdx\n");
-                fprintf (state->ofp, "    jne .L%d\n", true_label);
-                fprintf (state->ofp, "    cmpq %%rbx, %%rax\n");
-                fprintf (state->ofp, "    jne .L%d\n", true_label);
-                break;
-            
-            default:
-            
-                fprintf (state->ofp, "    testq %%rdx, %%rdx\n");
-                fprintf (state->ofp, "    jnz .L%d\n", true_label);
-                fprintf (state->ofp, "    testq %%rax, %%rax\n");
-                fprintf (state->ofp, "    jnz .L%d\n", true_label);
-                break;
-        
-        }
-        
-        fprintf (state->ofp, ".L%d:\n", false_label);
-        fprintf (state->ofp, "    xorq %%rax, %%rax\n");
-        fprintf (state->ofp, "    jmp .L%d\n", end_label);
-        fprintf (state->ofp, ".L%d:\n", true_label);
-        fprintf (state->ofp, "    movl $1, %%eax\n");
-        fprintf (state->ofp, ".L%d:\n", end_label);
+        fprintf (state->ofp, "    testq %%rax, %%rax\n");
+        fprintf (state->ofp, "    setne %%al\n");
+        fprintf (state->ofp, "    movzbl %%al, %%eax\n");
     
     }
 
@@ -33392,29 +33251,21 @@ static void emit_statement_test_rax_jump_if_false (int label) {
 
 static void emit_statement_test_pair_jump_if_false (const char *lo, const char *hi, int label) {
 
-    int nonzero_label;
+    (void) hi;
     
     if (!state->ofp) {
         return;
     }
     
-    nonzero_label = anon_label++;
-    
     if (state->syntax & ASM_SYNTAX_INTEL) {
     
-        fprintf (state->ofp, "    test %s, %s\n", hi, hi);
-        fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jnz L%d\n" : "    jnz .L%d\n"), nonzero_label);
         fprintf (state->ofp, "    test %s, %s\n", lo, lo);
         fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jz L%d\n" : "    jz .L%d\n"), label);
-        fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "L%d:\n" : ".L%d:\n"), nonzero_label);
     
     } else {
     
-        fprintf (state->ofp, "    testq %%%s, %%%s\n", hi, hi);
-        fprintf (state->ofp, "    jnz .L%d\n", nonzero_label);
         fprintf (state->ofp, "    testq %%%s, %%%s\n", lo, lo);
         fprintf (state->ofp, "    jz .L%d\n", label);
-        fprintf (state->ofp, ".L%d:\n", nonzero_label);
     
     }
 
@@ -33422,21 +33273,19 @@ static void emit_statement_test_pair_jump_if_false (const char *lo, const char *
 
 static void emit_statement_test_pair_jump_if_true (const char *lo, const char *hi, int label) {
 
+    (void) hi;
+    
     if (!state->ofp) {
         return;
     }
     
     if (state->syntax & ASM_SYNTAX_INTEL) {
     
-        fprintf (state->ofp, "    test %s, %s\n", hi, hi);
-        fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jnz L%d\n" : "    jnz .L%d\n"), label);
         fprintf (state->ofp, "    test %s, %s\n", lo, lo);
         fprintf (state->ofp, (((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jnz L%d\n" : "    jnz .L%d\n"), label);
     
     } else {
     
-        fprintf (state->ofp, "    testq %%%s, %%%s\n", hi, hi);
-        fprintf (state->ofp, "    jnz .L%d\n", label);
         fprintf (state->ofp, "    testq %%%s, %%%s\n", lo, lo);
         fprintf (state->ofp, "    jnz .L%d\n", label);
     
@@ -37029,8 +36878,8 @@ static int parse_possible_knr_function (void) {
                 char *param_name = 0;
                 
                 parse_type_spec ();
-                param_base_size = parsed_type_size;
                 
+                param_base_size = parsed_type_size;
                 preserve_pending_params++;
                 
                 declarator_is_pointer = 0;
@@ -38038,15 +37887,94 @@ static void emit_global_object (const char *name, int size, int is_array, long a
 
 }
 
+static void clear_pending_string_literals (void) {
+
+    int i;
+    
+    for (i = 0; i < pending_string_literal_count; i++) {
+    
+        if (pending_string_literals[i].label) {
+        
+            free (pending_string_literals[i].label);
+            pending_string_literals[i].label = 0;
+        
+        }
+        
+        if (pending_string_literals[i].values) {
+        
+            free (pending_string_literals[i].values);
+            pending_string_literals[i].values = 0;
+        
+        }
+        
+        pending_string_literals[i].elem_size = 0;
+        pending_string_literals[i].value_count = 0;
+    
+    }
+    
+    pending_string_literal_count = 0;
+
+}
+
+static void queue_string_literal_global (const char *label, const int64_s *values, int value_count, int elem_size) {
+
+    struct pending_string_literal *p;
+    int i;
+    
+    if (!label || !values || value_count <= 0 || !state->ofp) {
+        return;
+    }
+    
+    if (pending_string_literal_count >= MAX_PENDING_STRING_LITERALS) {
+    
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "too many string literals");
+        return;
+    
+    }
+    
+    p = &pending_string_literals[pending_string_literal_count++];
+    p->label = xstrdup (label);
+    p->elem_size = elem_size;
+    p->value_count = value_count;
+    p->values = xmalloc ((size_t) value_count * sizeof (*p->values));
+    
+    for (i = 0; i < value_count; i++) {
+        p->values[i] = values[i];
+    }
+
+}
+
+static void emit_pending_string_literals (void) {
+
+    int i, j;
+    
+    if (!state->ofp || pending_string_literal_count <= 0) {
+        return;
+    }
+    
+    switch_section (SECTION_DATA);
+    
+    for (i = 0; i < pending_string_literal_count; i++) {
+    
+        emit_global_data_label (pending_string_literals[i].label, 1);
+        
+        for (j = 0; j < pending_string_literals[i].value_count; j++) {
+            emit_global_scalar (pending_string_literals[i].values[j], pending_string_literals[i].elem_size);
+        }
+    
+    }
+    
+    clear_pending_string_literals ();
+
+}
+
 static char *emit_string_literal_global (void) {
 
     int64_s values[MAX_AGG_FIELDS];
-    
     char label[64];
-    char skip_label[64];
     
     int elem_size = DATA_CHAR & 0x1f;
-    int value_count = 0, i;
+    int value_count = 0;
     
     if ((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) {
         sprintf (label, "LC%d", anon_label++);
@@ -38069,37 +37997,7 @@ static char *emit_string_literal_global (void) {
         return xstrdup (label);
     }
     
-    if (current_section == SECTION_TEXT) {
-    
-        if ((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) {
-            sprintf (skip_label, "L%d", anon_label++);
-        } else {
-            sprintf (skip_label, ".L%d", anon_label++);
-        }
-        
-        fprintf (state->ofp, "    jmp %s\n", skip_label);
-        
-        switch_section (SECTION_DATA);
-        emit_global_data_label (label, 1);
-        
-        for (i = 0; i < value_count; i++) {
-            emit_global_scalar (values[i], elem_size);
-        }
-        
-        switch_section (SECTION_TEXT);
-        emit_global_label (skip_label, 1);
-        
-        return xstrdup (label);
-    
-    }
-    
-    switch_section (SECTION_DATA);
-    emit_global_data_label (label, 1);
-    
-    for (i = 0; i < value_count; i++) {
-        emit_global_scalar (values[i], elem_size);
-    }
-    
+    queue_string_literal_global (label, values, value_count, elem_size);
     return xstrdup (label);
 
 }
@@ -38551,7 +38449,7 @@ void compile_translation_unit64 (void) {
     if (state->ofp) {
     
         if (state->syntax & ASM_SYNTAX_MASM) {
-            fprintf (state->ofp, ".model flat\n");
+            /*fprintf (state->ofp, ".model flat\n");*/
         } else if (state->syntax & ASM_SYNTAX_NASM) {
             fprintf (state->ofp, "bits 64\n");
         } else if (state->syntax & ASM_SYNTAX_INTEL) {
@@ -38566,6 +38464,7 @@ void compile_translation_unit64 (void) {
     clear_inline_functions ();
     clear_enum_constants ();
     clear_typedef_names ();
+    clear_pending_string_literals ();
     
     get_token ();
     
@@ -38574,8 +38473,8 @@ void compile_translation_unit64 (void) {
         if (is_type_start (tok.kind)) {
         
             parse_type_spec ();
-            parse_external_after_type ();
             
+            parse_external_after_type ();
             continue;
         
         }
@@ -38588,6 +38487,8 @@ void compile_translation_unit64 (void) {
         get_token ();
     
     }
+    
+    emit_pending_string_literals ();
     
     if (state->syntax & ASM_SYNTAX_MASM) {
         masm_flush_data_line ();
