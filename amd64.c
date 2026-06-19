@@ -8459,15 +8459,52 @@ static void emit_extern_symbol (const char *name, int size, int is_function);
 static void emit_extern_reference_symbol (const char *name, int size);
 
 static void emit_block_static_object (const char *label, int size, int is_array, long array_count, const int *field_sizes, int field_count, const int64_s *values, char **symbols, int value_count, int is_aggregate) {
+
+    int skip_label = anon_label++;
+    int need_code_skip = current_parse_block_depth > 0;
+    
+    /*
+     * Block-scope statics are emitted while parsing a function body.  In this
+     * backend/assembler pipeline a section switch in the middle of a function
+     * can still leave the bytes adjacent in the output stream, so execution can
+     * fall into the emitted .data/.data? object before reaching the next real
+     * instruction.
+     *
+     * Keep the existing immediate emission model, but make it executable-safe:
+     * branch around the object, emit it in the normal data/bss section, then
+     * resume text at the skip label.  This fixes every local static object, not
+     * only static EFI_INPUT_KEY in get_key().
+     */
+    if (need_code_skip) {
+    
+        switch_section (SECTION_TEXT);
+        
+        if ((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) {
+            fprintf (state->ofp, "    jmp L%d\n", skip_label);
+        } else {
+            fprintf (state->ofp, "    jmp .L%d\n", skip_label);
+        }
+    
+    }
     
     emit_global_object (label, size, is_array, array_count, field_sizes, field_count, values, symbols, value_count, is_aggregate, 1);
     
-    /**
+    /*
      * We may have switched to .data/.data? to emit the static object while
      * parsing a function body.  The following statements still belong in
      * .code/.text.
      */
     switch_section (SECTION_TEXT);
+    
+    if (need_code_skip) {
+    
+        if ((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) {
+            fprintf (state->ofp, "L%d:\n", skip_label);
+        } else {
+            fprintf (state->ofp, ".L%d:\n", skip_label);
+        }
+    
+    }
 
 }
 
@@ -12263,29 +12300,22 @@ static void emit_load_postfix_lvalue_address_to_pair_ex_now (const char *lo, con
     }
     
     /*
-     * Some postfix member paths already leave a scalar qword member value in
-     * LO, rather than the address of the member.  Do not dereference that
-     * scalar again when widening it for the 64-bit expression path; that
-     * produced bad sequences such as:
+     * emit_parse_postfix_copy_source_address_now() leaves LO holding the
+     * lvalue address of the final postfix object.  Even 8-byte members must be
+     * dereferenced here:
      *
-     *     mov rax, qword ptr [rax + 40]   ; p->size
-     *     movsxd rax, dword ptr [rax]     ; bogus: treat size as pointer
+     *     events[0] = ConIn->WaitForKey;
      *
-     * Pointer members still have postfix_member_pointer_depth > 0 and must
-     * continue through the normal lvalue-address load below.
+     * must load the EFI_EVENT stored at [ConIn + WaitForKey], not store the
+     * address of that member field.  The old qword-member shortcut returned
+     * before the dereference and generated:
+     *
+     *     mov rax, qword ptr _ConIn
+     *     add rax, 16
+     *
+     * which passes garbage to WaitForEvent and makes get_key return
+     * immediately.
      */
-    if (postfix_member_seen && postfix_member_pointer_depth == 0 && (postfix_member_size == (DATA_PTR & 0x1f) || postfix_member_size == (DATA_LLONG & 0x1f))) {
-    
-        if (state->syntax & ASM_SYNTAX_INTEL) {
-            fprintf (state->ofp, "    xor %s, %s\n", hi, hi);
-        } else {
-            fprintf (state->ofp, "    xorq %%%s, %%%s\n", hi, hi);
-        }
-        
-        return;
-    
-    }
-    
     if (size > (DATA_PTR & 0x1f)) {
     
         emit_push_reg_now (lo);
@@ -13750,6 +13780,23 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
             {
             
                 const char *member_tag_name = last_found_member_tag_name;
+                
+                /*
+                 * If a typedef-to-pointer member has lost its pointer-depth metadata,
+                 * do not treat its typedef payload size as an aggregate object.  The
+                 * final rvalue still has to be loaded from the member slot.  This is
+                 * what broke expressions such as ConIn->WaitForKey: the backend left
+                 * REG holding ConIn + offset, so events[0] received the address of the
+                 * WaitForKey field instead of the EFI_EVENT value stored in that field.
+                 */
+                if (size > (DATA_PTR & 0x1f) && pointer_depth == 0 && !is_array && !member_tag_name) {
+                
+                    size = DATA_PTR & 0x1f;
+                    elem_size = DATA_PTR & 0x1f;
+                    
+                    pointer_depth = 1;
+                
+                }
                 
                 /*
                  * For an array member whose element type is a pointer, the
