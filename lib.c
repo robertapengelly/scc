@@ -37,17 +37,18 @@ struct cc_option {
 #define     CC_OPTION_DEFINE                                4
 #define     CC_OPTION_HELP                                  5
 #define     CC_OPTION_INCLUDE                               6
-#define     CC_OPTION_NO_LEADING_UNDERSCORE                 7
-#define     CC_OPTION_NO_LINEMARKERS                        8
-#define     CC_OPTION_MASM                                  9
-#define     CC_OPTION_MAX_ERRORS                            10
-#define     CC_OPTION_MLONG64                               11
-#define     CC_OPTION_OUTFILE                               12
-#define     CC_OPTION_PEDANTIC                              13
-#define     CC_OPTION_PREPOCESS                             14
-#define     CC_OPTION_STD                                   15
-#define     CC_OPTION_TRANDITIONAL_LINEMARKERS              16
-#define     CC_OPTION_UNDEF                                 17
+#define     CC_OPTION_LEADING_UNDERSCORE                    7
+#define     CC_OPTION_MASM                                  8
+#define     CC_OPTION_MAX_ERRORS                            9
+#define     CC_OPTION_MLONG64                               10
+#define     CC_OPTION_NO_LEADING_UNDERSCORE                 12
+#define     CC_OPTION_NO_LINEMARKERS                        13
+#define     CC_OPTION_OUTFILE                               14
+#define     CC_OPTION_PEDANTIC                              15
+#define     CC_OPTION_PREPOCESS                             16
+#define     CC_OPTION_STD                                   17
+#define     CC_OPTION_TRANDITIONAL_LINEMARKERS              18
+#define     CC_OPTION_UNDEF                                 19
 
 static struct cc_option opts[] = {
 
@@ -68,6 +69,7 @@ static struct cc_option opts[] = {
     {   "-S",                               CC_OPTION_COMPILE,                      CC_OPTION_NO_ARG        },
     
     {   "-fno-leading-underscore",          CC_OPTION_NO_LEADING_UNDERSCORE,        CC_OPTION_NO_ARG        },
+    {   "-fleading-underscore",             CC_OPTION_LEADING_UNDERSCORE,           CC_OPTION_NO_ARG        },
     {   "-fmax-errors",                     CC_OPTION_MAX_ERRORS,                   CC_OPTION_EQUALS_ARG    },
     {   "-mlong64",                         CC_OPTION_MLONG64,                      CC_OPTION_NO_ARG        },
     {   "-masm",                            CC_OPTION_MASM,                         CC_OPTION_EQUALS_ARG    },
@@ -131,6 +133,7 @@ static void print_usage (void) {
         fprintf (stderr, "    -fmax-errors=<count>              Stop execution after <count> errros.\n");
         fprintf (stderr, "\n");
         fprintf (stderr, "    -fno-leading-underscore           Don't prefix symbols with an underscore.\n");
+        fprintf (stderr, "    -fleading-underscore              Prefix symbols with an underscore.\n");
         fprintf (stderr, "    -mlong64                          Convert long to 64-bit.\n");
         fprintf (stderr, "\n");
         fprintf (stderr, "    -P                                Don't print linemarkers.\n");
@@ -362,7 +365,9 @@ void parse_args (int argc, char **argv, int optind) {
             
             case CC_OPTION_BITS64: {
             
+                state->no_leading_underscore = 1;
                 state->bits = 64;
+                
                 break;
             
             }
@@ -405,6 +410,13 @@ void parse_args (int argc, char **argv, int optind) {
             case CC_OPTION_INCLUDE: {
             
                 add_include_path (optarg);
+                break;
+            
+            }
+            
+            case CC_OPTION_LEADING_UNDERSCORE: {
+            
+                state->no_leading_underscore = 0;
                 break;
             
             }
