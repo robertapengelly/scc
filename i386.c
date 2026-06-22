@@ -11171,6 +11171,37 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
         return;
     }
     
+    if (tok.kind == TOK_AMPER) {
+    
+        /*
+         * Address-of is a valid pointer-valued operand in the 64-bit/pair
+         * path too.  Casts such as:
+         *
+         *     ((uintptr_t) &buf >> 4)
+         *
+         * can be routed here when uintptr_t is wider than int.  Without this
+         * case the pair loader falls through to the constant-expression path
+         * and expr_const64() reports "integer constant expression expected"
+         * for the identifier after '&'.  Reuse the normal scalar address-of
+         * parser, then widen the 32-bit pointer into hi:lo.
+         */
+        emit_load_assignment_rhs_to_reg (lo);
+        
+        if (state->ofp) {
+        
+            if (state->syntax & ASM_SYNTAX_INTEL) {
+                fprintf (state->ofp, "    xor %s, %s\n", hi, hi);
+            } else {
+                fprintf (state->ofp, "    xorl %%%s, %%%s\n", hi, hi);
+            }
+        
+        }
+        
+        set_rhs_last_pointer_info (1, DATA_INT & 0x1f);
+        return;
+    
+    }
+    
     if (tok.kind == TOK_STAR) {
     
         char *name;
