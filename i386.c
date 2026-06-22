@@ -10171,105 +10171,97 @@ static int emit_load_prefix_incdec_to_pair_now (const char *lo, const char *hi) 
 
 }
 
-static int expression_text_mentions_64bit_symbol (const char *p) {
+static int current_token_is_64bit_integer_value_now (void) {
 
-    char name[256];
-    int depth = 0;
-    int i;
-    
-    if (!p) {
+    struct local_symbol *sym;
+
+    if (tok.kind == TOK_CLLONG || tok.kind == TOK_CULLONG) {
+        return 1;
+    }
+
+    if (tok.kind != TOK_IDENT || !tok.ident) {
         return 0;
     }
-    
-    while (*p) {
-    
-        if (*p == '(') {
-        
-            depth++;
-            p++;
-            
-            continue;
-        
-        }
-        
-        if (*p == ')') {
-        
-            if (depth <= 0) {
-                return 0;
-            }
-            
-            depth--;
-            p++;
-            
-            continue;
-        
-        }
-        
-        if (*p == ';' || *p == '{' || *p == '}') {
-            return 0;
-        }
-        
-        if ((unsigned char) *p == '_' || ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z'))) {
-        
-            i = 0;
-            
-            while ((unsigned char) *p == '_' || ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z')) || (*p >= '0' && *p <= '9')) {
-            
-                if (i + 1 < (int) sizeof (name)) {
-                    name[i++] = *p;
-                }
-                
-                p++;
-            
-            }
-            
-            name[i] = 0;
-            
-            while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
-                p++;
-            }
-            
-            if (*p == '.' || (p[0] == '-' && p[1] == '>')) {
-                continue;
-            }
-            
-            {
-            
-                struct local_symbol *sym = find_local_symbol (name);
-                
-                if (sym && sym->size == (DATA_LLONG & 0x1f) && !sym->is_floating) {
-                    return 1;
-                }
-            
-            }
-            
-            if (find_global_symbol (name) >= 0 && get_global_symbol_size (name) == (DATA_LLONG & 0x1f) && !get_global_symbol_floating (name)) {
-                return 1;
-            }
-            
-            continue;
-        
-        }
-        
-        p++;
-    
+
+    sym = find_local_symbol (tok.ident);
+
+    if (sym) {
+        return sym->size == (DATA_LLONG & 0x1f) && !sym->is_floating;
     }
-    
+
+    if (find_global_symbol (tok.ident) >= 0) {
+        return get_global_symbol_size (tok.ident) == (DATA_LLONG & 0x1f) && !get_global_symbol_floating (tok.ident);
+    }
+
     return 0;
 
 }
 
 static int current_expression_mentions_64bit_symbol_now (void) {
 
-    if (expression_text_mentions_64bit_symbol (tok.start)) {
-        return 1;
+    /*
+     * Keep this deliberately token based.  The old source-text scan was too
+     * broad and could send ordinary runtime expressions through expr_const64(),
+     * which rejects valid code with "integer constant expression expected".
+     */
+    return current_token_is_64bit_integer_value_now ();
+
+}
+
+static int source_starts_long_long_cast_now (const char *p) {
+
+    int saw_long = 0;
+    
+    if (!p) {
+        return 0;
     }
     
-    if (expression_text_mentions_64bit_symbol (tok.caret)) {
-        return 1;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
     }
     
-    return 0;
+    if (*p != '(') {
+        return 0;
+    }
+    
+    p++;
+    
+    for (;;) {
+    
+        char word[32];
+        int i = 0;
+        
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+        
+        if (*p == ')') {
+            return saw_long >= 2;
+        }
+        
+        if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
+            return 0;
+        }
+        
+        while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_') {
+        
+            if (i + 1 < (int) sizeof (word)) {
+                word[i++] = *p;
+            }
+            
+            p++;
+        
+        }
+        
+        word[i] = 0;
+        
+        if (strcmp (word, "long") == 0) {
+            saw_long++;
+        } else if (strcmp (word, "signed") != 0 && strcmp (word, "unsigned") != 0) {
+            return 0;
+        }
+    
+    }
 
 }
 
@@ -10320,6 +10312,15 @@ static const char *reg16_name_for_32 (const char *reg) {
 static void emit_extend_pair_high_from_low (const char *lo, const char *hi, int size, int is_unsigned) {
 
     if (!state->ofp) {
+        return;
+    }
+    
+    /*
+     * The i386 64-bit integer paths already carry the full value in hi:lo.
+     * A cast to long long/unsigned long long must not rebuild the high word
+     * from the low word here.
+     */
+    if ((size & 0x1f) == (DATA_LLONG & 0x1f)) {
         return;
     }
 
@@ -11717,7 +11718,9 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
         
         if (find_global_symbol (name) >= 0) {
         
-            if (get_global_symbol_kind (name) == GLOBAL_SYMBOL_FUNCTION ||
+            if (get_global_symbol_size (name) == (DATA_LLONG & 0x1f) && !get_global_symbol_floating (name)) {
+                emit_load_global64_to_pair (lo, hi, name);
+            } else if (get_global_symbol_kind (name) == GLOBAL_SYMBOL_FUNCTION ||
                 get_global_symbol_array (name) ||
                 (!get_global_symbol_pointer_depth (name) &&
                     get_global_symbol_size (name) > (DATA_PTR & 0x1f))) {
@@ -11732,6 +11735,7 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
                  * first string pointer instead of &table.
                  */
                 emit_load_address_to_reg_now (lo, name);
+                
                 if (state->ofp) {
                 
                     if (state->syntax & ASM_SYNTAX_INTEL) {
@@ -11742,8 +11746,6 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
                 
                 }
             
-            } else if (get_global_symbol_size (name) == (DATA_LLONG & 0x1f) && !get_global_symbol_floating (name)) {
-                emit_load_global64_to_pair (lo, hi, name);
             } else {
             
                 emit_load_global_to_reg_ex (lo, name, get_global_symbol_size (name), get_global_symbol_unsigned (name));
@@ -22144,7 +22146,11 @@ static int current_argument_starts_64bit_integer_now (void) {
         return 1;
     }
     
-    return current_argument_is_bare_64bit_identifier_now ();
+    if (current_argument_is_bare_64bit_identifier_now ()) {
+        return 1;
+    }
+    
+    return source_starts_long_long_cast_now (tok.start) || source_starts_long_long_cast_now (tok.caret);
 
 }
 
@@ -23786,6 +23792,15 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
     int false_label;
     int true_label;
     int end_label;
+    
+    if (current_expression_mentions_64bit_symbol_now ()) {
+    
+        const char *hi = (strcmp (reg, "edx") == 0) ? "ecx" : "edx";
+        
+        emit_load_assignment_rhs_expression_to_pair (reg, hi, rhs_current_operand_is_unsigned_now ());
+        return;
+    
+    }
     
     if (rhs_current_operand_is_floating_now ()) {
     
