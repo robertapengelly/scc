@@ -224,6 +224,13 @@ static int amd64_relayout_aggregate_members (int owner_size, const char *owner_t
             continue;
         }
         
+        if (member_infos[mi].is_packed) {
+        
+            matched = 1;
+            continue;
+        
+        }
+        
         size = member_infos[mi].size & 0x1f;
         
         if (size <= 0) {
@@ -246,6 +253,24 @@ static int amd64_relayout_aggregate_members (int owner_size, const char *owner_t
     
     if (!matched) {
         return owner_size;
+    }
+    
+    if (offset == 0) {
+    
+        for (mi = 0; mi < member_info_count; mi++) {
+        
+            if (!amd64_member_owner_matches (mi, owner_size, owner_tag_name)) {
+                continue;
+            }
+            
+            if (!member_infos[mi].owner_tag_name && typedef_name && typedef_name[0]) {
+                member_infos[mi].owner_tag_name = xstrdup (typedef_name);
+            }
+        
+        }
+        
+        return owner_size;
+    
     }
     
     offset = amd64_align_member_offset (offset, max_align);

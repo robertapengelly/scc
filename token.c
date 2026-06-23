@@ -1071,6 +1071,7 @@ static int find_kind (const char *start, const char *caret, const char *p) {
         {   "__dllimport",              -1,     VERSION,    TOK_DLLIMPORT           },
         
         {   "__stdcall",                -1,     VERSION,    TOK_STDCALL             },
+        {   "__packed",                 -1,     VERSION,    TOK_PACKED              },
         
         {   "__asm__",                  0,      VERSION,    TOK_ASM                 },
         {   "__inline__",               0,      VERSION,    TOK_INLINE              },

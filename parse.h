@@ -28,6 +28,7 @@ extern int parsed_type_is_void;
 extern int parsed_type_is_unsigned;
 extern int parsed_type_is_floating;
 extern int parsed_type_only_qualifiers;
+extern int parsed_type_is_packed;
 
 extern int parsed_type_is_aggregate;
 extern int parsed_type_has_tag;
@@ -127,6 +128,7 @@ struct member_info_entry {
     int is_array;
     int is_floating;
     int is_unsigned;
+    int is_packed;
     
     char *tag_name;
     char *owner_tag_name;

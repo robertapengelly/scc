@@ -88,6 +88,7 @@ enum token_kind {
     TOK_INLINE,
     TOK_INT,
     TOK_LONG,
+    TOK_PACKED,
     TOK_OFFSETOF,
     TOK_REGISTER,
     TOK_RESTRICT,

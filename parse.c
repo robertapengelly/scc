@@ -31,6 +31,7 @@ int parsed_type_is_void = 0;
 int parsed_type_is_unsigned = 0;
 int parsed_type_is_floating = 0;
 int parsed_type_only_qualifiers = 0;
+int parsed_type_is_packed = 0;
 
 int parsed_type_is_aggregate = 0;
 int parsed_type_has_tag = 0;
@@ -1734,7 +1735,7 @@ int is_type_start (enum token_kind k) {
             return 0;
         
         case TOK_AUTO:          case TOK_REGISTER:      case TOK_STATIC:
-        case TOK_DLLEXPORT:     case TOK_DLLIMPORT:
+        case TOK_DLLEXPORT:     case TOK_DLLIMPORT:     case TOK_PACKED:
         case TOK_EXTERN:        case TOK_TYPEDEF:       case TOK_INLINE:
         case TOK_CONST:         case TOK_VOLATILE:      case TOK_RESTRICT:
         case TOK_SIGNED:        case TOK_UNSIGNED:
@@ -2175,7 +2176,7 @@ static void load_typedef_name (struct typedef_entry *entry) {
 
 }
 
-static void remember_member_info_ex (const char *name, int offset, int size, int elem_size, int pointer_depth, int is_array, int is_floating) {
+static void remember_member_info_ex (const char *name, int offset, int size, int elem_size, int pointer_depth, int is_array, int is_floating, int is_packed) {
 
     if (!name) {
         return;
@@ -2193,6 +2194,7 @@ static void remember_member_info_ex (const char *name, int offset, int size, int
     member_infos[member_info_count].is_array = is_array;
     member_infos[member_info_count].is_floating = is_floating ? 1 : 0;
     member_infos[member_info_count].is_unsigned = parsed_type_is_unsigned ? 1 : 0;
+    member_infos[member_info_count].is_packed = is_packed ? 1 : 0;
     member_infos[member_info_count].calling_convention = (declarator_calling_convention != TOK_EOF) ? declarator_calling_convention : parsed_calling_convention;
     member_infos[member_info_count].tag_name = parsed_type_tag_name[0] ? xstrdup (parsed_type_tag_name) : 0;
     member_infos[member_info_count].owner_size = 0;
@@ -2365,6 +2367,7 @@ void parse_type_spec (void) {
     parsed_type_is_inline = 0;
     parsed_type_is_void = 0;
     parsed_type_only_qualifiers = 0;
+    parsed_type_is_packed = 0;
     parsed_type_size = DATA_NONE;
     
     parsed_calling_convention = TOK_EOF;
@@ -2380,7 +2383,7 @@ void parse_type_spec (void) {
     
     while (tok.kind == TOK_AUTO || tok.kind == TOK_REGISTER || tok.kind == TOK_STATIC ||
            tok.kind == TOK_EXTERN || tok.kind == TOK_TYPEDEF || tok.kind == TOK_CONST ||
-           tok.kind == TOK_VOLATILE || tok.kind == TOK_SIGNED || tok.kind == TOK_UNSIGNED ||
+           tok.kind == TOK_PACKED || tok.kind == TOK_VOLATILE || tok.kind == TOK_SIGNED || tok.kind == TOK_UNSIGNED ||
            tok.kind == TOK_SHORT || tok.kind == TOK_LONG || tok.kind == TOK_CHAR ||
            tok.kind == TOK_INT || tok.kind == TOK_VOID || tok.kind == TOK_FLOAT ||
            tok.kind == TOK_DOUBLE || tok.kind == TOK_INLINE || tok.kind == TOK_RESTRICT ||
@@ -2432,6 +2435,8 @@ void parse_type_spec (void) {
         
         } else if (tok.kind == TOK_INLINE) {
             parsed_type_is_inline = 1;
+        } else if (tok.kind == TOK_PACKED) {
+            parsed_type_is_packed = 1;
         } else if (tok.kind == TOK_CHAR) {
         
             if (parsed_type_size == DATA_CHAR) {
@@ -2643,6 +2648,7 @@ void parse_type_spec (void) {
         
         int aggregate_storage_class = parsed_storage_class;
         int aggregate_is_inline = parsed_type_is_inline;
+        int aggregate_is_packed = parsed_type_is_packed;
         
         char *tag_name = 0;
         int member_info_start = member_info_count;
@@ -2653,6 +2659,13 @@ void parse_type_spec (void) {
         clear_parsed_fields ();
         get_token ();
         
+        if (tok.kind == TOK_PACKED) {
+        
+            aggregate_is_packed = 1;
+            get_token ();
+        
+        }
+        
         if (token_is_ident ()) {
         
             tag_name = xstrdup (tok.ident);
@@ -2661,6 +2674,13 @@ void parse_type_spec (void) {
             parsed_type_tag_name[sizeof (parsed_type_tag_name) - 1] = '\0';
             has_tag = 1;
             
+            get_token ();
+        
+        }
+        
+        if (tok.kind == TOK_PACKED) {
+        
+            aggregate_is_packed = 1;
             get_token ();
         
         }
@@ -2777,9 +2797,9 @@ void parse_type_spec (void) {
                         
                         }
                         
-                        member_align = declarator_is_pointer ? type_alignment (DATA_PTR) : type_alignment (member_type_size);
+                        member_align = aggregate_is_packed ? 1 : (declarator_is_pointer ? type_alignment (DATA_PTR) : type_alignment (member_type_size));
                         
-                        if (member_align > aggregate_align) {
+                        if (!aggregate_is_packed && member_align > aggregate_align) {
                             aggregate_align = member_align;
                         }
                         
@@ -2810,7 +2830,7 @@ void parse_type_spec (void) {
                         
                         if (is_union) {
                         
-                            remember_member_info_ex (member, 0, member_size, member_info_elem_size, declarator_is_pointer ? declarator_pointer_depth : 0, declarator_has_array, declarator_is_pointer ? 0 : member_type_is_floating);
+                            remember_member_info_ex (member, 0, member_size, member_info_elem_size, declarator_is_pointer ? declarator_pointer_depth : 0, declarator_has_array, declarator_is_pointer ? 0 : member_type_is_floating, aggregate_is_packed);
                             
                             if (member_size > aggregate_size) {
                                 aggregate_size = member_size;
@@ -2841,7 +2861,7 @@ void parse_type_spec (void) {
                             
                             aggregate_size = member_offset;
                             
-                            remember_member_info_ex (member, member_offset, member_size, member_info_elem_size, declarator_is_pointer ? declarator_pointer_depth : 0, declarator_has_array, declarator_is_pointer ? 0 : member_type_is_floating);
+                            remember_member_info_ex (member, member_offset, member_size, member_info_elem_size, declarator_is_pointer ? declarator_pointer_depth : 0, declarator_has_array, declarator_is_pointer ? 0 : member_type_is_floating, aggregate_is_packed);
                             aggregate_size += member_size;
                             
                             for (r = 0; r < repeat; r++) {
@@ -2880,7 +2900,9 @@ void parse_type_spec (void) {
                 aggregate_size = DATA_CHAR & 0x1f;
             }
             
-            aggregate_size = (int) align_up_long (aggregate_size, aggregate_align);
+            if (!aggregate_is_packed) {
+                aggregate_size = (int) align_up_long (aggregate_size, aggregate_align);
+            }
             
             {
             
@@ -2936,6 +2958,7 @@ void parse_type_spec (void) {
             parsed_type_is_aggregate = 1;
             parsed_type_is_void = 0;
             parsed_type_has_tag = has_tag;
+            parsed_type_is_packed = aggregate_is_packed;
             
             clear_parsed_fields ();
 
