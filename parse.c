@@ -1115,6 +1115,8 @@ int parse_constexpr_null_member_address_after_lparen (int64_s *out) {
     char current_tag_name[128];
     
     int current_object_size;
+    int need_closing_paren = 0;
+    
     unsigned long total_offset = 0;
     
     if (tok.kind != TOK_LPAREN) {
@@ -1123,11 +1125,27 @@ int parse_constexpr_null_member_address_after_lparen (int64_s *out) {
     
     get_token ();
     
-    if (tok.kind != TOK_LPAREN) {
-        return 0;
-    }
+    /*
+     * Accept both common offsetof spellings:
+     *
+     *     &((T *)0)->member
+     *     &(((T *)0)->member)
+     *
+     * The caller has already consumed the first '(' after '&'.  Older code
+     * always expected another wrapper before the cast, so it rejected the
+     * normal form and expr_const64() reported "integer constant expression
+     * expected" at the '&'.
+     */
+    if (!is_type_start (tok.kind)) {
     
-    get_token ();
+        if (tok.kind != TOK_LPAREN) {
+            return 0;
+        }
+        
+        get_token ();
+        need_closing_paren = 1;
+    
+    }
     
     if (!parse_cast_type_name (0, 0, 0)) {
         return 0;
@@ -1237,7 +1255,9 @@ int parse_constexpr_null_member_address_after_lparen (int64_s *out) {
     
     }
     
-    expect (TOK_RPAREN, ")");
+    if (need_closing_paren) {
+        expect (TOK_RPAREN, ")");
+    }
     
     if (out) {
         zext64 (out, total_offset);
