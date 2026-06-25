@@ -7002,12 +7002,12 @@ static void emit_local_store_address (long offset, const char *symbol) {
         
         if (state->syntax & ASM_SYNTAX_NASM) {
         
-            fprintf (state->ofp, "    mov rax, %s\n", asm_symbol);
+            fprintf (state->ofp, "    lea rax, [%s]\n", asm_symbol);
             fprintf (state->ofp, "    mov qword %s, rax\n", memref);
         
         } else {
         
-            fprintf (state->ofp, "    mov rax, offset %s\n", asm_symbol);
+            fprintf (state->ofp, "    lea rax, %s\n", asm_symbol);
             fprintf (state->ofp, "    mov qword ptr %s, rax\n", memref);
         
         }
@@ -10523,9 +10523,9 @@ static void emit_load_symbol_address_to_reg_now (const char *reg, const char *sy
         const char *addr_reg = amd64_full_reg_name (reg);
         
         if (state->syntax & ASM_SYNTAX_NASM) {
-            fprintf (state->ofp, "    lea %s, [%s]\n", addr_reg, asm_symbol);
+            fprintf (state->ofp, "    mov %s, %s\n", addr_reg, asm_symbol);
         } else {
-            fprintf (state->ofp, "    lea %s, %s\n", addr_reg, asm_symbol);
+            fprintf (state->ofp, "    mov %s, offset %s\n", addr_reg, asm_symbol);
         }
     
     } else {
@@ -10696,7 +10696,24 @@ static int emit_parse_postfix_subscripts_to_reg_now (const char *reg, int elem_s
         
         } else {
         
-            if (pointer_depth == 0 && pointed_size > 0 && elem_size > pointed_size) {
+            if (tok.kind == TOK_ARROW || tok.kind == TOK_DOT) {
+            
+                /*
+                 * The subscripted expression is the base of a member access.
+                 * Keep REG as the address of the selected element even when
+                 * the element is pointer-sized or smaller.  Otherwise small
+                 * structs such as:
+                 *
+                 *     struct probe { void (*probe)(...); } probes[];
+                 *     probes[0].probe
+                 *
+                 * are loaded as their first word before .probe is applied,
+                 * so the member access reads from the function body instead
+                 * of from the struct object.
+                 */
+                emit_add_indexed_scaled_address_to_reg_now (reg, index_reg, elem_size);
+            
+            } else if (pointer_depth == 0 && pointed_size > 0 && elem_size > pointed_size) {
                 emit_add_indexed_scaled_address_to_reg_now (reg, index_reg, elem_size);
             } else if (index_step_size (elem_size) > (DATA_PTR & 0x1f)) {
                 emit_add_indexed_scaled_address_to_reg_now (reg, index_reg, elem_size);
@@ -10763,7 +10780,17 @@ static int emit_parse_postfix_subscripts_to_reg_dims_now (const char *reg, int e
         
         } else {
         
-            if (pointer_depth == 0 && dims_before > 1) {
+            if (tok.kind == TOK_ARROW || tok.kind == TOK_DOT) {
+            
+                /*
+                 * A following member access needs the address of the selected
+                 * element, not the first word stored in that element.  Without
+                 * this, small struct array elements are mistaken for scalar
+                 * values before .member/->member is applied.
+                 */
+                emit_add_indexed_scaled_address_to_reg_now (reg, index_reg, elem_size);
+            
+            } else if (pointer_depth == 0 && dims_before > 1) {
                 emit_add_indexed_scaled_address_to_reg_now (reg, index_reg, elem_size);
             } else if (pointer_depth == 0 && pointed_size > 0 && elem_size > pointed_size) {
                 emit_add_indexed_scaled_address_to_reg_now (reg, index_reg, elem_size);
@@ -11608,13 +11635,13 @@ static int expression_text_mentions_64bit_symbol (const char *p) {
             
                 struct local_symbol *sym = find_local_symbol (name);
                 
-                if (sym && sym->size == (DATA_LLONG & 0x1f) && !sym->is_floating) {
+                if (sym && sym->size == (DATA_LLONG & 0x1f) && !sym->is_floating && !sym->is_array && !sym->tag_name) {
                     return 1;
                 }
             
             }
             
-            if (find_global_symbol (name) >= 0 && get_global_symbol_size (name) == (DATA_LLONG & 0x1f) && !get_global_symbol_floating (name)) {
+            if (find_global_symbol (name) >= 0 && get_global_symbol_size (name) == (DATA_LLONG & 0x1f) && !get_global_symbol_floating (name) && !get_global_symbol_array (name) && !get_global_symbol_tag_name (name)) {
                 return 1;
             }
             
@@ -12301,9 +12328,20 @@ static void emit_load_address_to_reg_now (const char *reg, const char *symbol) {
     if (state->syntax & ASM_SYNTAX_INTEL) {
     
         if (state->syntax & ASM_SYNTAX_NASM) {
-            fprintf (state->ofp, "    lea %s, [%s]\n", addr_reg, asm_symbol);
+            fprintf (state->ofp, "    lea %s, [rel %s]\n", addr_reg, asm_symbol);
         } else {
-            fprintf (state->ofp, "    mov %s, offset %s\n", addr_reg, asm_symbol);
+        
+            /*
+             * On AMD64 a function designator or object address must be the
+             * run-time address after the image has been loaded/relocated.
+             * `mov reg, offset symbol` gives us an absolute immediate
+             * relocation; that is fragile for this loader/linker path and in
+             * practice left function-pointer members holding the wrong target
+             * for calls such as probes[0].probe = msdos_probe.  Use the same
+             * RIP-relative address materialisation as the AT&T backend.
+             */
+            fprintf (state->ofp, "    lea %s, %s\n", addr_reg, asm_symbol);
+        
         }
     
     } else {
@@ -14173,6 +14211,26 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
             }
         
         }
+    
+    }
+    
+    /*
+     * If the completed postfix member expression is immediately followed by
+     * an argument list, the expression is a call through the function pointer
+     * stored in that member, e.g. probes[0].probe(disk, 0).
+     *
+     * Some statement-expression paths only ask this helper to finish the
+     * postfix chain.  In that case REG already contains the loaded member
+     * value, but the caller may not notice the following '(' and can drop the
+     * call entirely.  Consume the call here while the callee value is still
+     * live.
+     */
+    if (postfix_member_seen && tok.kind == TOK_LPAREN) {
+    
+        emit_call_pointer_in_reg_now (reg, reg);
+        postfix_member_seen = 0;
+        
+        set_rhs_last_pointer_info (0, 0);
     
     }
 
@@ -20131,7 +20189,27 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         struct local_symbol *src;
         int postfix_incdec = 0;
         
+        int name_is_function_designator = token_identifier_is_function_call_rhs_now ();
         get_token ();
+        
+        /*
+         * A bare function name used as a value is a function designator.
+         * It must evaluate to the function address, not load a qword from
+         * the start of the function body.  Without this, assignments such as:
+         *
+         *     probes[0].probe = msdos_probe;
+         *
+         * store the first bytes of msdos_probe instead of its address.
+         */
+        if (tok.kind != TOK_LPAREN && (name_is_function_designator || (find_global_symbol (name) >= 0 && get_global_symbol_kind (name) == GLOBAL_SYMBOL_FUNCTION))) {
+        
+            emit_load_address_to_reg_now (reg, name);
+            set_rhs_last_pointer_info (1, DATA_NONE);
+            
+            free (name);
+            return;
+        
+        }
         
         if (strcmp (name, "__scc_builtin_va_arg") == 0 && tok.kind == TOK_LPAREN) {
         
@@ -23964,13 +24042,13 @@ static int argument_text_mentions_64bit_symbol_now (const char *p) {
             
                 struct local_symbol *sym = find_local_symbol (name);
                 
-                if (sym && sym->size == (DATA_LLONG & 0x1f) && !sym->is_floating) {
+                if (sym && sym->size == (DATA_LLONG & 0x1f) && !sym->is_floating && !sym->is_array && !sym->tag_name) {
                     return 1;
                 }
             
             }
             
-            if (find_global_symbol (name) >= 0 && get_global_symbol_size (name) == (DATA_LLONG & 0x1f) && !get_global_symbol_floating (name)) {
+            if (find_global_symbol (name) >= 0 && get_global_symbol_size (name) == (DATA_LLONG & 0x1f) && !get_global_symbol_floating (name) && !get_global_symbol_array (name) && !get_global_symbol_tag_name (name)) {
                 return 1;
             }
             
@@ -30531,130 +30609,14 @@ static int parse_identifier_assignment_statement (void) {
                 
                 if (tok.kind == TOK_LPAREN) {
                 
-                    FILE **arg_tmp_ofps = 0;
-                    FILE **new_arg_tmp_ofps;
-                    FILE *arg_tmp_ofp;
-                    FILE *arg_saved_ofp;
-                    
-                    int argc = 0;
-                    int i;
-                    int ch;
-                    int total_arg_bytes = 0;
-                    
                     if (state->ofp) {
-                    
                         emit_load_member_from_addr_reg_now ("rcx", "rax", member_offset, DATA_PTR & 0x1f);
-                        emit_push_reg_now ("rcx");
-                    
                     }
                     
-                    get_token ();
+                    postfix_member_calling_convention = last_found_member_calling_convention;
+                    emit_call_pointer_in_reg_now ("rcx", "rax");
                     
-                    if (tok.kind != TOK_RPAREN) {
-                    
-                        for (;;) {
-                        
-                            arg_tmp_ofp = 0;
-                            arg_saved_ofp = 0;
-                            
-                            if (state->ofp) {
-                            
-                                arg_tmp_ofp = scc_tmpfile ();
-                                
-                                if (arg_tmp_ofp) {
-                                    arg_saved_ofp = state->ofp;
-                                    state->ofp = arg_tmp_ofp;
-                                }
-                            
-                            }
-                            
-                            emit_load_assignment_rhs_expression_to_reg ("rax");
-                            
-                            if (state->ofp) {
-                                emit_push_reg_now ("rax");
-                            }
-                            
-                            if (arg_saved_ofp) {
-                            
-                                fflush (arg_tmp_ofp);
-                                state->ofp = arg_saved_ofp;
-                                
-                                new_arg_tmp_ofps = (FILE **) xrealloc (arg_tmp_ofps, sizeof (*arg_tmp_ofps) * (argc + 1));
-                                
-                                if (new_arg_tmp_ofps) {
-                                
-                                    arg_tmp_ofps = new_arg_tmp_ofps;
-                                    arg_tmp_ofps[argc] = arg_tmp_ofp;
-                                    arg_tmp_ofp = 0;
-                                
-                                }
-                            
-                            }
-                            
-                            if (arg_tmp_ofp) {
-                                scc_close (arg_tmp_ofp);
-                            }
-                            
-                            argc++;
-                            total_arg_bytes += DATA_PTR & 0x1f;
-                            
-                            if (!_accept (TOK_COMMA)) {
-                                break;
-                            }
-                        
-                        }
-                    
-                    }
-                    
-                    expect (TOK_RPAREN, ")");
-                    
-                    if (state->ofp) {
-                    
-                        for (i = argc - 1; i >= 0; i--) {
-                        
-                            if (arg_tmp_ofps && arg_tmp_ofps[i]) {
-                            
-                                fseek (arg_tmp_ofps[i], 0, SEEK_SET);
-                                
-                                while ((ch = fgetc (arg_tmp_ofps[i])) != EOF) {
-                                    fputc (ch, state->ofp);
-                                }
-                                
-                                scc_close (arg_tmp_ofps[i]);
-                                arg_tmp_ofps[i] = 0;
-                            
-                            }
-                        
-                        }
-                        
-                        if (arg_tmp_ofps) {
-                        
-                            free (arg_tmp_ofps);
-                            arg_tmp_ofps = 0;
-                        
-                        }
-                        
-                        if (state->syntax & ASM_SYNTAX_INTEL) {
-                        
-                            if (state->syntax & ASM_SYNTAX_NASM) {
-                                fprintf (state->ofp, "    mov r11, qword [rsp + %d]\n", total_arg_bytes);
-                            } else {
-                                fprintf (state->ofp, "    mov r11, qword ptr [rsp + %d]\n", total_arg_bytes);
-                            }
-                            
-                            fprintf (state->ofp, "    call r11\n");
-                            fprintf (state->ofp, "    add rsp, %d\n", total_arg_bytes + (DATA_PTR & 0x1f));
-                        
-                        } else {
-                        
-                            fprintf (state->ofp, "    movq %d(%%rsp), %%r11\n", total_arg_bytes);
-                            fprintf (state->ofp, "    call *%%r11\n");
-                            
-                            fprintf (state->ofp, "    addq $%d, %%rsp\n", total_arg_bytes + (DATA_PTR & 0x1f));
-                        
-                        }
-                    
-                    }
+                    postfix_member_calling_convention = TOK_EOF;
                     
                     expect_semi_or_recover ();
                     free (name);

@@ -2603,8 +2603,7 @@ void parse_type_spec (void) {
      * some_base as the typedef name and the real declarator is then parsed as
      * junk.
      */
-    if (parsed_storage_class == STORAGE_TYPEDEF && !saw_real_type &&
-        tok.kind == TOK_IDENT && !is_current_typedef_name ()) {
+    if (parsed_storage_class == STORAGE_TYPEDEF && !saw_real_type && tok.kind == TOK_IDENT && !is_current_typedef_name ()) {
     
         get_token ();
         

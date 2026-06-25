@@ -9339,7 +9339,24 @@ static int emit_parse_postfix_subscripts_to_reg_now (const char *reg, int elem_s
         
         } else {
         
-            if (pointer_depth == 0 && pointed_size > 0 && elem_size > pointed_size) {
+            if (tok.kind == TOK_ARROW || tok.kind == TOK_DOT) {
+            
+                /*
+                 * The subscripted expression is the base of a member access.
+                 * Keep REG as the address of the selected element even when
+                 * the element's size is pointer-sized or smaller.  This matters
+                 * for small structs such as:
+                 *
+                 *     struct probe { void (*probe)(...); } probes[];
+                 *     probes[0].probe
+                 *
+                 * Loading probes[0] here turns REG into the stored function
+                 * pointer, and the following .probe then reads the first bytes
+                 * of the function body as if they were a struct member.
+                 */
+                emit_add_indexed_scaled_address_to_reg_now (reg, index_reg, elem_size);
+            
+            } else if (pointer_depth == 0 && pointed_size > 0 && elem_size > pointed_size) {
                 emit_add_indexed_scaled_address_to_reg_now (reg, index_reg, elem_size);
             } else if (index_step_size (elem_size) > (DATA_PTR & 0x1f)) {
                 emit_add_indexed_scaled_address_to_reg_now (reg, index_reg, elem_size);
@@ -9406,7 +9423,17 @@ static int emit_parse_postfix_subscripts_to_reg_dims_now (const char *reg, int e
         
         } else {
         
-            if (pointer_depth == 0 && dims_before > 1) {
+            if (tok.kind == TOK_ARROW || tok.kind == TOK_DOT) {
+            
+                /*
+                 * A following member access needs the address of the selected
+                 * element, not the first word stored in that element.  Without
+                 * this, small struct array elements are mistaken for scalar
+                 * values before .member/->member is applied.
+                 */
+                emit_add_indexed_scaled_address_to_reg_now (reg, index_reg, elem_size);
+            
+            } else if (pointer_depth == 0 && dims_before > 1) {
                 emit_add_indexed_scaled_address_to_reg_now (reg, index_reg, elem_size);
             } else if (pointer_depth == 0 && pointed_size > 0 && elem_size > pointed_size) {
                 emit_add_indexed_scaled_address_to_reg_now (reg, index_reg, elem_size);
@@ -9788,6 +9815,9 @@ static int emit_load_prefix_incdec_deref_to_reg_now (const char *reg) {
 
 }
 
+static int symbol_is_plain_64_for_incdec (struct local_symbol *sym, const char *name);
+static void emit_incdec64_symbol_direct_now (struct local_symbol *sym, const char *name, enum token_kind op);
+
 static int emit_load_prefix_incdec_to_reg_now (const char *reg) {
 
     enum token_kind op;
@@ -9815,6 +9845,26 @@ static int emit_load_prefix_incdec_to_reg_now (const char *reg) {
     }
     
     sym = find_local_symbol (name);
+    
+    if (symbol_is_plain_64_for_incdec (sym, name)) {
+    
+        emit_incdec64_symbol_direct_now (sym, name, op);
+        
+        if (strcmp (reg, "eax") != 0 && state->ofp) {
+        
+            if (state->syntax & ASM_SYNTAX_INTEL) {
+                fprintf (state->ofp, "    mov %s, eax\n", reg);
+            } else {
+                fprintf (state->ofp, "    movl %%eax, %%%s\n", reg);
+            }
+        
+        }
+        
+        free (name);
+        return 1;
+    
+    }
+    
     emit_incdec_symbol_now (sym, name, op, name_line, name_start, name_caret);
     
     if (sym) {
@@ -10116,7 +10166,7 @@ static int emit_load_prefix_incdec_to_pair_now (const char *lo, const char *hi) 
     
     if (sym) {
     
-        if (sym->size == (DATA_LLONG & 0x1f) && !sym->is_floating) {
+        if ((sym->size & 0x1f) == (DATA_LLONG & 0x1f) && !sym->is_floating) {
         
             if (sym->is_static && sym->static_label) {
                 emit_load_global64_to_pair (lo, hi, sym->static_label);
@@ -10146,7 +10196,7 @@ static int emit_load_prefix_incdec_to_pair_now (const char *lo, const char *hi) 
     
     } else if (find_global_symbol (name) >= 0) {
     
-        if (get_global_symbol_size (name) == (DATA_LLONG & 0x1f) && !get_global_symbol_floating (name)) {
+        if ((get_global_symbol_size (name) & 0x1f) == (DATA_LLONG & 0x1f) && !get_global_symbol_floating (name)) {
             emit_load_global64_to_pair (lo, hi, name);
         } else {
         
@@ -10186,11 +10236,11 @@ static int current_token_is_64bit_integer_value_now (void) {
     sym = find_local_symbol (tok.ident);
 
     if (sym) {
-        return sym->size == (DATA_LLONG & 0x1f) && !sym->is_floating;
+        return sym->size == (DATA_LLONG & 0x1f) && !sym->is_floating && !sym->is_array && !sym->tag_name;
     }
 
     if (find_global_symbol (tok.ident) >= 0) {
-        return get_global_symbol_size (tok.ident) == (DATA_LLONG & 0x1f) && !get_global_symbol_floating (tok.ident);
+        return get_global_symbol_size (tok.ident) == (DATA_LLONG & 0x1f) && !get_global_symbol_floating (tok.ident) && !get_global_symbol_array (tok.ident) && !get_global_symbol_tag_name (tok.ident);
     }
 
     return 0;
@@ -10208,9 +10258,22 @@ static int current_expression_mentions_64bit_symbol_now (void) {
 
 }
 
-static int source_starts_long_long_cast_now (const char *p) {
+static int source_starts_integer_cast_size_now (const char *p, int *out_size, int *out_is_unsigned) {
 
     int saw_long = 0;
+    int saw_signed = 0;
+    int saw_unsigned = 0;
+    
+    int size = DATA_NONE;
+    int have_word = 0;
+    
+    if (out_size) {
+        *out_size = DATA_NONE;
+    }
+    
+    if (out_is_unsigned) {
+        *out_is_unsigned = 0;
+    }
     
     if (!p) {
         return 0;
@@ -10228,7 +10291,7 @@ static int source_starts_long_long_cast_now (const char *p) {
     
     for (;;) {
     
-        char word[32];
+        char word[64];
         int i = 0;
         
         while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
@@ -10236,7 +10299,25 @@ static int source_starts_long_long_cast_now (const char *p) {
         }
         
         if (*p == ')') {
-            return saw_long >= 2;
+        
+            if (!have_word) {
+                return 0;
+            }
+            
+            if (size == DATA_NONE) {
+                size = saw_long >= 2 ? (DATA_LLONG & 0x1f) : (saw_long ? (DATA_LONG & 0x1f) : (DATA_INT & 0x1f));
+            }
+            
+            if (out_size) {
+                *out_size = size & 0x1f;
+            }
+            
+            if (out_is_unsigned) {
+                *out_is_unsigned = saw_unsigned ? 1 : 0;
+            }
+            
+            return 1;
+        
         }
         
         if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
@@ -10254,14 +10335,105 @@ static int source_starts_long_long_cast_now (const char *p) {
         }
         
         word[i] = 0;
+        have_word = 1;
         
         if (strcmp (word, "long") == 0) {
+        
+            if (size != DATA_NONE) {
+                return 0;
+            }
+            
             saw_long++;
-        } else if (strcmp (word, "signed") != 0 && strcmp (word, "unsigned") != 0) {
-            return 0;
+            continue;
+        
+        }
+        
+        if (strcmp (word, "signed") == 0) {
+        
+            saw_signed = 1;
+            continue;
+        
+        }
+        
+        if (strcmp (word, "unsigned") == 0) {
+        
+            saw_unsigned = 1;
+            continue;
+        
+        }
+        
+        if (strcmp (word, "int") == 0) {
+            continue;
+        }
+        
+        if (strcmp (word, "char") == 0) {
+        
+            size = DATA_CHAR & 0x1f;
+            continue;
+        
+        }
+        
+        if (strcmp (word, "short") == 0) {
+        
+            size = DATA_SHORT & 0x1f;
+            continue;
+        
+        }
+        
+        if (strcmp (word, "__int8") == 0) {
+        
+            size = DATA_CHAR & 0x1f;
+            continue;
+        
+        }
+        
+        if (strcmp (word, "__int16") == 0) {
+        
+            size = DATA_SHORT & 0x1f;
+            continue;
+        
+        }
+        
+        if (strcmp (word, "__int32") == 0) {
+        
+            size = DATA_INT & 0x1f;
+            continue;
+        
+        }
+        
+        if (strcmp (word, "__int64") == 0) {
+        
+            size = DATA_LLONG & 0x1f;
+            continue;
+        
+        }
+        
+        {
+        
+            struct typedef_entry *entry = find_typedef_name (word);
+            
+            if (!entry || saw_long || saw_signed || saw_unsigned || size != DATA_NONE) {
+                return 0;
+            }
+            
+            size = entry->size & 0x1f;
+            saw_unsigned = entry->is_unsigned ? 1 : 0;
+        
         }
     
     }
+
+}
+
+static int source_starts_64bit_integer_cast_now (const char *p) {
+
+    int size = DATA_NONE;
+    
+    if (!source_starts_integer_cast_size_now (p, &size, 0)) {
+        return 0;
+    }
+    
+    return (size & 0x1f) == (DATA_LLONG & 0x1f);
 
 }
 
@@ -11636,7 +11808,28 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
                 
                 }
                 
-                source_size = postfix_copy_lvalue_size;
+                /*
+                 * A postfix member expression followed by '(' is a call
+                 * through a function-pointer member, for example:
+                 *
+                 *     probe->probe(...)
+                 *
+                 * emit_parse_postfix_copy_source_address_now() leaves LO
+                 * holding the address of the member.  Load the function
+                 * pointer stored in that member and let the existing indirect
+                 * call helper consume the argument list.
+                 */
+                if (postfix_member_seen && tok.kind == TOK_LPAREN) {
+                
+                    emit_load_deref_reg_now (lo, DATA_PTR & 0x1f);
+                    emit_call_pointer_in_reg_now (lo, lo);
+                    
+                    free (name);
+                    return;
+                
+                }
+                
+                source_size = postfix_member_seen ? postfix_member_size : postfix_copy_lvalue_size;
                 
                 if (source_size <= 0) {
                     source_size = DATA_INT & 0x1f;
@@ -14955,6 +15148,26 @@ static int emit_parse_postfix_copy_source_address_now (const char *reg, struct l
             }
             
             free (member);
+            
+            /*
+             * Keep the same member metadata that the normal RHS postfix path
+             * records.  The copy-source-address path is also used for
+             * lvalue/callee expressions such as:
+             *
+             *     probe->probe(...)
+             *
+             * Without this, the caller cannot see that the last postfix item
+             * was a member, so it treats the expression as a plain lvalue and
+             * leaves the following '(' to be handled by the wrong path.
+             */
+            postfix_member_seen = 1;
+            postfix_member_pointer_depth = member_is_array ? 1 : member_pointer_depth;
+            postfix_member_pointed_size = member_elem_size;
+            postfix_member_offset = member_offset;
+            postfix_member_size = member_size;
+            postfix_member_is_floating = 0;
+            postfix_member_is_unsigned = last_found_member_is_unsigned;
+            postfix_member_calling_convention = last_found_member_calling_convention;
             
             if (!have_address) {
             
@@ -18774,7 +18987,31 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         struct local_symbol *src;
         int postfix_incdec = 0;
         
+        int name_is_function_designator = token_identifier_is_function_call_rhs_now ();
         get_token ();
+        
+        /*
+         * A bare function name used as a value is a function designator.
+         * It must evaluate to the function address, not load a dword from
+         * the start of the function body.  Without this, assignments such as:
+         *
+         *     probes[0].probe = msdos_probe;
+         *
+         * become equivalent to:
+         *
+         *     probes[0].probe = *(uint32_t *)msdos_probe;
+         *
+         * which stores bytes like 55 89 e5 81 as the callback pointer.
+         */
+        if (tok.kind != TOK_LPAREN && (name_is_function_designator || (find_global_symbol (name) >= 0 && get_global_symbol_kind (name) == GLOBAL_SYMBOL_FUNCTION))) {
+        
+            emit_load_address_to_reg_now (reg, name);
+            set_rhs_last_pointer_info (1, DATA_NONE);
+            
+            free (name);
+            return;
+        
+        }
         
         if (strcmp (name, "__scc_builtin_va_arg") == 0 && tok.kind == TOK_LPAREN) {
         
@@ -18835,7 +19072,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                     
                         int aggregate_elem_size = aggregate_tag_size_or_zero (src->tag_name ? src->tag_name : src->pointed_tag_name);
                         
-                        if (aggregate_elem_size > (DATA_PTR & 0x1f)) {
+                        if (aggregate_elem_size > 0) {
                             elem_size = aggregate_elem_size;
                         }
                     
@@ -18910,7 +19147,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                     
                         int aggregate_elem_size = aggregate_tag_size_or_zero (get_global_symbol_tag_name (name));
                         
-                        if (aggregate_elem_size > (DATA_PTR & 0x1f)) {
+                        if (aggregate_elem_size > 0) {
                             elem_size = aggregate_elem_size;
                         }
                     
@@ -18948,6 +19185,12 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                     postfix_member_is_floating = get_global_symbol_floating (name);
                     postfix_member_is_unsigned = get_global_symbol_unsigned (name);
                 
+                }
+                
+                if (postfix_member_seen) {
+                    set_rhs_last_pointer_info (postfix_member_pointer_depth, postfix_member_pointed_size);
+                } else {
+                    set_rhs_last_pointer_info (get_global_symbol_pointer_depth (name) > 0 ? get_global_symbol_pointer_depth (name) - 1 : 0, get_global_symbol_pointed_size (name));
                 }
                 
                 free (name);
@@ -19400,7 +19643,13 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                 } else {
                 
                     emit_push_reg_now (reg);
-                    emit_incdec_symbol_now (src, name, postfix_op, name_line, name_start, name_caret);
+                    
+                    if (symbol_is_plain_64_for_incdec (src, name)) {
+                        emit_incdec64_symbol_direct_now (src, name, postfix_op);
+                    } else {
+                        emit_incdec_symbol_now (src, name, postfix_op, name_line, name_start, name_caret);
+                    }
+                    
                     emit_pop_reg_now (reg);
                 
                 }
@@ -21839,6 +22088,8 @@ static int emit_push_global_aggregate_argument_now (const char *name) {
 
 }
 
+static int current_argument_starts_64bit_integer_now (void);
+
 static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result_reg) {
 
     enum token_kind saved_calling_convention = postfix_member_calling_convention;
@@ -21907,18 +22158,30 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
             
             } else {
             
+                int arg_starts_64bit_integer = current_argument_starts_64bit_integer_now ();
+                
                 arg_is_floating = rhs_current_operand_is_floating_now ();
                 arg_bytes = arg_is_floating ? (DATA_DOUBLE & 0x1f) : DATA_PTR;
                 
                 if (arg_is_floating) {
                     emit_load_floating_rhs_expression_now (DATA_DOUBLE & 0x1f);
+                } else if (arg_starts_64bit_integer) {
+                
+                    arg_bytes = DATA_LLONG & 0x1f;
+                    emit_load_assignment_rhs_expression_to_pair ("eax", "edx", rhs_current_operand_is_unsigned_now ());
+                
                 } else {
                     emit_load_assignment_rhs_expression_to_reg ("eax");
                 }
                 
                 if (state->ofp) {
                 
-                    if (!arg_is_floating && postfix_member_seen && postfix_member_pointer_depth == 0 && postfix_member_size > (DATA_PTR & 0x1f)) {
+                    if (!arg_is_floating && arg_bytes == (DATA_LLONG & 0x1f)) {
+                    
+                        emit_push_reg_now ("edx");
+                        emit_push_reg_now ("eax");
+                    
+                    } else if (!arg_is_floating && postfix_member_seen && postfix_member_pointer_depth == 0 && postfix_member_size > (DATA_PTR & 0x1f)) {
                     
                         arg_bytes = postfix_member_size;
                         emit_push_aggregate_from_addr_reg_now ("eax", arg_bytes);
@@ -22181,7 +22444,7 @@ static int current_argument_starts_64bit_integer_now (void) {
         return 1;
     }
     
-    return source_starts_long_long_cast_now (tok.start) || source_starts_long_long_cast_now (tok.caret);
+    return source_starts_64bit_integer_cast_now (tok.start) || source_starts_64bit_integer_cast_now (tok.caret);
 
 }
 
@@ -24282,6 +24545,8 @@ static void emit_incdec_integral_symbol_now (struct local_symbol *sym, const cha
         return;
     }
     
+    size &= 0x1f;
+    
     if (size == (DATA_LLONG & 0x1f)) {
     
         if (sym) {
@@ -24342,7 +24607,7 @@ static void emit_incdec_integral_symbol_now (struct local_symbol *sym, const cha
     
     }
     
-    if (size != (DATA_CHAR & 0x1f) && size != (DATA_SHORT & 0x1f) && size != (DATA_INT & 0x1f) && size != DATA_PTR) {
+    if (size != (DATA_CHAR & 0x1f) && size != (DATA_SHORT & 0x1f) && size != (DATA_INT & 0x1f) && size != (DATA_PTR & 0x1f)) {
         return;
     }
     
@@ -24526,6 +24791,95 @@ static void emit_incdec_symbol_now (struct local_symbol *sym, const char *name, 
     }
     
     emit_incdec_integral_symbol_now (sym, name, size, op);
+
+}
+
+static int symbol_is_plain_64_for_incdec (struct local_symbol *sym, const char *name) {
+
+    int size;
+    int pointer_depth;
+    int is_floating;
+
+    if (sym) {
+    
+        size = sym->size;
+        
+        pointer_depth = sym->pointer_depth;
+        is_floating = sym->is_floating;
+    
+    } else {
+    
+        if (!name || find_global_symbol (name) < 0) {
+            return 0;
+        }
+        
+        size = get_global_symbol_size (name);
+        
+        pointer_depth = get_global_symbol_pointer_depth (name);
+        is_floating = get_global_symbol_floating (name);
+    
+    }
+    
+    return !is_floating && pointer_depth <= 0 && ((size & 0x1f) == (DATA_LLONG & 0x1f));
+
+}
+
+static void emit_incdec64_symbol_direct_now (struct local_symbol *sym, const char *name, enum token_kind op) {
+
+    if (!state->ofp) {
+        return;
+    }
+    
+    if (sym) {
+    
+        if (sym->is_static && sym->static_label) {
+            emit_load_global64_to_pair ("eax", "edx", sym->static_label);
+        } else {
+            emit_load_local64_to_pair (sym->offset, "eax", "edx");
+        }
+    
+    } else {
+        emit_load_global64_to_pair ("eax", "edx", name);
+    }
+
+    if (state->syntax & ASM_SYNTAX_INTEL) {
+    
+        if (op == TOK_INCR) {
+        
+            fprintf (state->ofp, "    add eax, 1\n");
+            fprintf (state->ofp, "    adc edx, 0\n");
+        
+        } else {
+            fprintf (state->ofp, "    sub eax, 1\n");
+            fprintf (state->ofp, "    sbb edx, 0\n");
+        }
+    } else {
+    
+        if (op == TOK_INCR) {
+        
+            fprintf (state->ofp, "    addl $1, %%eax\n");
+            fprintf (state->ofp, "    adcl $0, %%edx\n");
+        
+        } else {
+        
+            fprintf (state->ofp, "    subl $1, %%eax\n");
+            fprintf (state->ofp, "    sbbl $0, %%edx\n");
+        
+        }
+    
+    }
+    
+    if (sym) {
+    
+        if (sym->is_static && sym->static_label) {
+            emit_store_pair_to_global64 (sym->static_label, "eax", "edx");
+        } else {
+            emit_store_pair_to_local64 (sym->offset, "eax", "edx");
+        }
+    
+    } else {
+        emit_store_pair_to_global64 (name, "eax", "edx");
+    }
 
 }
 
@@ -27466,141 +27820,14 @@ static int parse_identifier_assignment_statement (void) {
                 
                 if (tok.kind == TOK_LPAREN) {
                 
-                    enum token_kind member_calling_convention = last_found_member_calling_convention;
-                    
-                    FILE **arg_tmp_ofps = 0;
-                    FILE **new_arg_tmp_ofps;
-                    FILE *arg_tmp_ofp;
-                    FILE *arg_saved_ofp;
-                    
-                    int argc = 0;
-                    int i;
-                    int ch;
-                    int total_arg_bytes = 0;
-                    
                     if (state->ofp) {
-                    
                         emit_load_member_from_addr_reg_now ("ecx", "eax", member_offset, DATA_PTR & 0x1f);
-                        emit_push_reg_now ("ecx");
-                    
                     }
                     
-                    get_token ();
+                    postfix_member_calling_convention = last_found_member_calling_convention;
+                    emit_call_pointer_in_reg_now ("ecx", "eax");
                     
-                    if (tok.kind != TOK_RPAREN) {
-                    
-                        for (;;) {
-                        
-                            arg_tmp_ofp = 0;
-                            arg_saved_ofp = 0;
-                            
-                            if (state->ofp) {
-                            
-                                arg_tmp_ofp = scc_tmpfile ();
-                                
-                                if (arg_tmp_ofp) {
-                                    arg_saved_ofp = state->ofp;
-                                    state->ofp = arg_tmp_ofp;
-                                }
-                            
-                            }
-                            
-                            emit_load_assignment_rhs_expression_to_reg ("eax");
-                            
-                            if (state->ofp) {
-                                emit_push_reg_now ("eax");
-                            }
-                            
-                            if (arg_saved_ofp) {
-                            
-                                fflush (arg_tmp_ofp);
-                                state->ofp = arg_saved_ofp;
-                                
-                                new_arg_tmp_ofps = (FILE **) xrealloc (arg_tmp_ofps, sizeof (*arg_tmp_ofps) * (argc + 1));
-                                
-                                if (new_arg_tmp_ofps) {
-                                
-                                    arg_tmp_ofps = new_arg_tmp_ofps;
-                                    arg_tmp_ofps[argc] = arg_tmp_ofp;
-                                    arg_tmp_ofp = 0;
-                                
-                                }
-                            
-                            }
-                            
-                            if (arg_tmp_ofp) {
-                                scc_close (arg_tmp_ofp);
-                            }
-                            
-                            argc++;
-                            total_arg_bytes += DATA_PTR & 0x1f;
-                            
-                            if (!_accept (TOK_COMMA)) {
-                                break;
-                            }
-                        
-                        }
-                    
-                    }
-                    
-                    expect (TOK_RPAREN, ")");
-                    
-                    if (state->ofp) {
-                    
-                        for (i = argc - 1; i >= 0; i--) {
-                        
-                            if (arg_tmp_ofps && arg_tmp_ofps[i]) {
-                            
-                                fseek (arg_tmp_ofps[i], 0, SEEK_SET);
-                                
-                                while ((ch = fgetc (arg_tmp_ofps[i])) != EOF) {
-                                    fputc (ch, state->ofp);
-                                }
-                                
-                                scc_close (arg_tmp_ofps[i]);
-                                arg_tmp_ofps[i] = 0;
-                            
-                            }
-                        
-                        }
-                        
-                        if (arg_tmp_ofps) {
-                        
-                            free (arg_tmp_ofps);
-                            arg_tmp_ofps = 0;
-                        
-                        }
-                        
-                        if (state->syntax & ASM_SYNTAX_INTEL) {
-                        
-                            if (state->syntax & ASM_SYNTAX_NASM) {
-                                fprintf (state->ofp, "    mov ecx, dword [esp + %d]\n", total_arg_bytes);
-                            } else {
-                                fprintf (state->ofp, "    mov ecx, dword ptr [esp + %d]\n", total_arg_bytes);
-                            }
-                            
-                            fprintf (state->ofp, "    call ecx\n");
-                            
-                            if (member_calling_convention == TOK_STDCALL) {
-                                fprintf (state->ofp, "    add esp, %d\n", (DATA_PTR & 0x1f));
-                            } else {
-                                fprintf (state->ofp, "    add esp, %d\n", total_arg_bytes + (DATA_PTR & 0x1f));
-                            }
-                        
-                        } else {
-                        
-                            fprintf (state->ofp, "    movl %d(%%esp), %%ecx\n", total_arg_bytes);
-                            fprintf (state->ofp, "    call *%%ecx\n");
-                            
-                            if (member_calling_convention == TOK_STDCALL) {
-                                fprintf (state->ofp, "    addl $%d, %%esp\n", (DATA_PTR & 0x1f));
-                            } else {
-                                fprintf (state->ofp, "    addl $%d, %%esp\n", total_arg_bytes + (DATA_PTR & 0x1f));
-                            }
-                        
-                        }
-                    
-                    }
+                    postfix_member_calling_convention = TOK_EOF;
                     
                     expect_semi_or_recover ();
                     free (name);
