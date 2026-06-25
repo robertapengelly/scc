@@ -1920,7 +1920,10 @@ int resolve_enum_constant (const char *name, int64_s *out) {
     }
     
     if (out) {
-        *out = entry->value;
+    
+        out->low = entry->value.low;
+        out->high = entry->value.high;
+    
     }
     
     return 1;

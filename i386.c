@@ -18102,6 +18102,8 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             if (tok.kind == TOK_ASSIGN) {
             
                 int lhs_deref_is_unsigned = 1;
+                int lhs_deref_is_aggregate = 0;
+                
                 lhs_sym = find_local_symbol (lhs_name);
                 
                 if (lhs_sym) {
@@ -18110,6 +18112,8 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                         deref_size = DATA_PTR & 0x1f;
                     } else if (lhs_sym->pointer_depth == 1 && lhs_sym->pointed_size > 0) {
                     
+                        lhs_deref_is_aggregate = (lhs_sym->pointed_tag_name != 0);
+                        
                         /**
                          * Keep the full pointed-to object size here.  This
                          * assignment path also handles aggregate lvalues such
@@ -18161,7 +18165,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                 
                 get_token ();
                 
-                if (deref_size > (DATA_LLONG & 0x1f)) {
+                if (lhs_deref_is_aggregate || deref_size > (DATA_LLONG & 0x1f)) {
                 
                     emit_pop_reg_now ("edx");
                     
@@ -24086,15 +24090,6 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
     int false_label;
     int true_label;
     int end_label;
-    
-    if (current_expression_mentions_64bit_symbol_now ()) {
-    
-        const char *hi = (strcmp (reg, "edx") == 0) ? "ecx" : "edx";
-        
-        emit_load_assignment_rhs_expression_to_pair (reg, hi, rhs_current_operand_is_unsigned_now ());
-        return;
-    
-    }
     
     if (rhs_current_operand_is_floating_now ()) {
     
@@ -33562,8 +33557,6 @@ static void parse_statement (void) {
                         }
                     
                     } else if (current_function_return_size == (DATA_LLONG & 0x1f)) {
-                        emit_load_assignment_rhs_expression_to_pair ("eax", "edx", current_function_return_is_unsigned);
-                    } else if (current_expression_mentions_64bit_symbol_now ()) {
                         emit_load_assignment_rhs_expression_to_pair ("eax", "edx", current_function_return_is_unsigned);
                     } else {
                         emit_load_assignment_rhs_expression_to_reg ("eax");
