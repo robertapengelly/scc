@@ -27330,9 +27330,11 @@ static void emit_load_assignment_rhs_expression_to_pair (const char *lo, const c
          */
         if (op == TOK_LSH || op == TOK_RSH || op == TOK_LSHEQ || op == TOK_RSHEQ) {
         
+            /*
+             * AMD64 64-bit scalar expressions live in RAX, not RDX:RAX.
+             * Keep only the real left operand while the shift count is parsed.
+             */
             emit_push_reg_now ("rax");
-            emit_push_reg_now ("rdx");
-            
             emit_load_assignment_binary_expression_to_reg ("rbx");
             
             if (state->syntax & ASM_SYNTAX_INTEL) {
@@ -27341,28 +27343,18 @@ static void emit_load_assignment_rhs_expression_to_pair (const char *lo, const c
                 fprintf (state->ofp, "    xorq %%rcx, %%rcx\n");
             }
             
-            emit_pop_reg_now ("rdx");
             emit_pop_reg_now ("rax");
         
         } else {
         
             /*
-             * The generic 64-bit RHS loader uses EAX:EDX as scratch even
-             * when asked to leave the final value in EBX:ECX.  Preserve the
-             * left operand around RHS evaluation; otherwise expressions such
-             * as:
-             *
-             *     result &= (((address_type)1) << n) - 1
-             *
-             * end up applying the operator to the RHS twice, because the
-             * computed mask clobbers the original result in EAX:EDX.
+             * Native AMD64 64-bit binary ops use RAX and RBX.  Do not route
+             * the RHS through RAX:RDX and then copy RDX into RCX; that is the
+             * old i386 pair model leaking into the AMD64 backend.
              */
             emit_push_reg_now ("rax");
-            emit_push_reg_now ("rdx");
             
             emit_load_assignment_rhs_to_pair ("rbx", "rcx");
-            
-            emit_pop_reg_now ("rdx");
             emit_pop_reg_now ("rax");
         
         }
@@ -30774,26 +30766,20 @@ static int parse_identifier_assignment_statement (void) {
                 }
                 
                 /*
-                 * Compound assignments need the complete RHS expression.
-                 * Using emit_load_assignment_rhs_to_pair() only consumes one
-                 * primary operand, so e.g.
+                 * AMD64 uint64_t is a native qword, not an i386-style
+                 * EDX:EAX pair.  Preserve only the LHS qword in RAX and load
+                 * the complete RHS directly into the native RHS register RBX.
                  *
-                 *     final_value += symbol->frag->address + left_value;
+                 * Using RAX:RDX as a temporary RHS pair created stale RDX
+                 * saves/restores and useless MOV RCX,RDX instructions in code
+                 * such as:
                  *
-                 * leaves the second + operand for the statement parser and
-                 * reports "expected ;".  Evaluate the full RHS in rax:rdx,
-                 * copy it to the RHS pair rbx:rcx, then restore the original
-                 * LHS value before applying the compound operator.
+                 *     h ^= *p++;
+                 *     h *= UINT64_C (...);
                  */
                 emit_push_reg_now ("rax");
-                emit_push_reg_now ("rdx");
                 
-                emit_load_assignment_rhs_expression_to_pair ("rax", "rdx", lhs ? lhs->is_unsigned : get_global_symbol_unsigned (name));
-                
-                emit_mov_reg_to_reg_now ("rbx", "rax");
-                emit_mov_reg_to_reg_now ("rcx", "rdx");
-                
-                emit_pop_reg_now ("rdx");
+                emit_load_assignment_rhs_expression_to_pair ("rbx", "rcx", lhs ? lhs->is_unsigned : get_global_symbol_unsigned (name));
                 emit_pop_reg_now ("rax");
                 
                 emit_preserve_assignment64_regs (op);
@@ -33548,26 +33534,20 @@ static void parse_for_header_expression_until (enum token_kind end_token) {
                 }
                 
                 /*
-                 * Compound assignments need the complete RHS expression.
-                 * Using emit_load_assignment_rhs_to_pair() only consumes one
-                 * primary operand, so e.g.
+                 * AMD64 uint64_t is a native qword, not an i386-style
+                 * EDX:EAX pair.  Preserve only the LHS qword in RAX and load
+                 * the complete RHS directly into the native RHS register RBX.
                  *
-                 *     final_value += symbol->frag->address + left_value;
+                 * Using RAX:RDX as a temporary RHS pair created stale RDX
+                 * saves/restores and useless MOV RCX,RDX instructions in code
+                 * such as:
                  *
-                 * leaves the second + operand for the statement parser and
-                 * reports "expected ;".  Evaluate the full RHS in rax:rdx,
-                 * copy it to the RHS pair rbx:rcx, then restore the original
-                 * LHS value before applying the compound operator.
+                 *     h ^= *p++;
+                 *     h *= UINT64_C (...);
                  */
                 emit_push_reg_now ("rax");
-                emit_push_reg_now ("rdx");
                 
-                emit_load_assignment_rhs_expression_to_pair ("rax", "rdx", lhs ? lhs->is_unsigned : get_global_symbol_unsigned (name));
-                
-                emit_mov_reg_to_reg_now ("rbx", "rax");
-                emit_mov_reg_to_reg_now ("rcx", "rdx");
-                
-                emit_pop_reg_now ("rdx");
+                emit_load_assignment_rhs_expression_to_pair ("rbx", "rcx", lhs ? lhs->is_unsigned : get_global_symbol_unsigned (name));
                 emit_pop_reg_now ("rax");
                 
                 emit_preserve_assignment64_regs (op);

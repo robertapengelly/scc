@@ -12514,10 +12514,17 @@ static void emit_assignment_binary_op64 (enum token_kind op, int is_unsigned) {
                 fprintf (state->ofp, "    mov esi, eax\n");
                 fprintf (state->ofp, "    mov edi, edx\n");
                 fprintf (state->ofp, "    mul ebx\n");
-                fprintf (state->ofp, "    mov esi, edx\n");
-                fprintf (state->ofp, "    mov edx, edi\n");
-                fprintf (state->ofp, "    imul edx, ebx\n");
-                fprintf (state->ofp, "    add edx, esi\n");
+                
+                fprintf (state->ofp, "    push eax\n");
+                fprintf (state->ofp, "    mov eax, esi\n");
+                
+                fprintf (state->ofp, "    imul eax, ecx\n");
+                fprintf (state->ofp, "    imul edi, ebx\n");
+                
+                fprintf (state->ofp, "    add edx, eax\n");
+                fprintf (state->ofp, "    add edx, edi\n");
+                
+                fprintf (state->ofp, "    pop eax\n");
                 break;
             
             case TOK_BSLASH:    case TOK_SLASHEQ:
@@ -12634,10 +12641,17 @@ static void emit_assignment_binary_op64 (enum token_kind op, int is_unsigned) {
                 fprintf (state->ofp, "    movl %%eax, %%esi\n");
                 fprintf (state->ofp, "    movl %%edx, %%edi\n");
                 fprintf (state->ofp, "    mull %%ebx\n");
-                fprintf (state->ofp, "    movl %%edx, %%esi\n");
-                fprintf (state->ofp, "    movl %%edi, %%edx\n");
-                fprintf (state->ofp, "    imull %%ebx, %%edx\n");
-                fprintf (state->ofp, "    addl %%esi, %%edx\n");
+                
+                fprintf (state->ofp, "    pushl %%eax\n");
+                fprintf (state->ofp, "    movl %%esi, %%eax\n");
+                
+                fprintf (state->ofp, "    imull %%ecx, %%eax\n");
+                fprintf (state->ofp, "    imull %%ebx, %%edi\n");
+                
+                fprintf (state->ofp, "    addl %%eax, %%edx\n");
+                fprintf (state->ofp, "    addl %%edi, %%edx\n");
+                
+                fprintf (state->ofp, "    popl %%eax\n");
                 break;
             
             case TOK_BSLASH:    case TOK_SLASHEQ:
@@ -24119,6 +24133,41 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
         }
         
         emit_floating_stack_to_int_reg_now (reg);
+        return;
+    
+    }
+    
+    /*
+     * A 32-bit context can still contain a 64-bit integer expression whose
+     * final value is converted down to int/long/pointer.  For example:
+     *
+     *     (uint32_t)(checksum >> 32)
+     *
+     * The old path entered the 32-bit expression parser, loaded only the low
+     * word of checksum, and then emitted a 32-bit SHR.  Counts of 32/48 are
+     * masked by x86, so the generated code used the wrong half of the value
+     * and produced repeated checksum chunks.  Evaluate such expressions with
+     * the 64-bit parser first, then keep the low result word as the normal C
+     * conversion to the requested 32-bit context.
+     */
+    if (current_expression_mentions_64bit_symbol_now () ||
+        tok.kind == TOK_CLLONG || tok.kind == TOK_CULLONG ||
+        source_starts_64bit_integer_cast_now (tok.start) ||
+        source_starts_64bit_integer_cast_now (tok.caret)) {
+    
+        int is_unsigned = rhs_current_operand_is_unsigned_now ();
+        emit_load_assignment_rhs_expression_to_pair ("eax", "edx", is_unsigned);
+        
+        if (state->ofp && strcmp (reg, "eax") != 0) {
+        
+            if (state->syntax & ASM_SYNTAX_INTEL) {
+                fprintf (state->ofp, "    mov %s, eax\n", reg);
+            } else {
+                fprintf (state->ofp, "    movl %%eax, %%%s\n", reg);
+            }
+        
+        }
+        
         return;
     
     }

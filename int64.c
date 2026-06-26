@@ -12,20 +12,14 @@ extern unsigned long get_line_number (void);
 
 void add64 (int64_s *a, int64_s b) {
 
-    unsigned long raw_sum, carry;
+    unsigned long al = a->low & U32_MASK;
+    unsigned long bl = b.low & U32_MASK;
     
-    /* 1. Calculate the raw result */
-    raw_sum = a->low + b.low;
-
-    /* 2. Manually force 32-bit wrap around using a mask */
-    /* This ensures that any "1" that would be in the 33rd bit is stripped */
-    a->low = raw_sum & 0xFFFFFFFFUL;
-
-    /* 3. Extract the carry: if raw_sum > 0xFFFFFFFF, we had a carry */
-    carry = (raw_sum > 0xFFFFFFFFUL) ? 1 : 0;
-
-    /* 4. Update the high part */
-    a->high = (a->high + b.high + carry) & 0xFFFFFFFFUL;
+    unsigned long raw_sum = al + bl;
+    unsigned long carry = (raw_sum >> 32) & 1UL;
+    
+    a->low = raw_sum & U32_MASK;
+    a->high = ((a->high & U32_MASK) + (b.high & U32_MASK) + carry) & U32_MASK;
 
 }
 
@@ -47,7 +41,7 @@ void mul64 (int64_s *a, int64_s b) {
     unsigned long mid = (p0 >> 16) + (p1 & 0xFFFF) + (p2 & 0xFFFF);
     
     /* Store the new low 32 bits */
-    unsigned long new_low = ((mid << 16) | (p0 & 0xFFFF));
+    unsigned long new_low = ((mid << 16) | (p0 & 0xFFFF)) & U32_MASK;
     
     /* 2. Calculate the high word */
     /* Start with the carries/high-bits from the 32x32 multiply */
@@ -60,8 +54,8 @@ void mul64 (int64_s *a, int64_s b) {
     new_high += (b.high * a->low);
     
     /* Final Assignment */
-    a->low = new_low;
-    a->high = new_high;
+    a->low = new_low & U32_MASK;
+    a->high = new_high & U32_MASK;
 
 }
 
@@ -260,7 +254,7 @@ void mod64 (int64_s *a, int64_s b) {
 
 void zext64 (int64_s *dest, unsigned long input) {
 
-    dest->low = input;
+    dest->low = input & U32_MASK;
     dest->high = 0;                     /* Clear the upper bits */
 
 }
@@ -728,15 +722,16 @@ void parse_string_to_i64 (int64_s *val, const char *str) {
         val->high = (val->high * base) + carry2;
         
         /* Finalize low part */
-        val->low = ((res_mid & 0xFFFF) << 16) | (res_low & 0xFFFF);
+        val->low = (((res_mid & 0xFFFF) << 16) | (res_low & 0xFFFF)) & U32_MASK;
+        val->high &= U32_MASK;
         
         /* Add the new digit */
         old_low = val->low;
-        val->low += (unsigned long) digit;
+        val->low = (val->low + (unsigned long) digit) & U32_MASK;
         
         /* Handle carry from addition into the high word */
         if (val->low < old_low) {
-            val->high++;
+            val->high = (val->high + 1) & U32_MASK;
         }
         
         str++;
