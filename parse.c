@@ -2359,6 +2359,21 @@ int type_alignment (int size) {
         return 2;
     }
     
+    /*
+     * Keep 64-bit scalar members naturally aligned.
+     *
+     * The old code capped aggregate member alignment at DATA_PTR, which
+     * makes i386 lay out uint64_t / EFI_LBA fields on 4-byte boundaries.
+     * That is wrong for PE/UEFI-style structures such as
+     * EFI_BLOCK_IO_MEDIA, where LastBlock must be read after the padding
+     * inserted before the 64-bit field.  Without this, code reads the
+     * preceding IoAlign field as the low half of LastBlock, which is how
+     * values such as 5 can appear for a disk size.
+     */
+    if (size == 8) {
+        return 8;
+    }
+    
     if (size >= DATA_PTR) {
         return DATA_PTR;
     }

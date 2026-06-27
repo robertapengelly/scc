@@ -12296,11 +12296,23 @@ static void emit_load_const32_to_reg_now (const char *reg, int64_s v) {
     
     /*
      * A 32-bit integer constant loaded through the dword register form
-     * zero-extends the upper half of the AMD64 register.  Do not use a
-     * qword immediate move here: assemblers may choose a sign-extended
-     * imm32 encoding for values with bit 31 set, which is wrong for plain
-     * unsigned 32-bit constants promoted into a 64-bit register.
+     * zero-extends the upper half of the AMD64 register.  That is only
+     * correct when the folded value really fits in 32 bits.  Macro-expanded
+     * EFI status constants such as:
+     *
+     *     (0x8000000000000000LLU | 5)
+     *
+     * reach this helper through the generic foldable-expression path.  The
+     * old code always used the dword register name and silently discarded
+     * v.high, turning EFI_BUFFER_TOO_SMALL into plain 5 in comparisons.
      */
+    if ((v.high & U32_MASK) != 0) {
+    
+        amd64_emit_mov_i64_to_qword_reg_now (reg, v);
+        return;
+    
+    }
+    
     if (state->syntax & ASM_SYNTAX_INTEL) {
         fprintf (state->ofp, "    mov %s, %lu\n", dreg, v.low & U32_MASK);
     } else {
