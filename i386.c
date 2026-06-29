@@ -22652,6 +22652,18 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                         
                     emit_load_assignment_rhs_expression_to_pair ("eax", "edx", rhs_current_operand_is_unsigned_now ());
                 
+                } else if (!use_inline && current_argument_starts_64bit_integer_now ()) {
+                
+                    /*
+                     * No prototype does not make a 64-bit expression a 32-bit
+                     * argument.  Calls such as kprintf ("%lld", (uint64_t)x)
+                     * still have to pass the full edx:eax pair.
+                     */
+                    arg_is_floating = 0;
+                    arg_bytes = DATA_LLONG & 0x1f;
+                    
+                    emit_load_assignment_rhs_expression_to_pair ("eax", "edx", rhs_current_operand_is_unsigned_now ());
+                
                 } else if (arg_is_floating) {
                     emit_load_floating_rhs_expression_now (DATA_DOUBLE & 0x1f);
                 } else {
