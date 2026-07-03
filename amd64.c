@@ -20564,8 +20564,55 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             
             if (dst_size == (DATA_LLONG & 0x1f) && !dst_is_pointerlike) {
             
-                report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret, "64-bit assignment expression not implemented");
-                skip_balanced_until (TOK_RPAREN, TOK_SEMI, TOK_EOF);
+                int dst_is_unsigned = dst ? dst->is_unsigned : get_global_symbol_unsigned (name);
+                
+                if (assign_op == TOK_ASSIGN) {
+                    emit_load_assignment_rhs_expression_to_pair ("rax", "rdx", dst_is_unsigned);
+                } else {
+                
+                    if (dst) {
+                    
+                        if (dst->is_static && dst->static_label) {
+                            emit_load_global64_to_pair ("rax", "rdx", dst->static_label);
+                        } else {
+                            emit_load_local64_to_pair (dst->offset, "rax", "rdx");
+                        }
+                    
+                    } else {
+                        emit_load_global64_to_pair ("rax", "rdx", name);
+                    }
+                    
+                    emit_push_reg_now ("rax");
+                    emit_push_reg_now ("rdx");
+                    
+                    emit_load_assignment_rhs_expression_to_pair ("rax", "rdx", dst_is_unsigned);
+                    
+                    emit_mov_reg_to_reg_now ("rbx", "rax");
+                    emit_mov_reg_to_reg_now ("rcx", "rdx");
+                    
+                    emit_pop_reg_now ("rdx");
+                    emit_pop_reg_now ("rax");
+                    
+                    emit_preserve_assignment64_regs (assign_op);
+                    
+                    emit_assignment_binary_op64 (assign_op, dst_is_unsigned);
+                    emit_restore_assignment64_regs (assign_op);
+                
+                }
+                
+                if (dst) {
+                
+                    if (dst->is_static && dst->static_label) {
+                        emit_store_pair_to_global64 (dst->static_label, "rax", "rdx");
+                    } else {
+                        emit_store_pair_to_local64 (dst->offset, "rax", "rdx");
+                    }
+                
+                } else {
+                    emit_store_pair_to_global64 (name, "rax", "rdx");
+                }
+                
+                clear_rhs_last_pointer_info ();
                 
                 free (name);
                 return;
