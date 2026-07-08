@@ -15,10 +15,10 @@ void add64 (int64_s *a, int64_s b) {
     unsigned long al = a->low & U32_MASK;
     unsigned long bl = b.low & U32_MASK;
     
-    unsigned long raw_sum = al + bl;
-    unsigned long carry = (raw_sum >> 32) & 1UL;
-    
-    a->low = raw_sum & U32_MASK;
+    unsigned long raw_sum = (al + bl) & U32_MASK;
+    unsigned long carry = (raw_sum < al) ? 1UL : 0UL;
+
+    a->low = raw_sum;
     a->high = ((a->high & U32_MASK) + (b.high & U32_MASK) + carry) & U32_MASK;
 
 }
