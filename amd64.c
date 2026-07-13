@@ -136,6 +136,7 @@ static const char *postfix_copy_lvalue_tag_name = 0;
 
 static int postfix_member_offset = 0;
 static int postfix_member_size = 0;
+static int postfix_value_is_array = 0;
 
 static int postfix_member_is_floating = 0;
 static int postfix_member_is_unsigned = 0;
@@ -13376,6 +13377,8 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
         
         if (find_global_symbol (name) >= 0) {
         
+            postfix_value_is_array = get_global_symbol_array (name);
+            
             if (get_global_symbol_kind (name) == GLOBAL_SYMBOL_FUNCTION ||
                 get_global_symbol_array (name) ||
                 (!get_global_symbol_pointer_depth (name) &&
@@ -13905,6 +13908,7 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
             postfix_member_pointed_size = elem_size;
             postfix_member_offset = offset;
             postfix_member_size = size;
+            postfix_value_is_array = is_array;
             postfix_member_is_floating = is_floating;
             postfix_member_is_unsigned = is_unsigned;
             postfix_member_calling_convention = last_found_member_calling_convention;
@@ -13919,6 +13923,8 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
             
                 enum token_kind assign_op;
                 int subscript_elem_size;
+                
+                postfix_value_is_array = 0;
                 
                 if (!is_array && pointer_depth > 0) {
                     emit_load_member_from_addr_reg_now (reg, reg, offset, DATA_PTR & 0x1f);
@@ -17125,6 +17131,156 @@ static int source_starts_lparen_deref_subscript_at (const char *p) {
     }
     
     return *p == '[';
+
+}
+
+static int source_starts_lparen_subscript_call_at (const char *p) {
+
+    int bracket_depth;
+    
+    if (!p || *p != '(') {
+        return 0;
+    }
+    
+    p++;
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
+        return 0;
+    }
+    
+    p++;
+    
+    while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_') {
+        p++;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    if (*p != '[') {
+        return 0;
+    }
+    
+    bracket_depth = 1;
+    p++;
+    
+    while (*p && bracket_depth > 0) {
+    
+        if (*p == '[') {
+            bracket_depth++;
+        } else if (*p == ']') {
+            bracket_depth--;
+        }
+        
+        p++;
+    
+    }
+    
+    if (bracket_depth != 0) {
+        return 0;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    if (*p != ')') {
+        return 0;
+    }
+    
+    p++;
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    return *p == '(';
+
+}
+
+static int source_starts_lparen_deref_subscript_call_at (const char *p) {
+
+    int bracket_depth;
+    
+    if (!p) {
+        return 0;
+    }
+    
+    if (*p == '(') {
+        p++;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    if (*p != '*') {
+        return 0;
+    }
+    
+    p++;
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
+        return 0;
+    }
+    
+    p++;
+    
+    while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_') {
+        p++;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    if (*p != '[') {
+        return 0;
+    }
+    
+    bracket_depth = 1;
+    p++;
+    
+    while (*p && bracket_depth > 0) {
+    
+        if (*p == '[') {
+            bracket_depth++;
+        } else if (*p == ']') {
+            bracket_depth--;
+        }
+        
+        p++;
+    
+    }
+    
+    if (bracket_depth != 0) {
+        return 0;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    if (*p != ')') {
+        return 0;
+    }
+    
+    p++;
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    return *p == '(';
 
 }
 
@@ -20817,6 +20973,8 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         
             if (src->is_array) {
             
+                postfix_value_is_array = 1;
+                
                 if (src->is_static && src->static_label) {
                     emit_load_address_to_reg_now (reg, src->static_label);
                 } else {
@@ -20917,6 +21075,8 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         
         if (find_global_symbol (name) >= 0) {
         
+            postfix_value_is_array = get_global_symbol_array (name);
+            
             if (get_global_symbol_kind (name) == GLOBAL_SYMBOL_FUNCTION ||
                 get_global_symbol_array (name) ||
                 (!get_global_symbol_pointer_depth (name) &&
@@ -23110,6 +23270,16 @@ static void emit_load_floating_rhs_expression_now (int result_size) {
 
 static void emit_load_assignment_rhs_expression_to_reg (const char *reg);
 
+static int local_symbol_is_array_now (const struct local_symbol *sym) {
+
+    if (!sym) {
+        return 0;
+    }
+    
+    return sym->is_array || sym->array_dimensions > 0 || sym->array_element_size > 0;
+
+}
+
 static int current_argument_is_bare_identifier_now (void) {
 
     const char *p;
@@ -23307,14 +23477,41 @@ static int emit_push_global_aggregate_argument_now (const char *name) {
     int offset;
     int chunk;
 
-    if (!name || get_global_symbol_kind (name) != GLOBAL_SYMBOL_OBJECT ||
-        get_global_symbol_array (name) || get_global_symbol_pointer_depth (name) > 0 ||
-        get_global_symbol_floating (name)) {
+    const char *tag_name;
+
+    if (!name) {
+        return 0;
+    }
+    
+    if (get_global_symbol_kind (name) != GLOBAL_SYMBOL_OBJECT) {
+        return 0;
+    }
+    
+    if (get_global_symbol_array (name)) {
+        return 0;
+    }
+    
+    if (get_global_symbol_pointer_depth (name) > 0) {
+        return 0;
+    }
+    
+    if (get_global_symbol_floating (name)) {
         return 0;
     }
     
     size = get_global_symbol_size (name);
-    
+    tag_name = get_global_symbol_tag_name (name);
+
+    /*
+     * Only tagged aggregate objects are passed by value here.  Untagged
+     * objects include scalar values and arrays whose decay metadata was not
+     * visible during the self-hosting pass; those must use normal expression
+     * loading so arrays decay to one address instead of multiple stack words.
+     */
+    if (!tag_name || !tag_name[0]) {
+        return 0;
+    }
+
     if (size <= (DATA_PTR & 0x1f)) {
         return 0;
     }
@@ -23485,12 +23682,13 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
             
             }
             
+            postfix_value_is_array = 0;
             postfix_member_seen = 0;
             postfix_member_size = 0;
             postfix_member_pointer_depth = 0;
             postfix_member_pointed_size = 0;
             
-            if (tok.kind == TOK_IDENT && tok.ident && current_argument_is_bare_identifier_now () && find_local_symbol (tok.ident) && find_local_symbol (tok.ident)->is_array) {
+            if (tok.kind == TOK_IDENT && tok.ident && current_argument_is_bare_identifier_now () && find_local_symbol (tok.ident) && local_symbol_is_array_now (find_local_symbol (tok.ident))) {
             
                 struct local_symbol *arg_sym = find_local_symbol (tok.ident);
                 
@@ -23599,12 +23797,12 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
                 
                 if (state->ofp) {
                 
-                    if (!arg_is_floating && postfix_member_seen && postfix_member_pointer_depth == 0 && postfix_member_size > (DATA_PTR & 0x1f)) {
+                    if (!arg_is_floating && postfix_member_seen && postfix_member_pointer_depth == 0 && !postfix_value_is_array && postfix_member_size > (DATA_PTR & 0x1f)) {
                     
                         arg_bytes = postfix_member_size;
                         emit_push_aggregate_from_addr_reg_now ("rax", arg_bytes);
                     
-                    } else if (!arg_is_floating && postfix_member_size > (DATA_PTR & 0x1f)) {
+                    } else if (!arg_is_floating && !postfix_value_is_array && postfix_member_size > (DATA_PTR & 0x1f)) {
                     
                         arg_bytes = postfix_member_size;
                         emit_push_aggregate_from_addr_reg_now ("rax", arg_bytes);
@@ -25386,12 +25584,13 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
             
             }
             
+            postfix_value_is_array = 0;
             postfix_member_seen = 0;
             postfix_member_size = 0;
             postfix_member_pointer_depth = 0;
             postfix_member_pointed_size = 0;
             
-            if (tok.kind == TOK_IDENT && tok.ident && current_argument_is_bare_identifier_now () && find_local_symbol (tok.ident) && find_local_symbol (tok.ident)->is_array) {
+            if (tok.kind == TOK_IDENT && tok.ident && current_argument_is_bare_identifier_now () && find_local_symbol (tok.ident) && local_symbol_is_array_now (find_local_symbol (tok.ident))) {
             
                 struct local_symbol *arg_sym = find_local_symbol (tok.ident);
                 
@@ -25510,12 +25709,12 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                          * slot according to the AMD64 calling convention.
                          */
                     
-                    } else if (!use_inline && !arg_is_floating && postfix_member_seen && postfix_member_pointer_depth == 0 && postfix_member_size > (DATA_PTR & 0x1f)) {
+                    } else if (!use_inline && !arg_is_floating && postfix_member_seen && postfix_member_pointer_depth == 0 && !postfix_value_is_array && postfix_member_size > (DATA_PTR & 0x1f)) {
                     
                         arg_bytes = postfix_member_size;
                         emit_push_aggregate_from_addr_reg_now ("rax", arg_bytes);
                     
-                    } else if (!use_inline && !arg_is_floating && postfix_member_size > (DATA_PTR & 0x1f)) {
+                    } else if (!use_inline && !arg_is_floating && !postfix_value_is_array && postfix_member_size > (DATA_PTR & 0x1f)) {
                     
                         arg_bytes = postfix_member_size;
                         emit_push_aggregate_from_addr_reg_now ("rax", arg_bytes);
@@ -29995,6 +30194,15 @@ static int parse_parenthesized_deref_subscript_statement (void) {
     
     }
     
+    if (tok.kind == TOK_LPAREN) {
+    
+        get_token ();
+        
+        expect (TOK_RPAREN, ")");
+        emit_call_pointer_in_reg_now ("rax", "rax");
+    
+    }
+    
     emit_load_deref_reg_now ("rax", DATA_PTR & 0x1f);
     emit_handle_subscript_after_loaded_pointer_to_reg_now ("rax", pointer_depth - 1, pointed_size, src ? src->pointed_is_unsigned : get_global_symbol_pointed_is_unsigned (name));
     
@@ -30389,6 +30597,20 @@ static int parse_identifier_assignment_statement (void) {
         
         } else {
             emit_parse_postfix_subscript_scaled_address_to_reg_now ("rdx", elem_size);
+        }
+        
+        if (tok.kind == TOK_LPAREN) {
+        
+            if (state->ofp) {
+                emit_load_deref_reg_now ("rdx", DATA_PTR & 0x1f);
+            }
+            
+            emit_call_pointer_in_reg_now ("rdx", "rax");
+            expect_semi_or_recover ();
+            
+            free (name);
+            return 1;
+        
         }
         
         if (tok.kind == TOK_INCR || tok.kind == TOK_DECR) {
@@ -35992,17 +36214,15 @@ static int parse_parenthesized_member_function_pointer_call_statement (void) {
     
     const char *base_tag_name = 0;
     
-    if (tok.kind != TOK_LPAREN || !source_starts_with_parenthesized_indirect_call_now ()) {
+    if (tok.kind != TOK_LPAREN || (!source_starts_with_parenthesized_indirect_call_now () && !source_starts_lparen_deref_subscript_call_at (tok.start) && !source_starts_lparen_deref_subscript_call_at (tok.caret) && !source_starts_lparen_subscript_call_at (tok.start) && !source_starts_lparen_subscript_call_at (tok.caret))) {
         return 0;
     }
     
     get_token ();
     
-    if (tok.kind != TOK_STAR) {
-        return 0;
+    if (tok.kind == TOK_STAR) {
+        get_token ();
     }
-    
-    get_token ();
     
     if (tok.kind == TOK_LPAREN) {
     
@@ -36138,15 +36358,15 @@ static void parse_statement (void) {
     
     }
     
+    if (parse_parenthesized_member_function_pointer_call_statement ()) {
+        return;
+    }
+    
     if (parse_parenthesized_deref_subscript_statement ()) {
     
         expect_semi_or_recover ();
         return;
     
-    }
-    
-    if (parse_parenthesized_member_function_pointer_call_statement ()) {
-        return;
     }
     
     if (tok.kind == TOK_LPAREN) {
@@ -37504,8 +37724,8 @@ static void parse_global_initializer_values (int64_s *values, char **symbols, in
 
 }
 
-static int int64_is_zero_value (int64_s value) {
-    return value.low == 0 && value.high == 0;
+static int int64_is_zero_value (const int64_s *value) {
+    return value->low == 0 && value->high == 0;
 }
 
 static char masm_pending_data_label[512];
@@ -37764,11 +37984,15 @@ static int global_initializer_is_all_zero (const int64_s *values, char **symbols
     int i;
 
     if (symbols) {
+    
         for (i = 0; i < value_count; i++) {
+        
             if (symbols[i]) {
                 return 0;
             }
+        
         }
+    
     }
 
     if (!values || value_count <= 0) {
@@ -37776,9 +38000,11 @@ static int global_initializer_is_all_zero (const int64_s *values, char **symbols
     }
 
     for (i = 0; i < value_count; i++) {
-        if (!int64_is_zero_value (values[i])) {
+    
+        if (!int64_is_zero_value (&values[i])) {
             return 0;
         }
+    
     }
 
     return 1;
