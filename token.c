@@ -926,7 +926,7 @@ static void scan_ch (struct token *tok, int is_long) {
         
         if (!has_warned) {
         
-            report_line_at (get_filename (), get_line_number (), REPORT_WARNING, tok->start, tok->caret, "multi-character character constant");
+            report_line_at (get_filename (), get_line_number (), REPORT_WARNING, tok->report_start, tok->report_caret, "multi-character character constant");
             has_warned = 1;
         
         }
@@ -1780,7 +1780,7 @@ static void parse_number (struct token *tok) {
             } else if (t == 'U') {
             
                 if (ucount >= 1) {
-                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok->start, tok->caret, "two 'U's in integer constant");
+                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok->report_start, tok->report_caret, "two 'U's in integer constant");
                 }
                 
                 ucount++;
@@ -1880,6 +1880,9 @@ void unget_token (struct token *saved_tok) {
     
     tok.start = saved_tok->start;
     tok.caret = saved_tok->caret;
+    
+    tok.report_start = saved_tok->report_start;
+    tok.report_caret = saved_tok->report_caret;
     
     tok.ident = saved_tok->ident;
     tok.len = saved_tok->len;

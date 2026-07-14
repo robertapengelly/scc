@@ -134,8 +134,8 @@ enum token_kind {
 
 struct token {
 
-    const char *start;
-    const char *caret;
+    const char *start, *report_start;
+    const char *caret, *report_caret;
     
     char *ident;
     unsigned long len;

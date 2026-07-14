@@ -126,7 +126,7 @@ int expect (enum token_kind k, const char *what) {
     
     }
     
-    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "expected %s", what);
+    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected %s", what);
     return 0;
 
 }
@@ -348,7 +348,7 @@ static void parse_enum_body (void) {
     
         if (!token_is_ident ()) {
         
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "expected enum constant");
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected enum constant");
             
             get_token ();
             continue;
@@ -408,9 +408,9 @@ static void parse_decl_modifier (void) {
     } else if (tok.kind == TOK_DLLEXPORT) {
     
         if (parsed_dllexport) {
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate '__dllexport'");
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '__dllexport'");
         } else if (parsed_dllimport) {
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "'__dllexport' and '__dllimport' cannot both be specified");
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "'__dllexport' and '__dllimport' cannot both be specified");
         } else {
         
             declarator_dllexport = 1;
@@ -421,9 +421,9 @@ static void parse_decl_modifier (void) {
     } else if (tok.kind == TOK_DLLIMPORT) {
     
         if (parsed_dllimport) {
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate '__dllimport'");
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '__dllimport'");
         } else if (parsed_dllexport) {
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "'__dllexport' and '__dllimport' cannot both be specified");
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "'__dllexport' and '__dllimport' cannot both be specified");
         } else {
         
             declarator_dllimport = 1;
@@ -694,7 +694,7 @@ static int parse_sizeof_member_expr_size (int leading_stars, int *out_size) {
         array_element_size = get_global_symbol_array_element_size (tok.ident);
     
     } else {
-        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "unknown symbol '%s'", tok.ident ? tok.ident : "");
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "unknown symbol '%s'", tok.ident ? tok.ident : "");
     }
     
     final_pointer_depth = pointer_depth;
@@ -719,7 +719,7 @@ static int parse_sizeof_member_expr_size (int leading_stars, int *out_size) {
         
         if (tok.kind != TOK_IDENT) {
         
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret,
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret,
                             "expected member name after %s", member_op == TOK_ARROW ? "->" : ".");
             break;
         
@@ -750,7 +750,7 @@ static int parse_sizeof_member_expr_size (int leading_stars, int *out_size) {
         
         } else {
         
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret,
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret,
                             "unknown member '%s'", tok.ident ? tok.ident : "");
         
         }
@@ -2253,7 +2253,7 @@ void add_pending_param (const char *name, int size, int align, int is_unsigned, 
     
     if (pending_param_count >= MAX_PENDING_PARAMS) {
     
-        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "too many function parameters");
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "too many function parameters");
         return;
     
     }
@@ -2444,9 +2444,9 @@ void parse_type_spec (void) {
         } else if (tok.kind == TOK_EXTERN) {
         
             if (parsed_storage_class == STORAGE_EXTERN) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate 'extern'");
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate 'extern'");
             } else if (parsed_storage_class != STORAGE_NONE) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "multiple storage classes in declaration specifiers");
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "multiple storage classes in declaration specifiers");
             } else {
                 parsed_storage_class = STORAGE_EXTERN;
             }
@@ -2454,9 +2454,9 @@ void parse_type_spec (void) {
         } else if (tok.kind == TOK_STATIC) {
         
             if (parsed_storage_class == STORAGE_STATIC) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate 'static'");
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate 'static'");
             } else if (parsed_storage_class != STORAGE_NONE) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "multiple storage classes in declaration specifiers");
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "multiple storage classes in declaration specifiers");
             } else {
                 parsed_storage_class = STORAGE_STATIC;
             }
@@ -2464,9 +2464,9 @@ void parse_type_spec (void) {
         } else if (tok.kind == TOK_TYPEDEF) {
         
             if (parsed_storage_class == STORAGE_TYPEDEF) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate 'typedef'");
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate 'typedef'");
             } else if (parsed_storage_class != STORAGE_NONE) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "multiple storage classes in declaration specifiers");
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "multiple storage classes in declaration specifiers");
             } else {
                 parsed_storage_class = STORAGE_TYPEDEF;
             }
@@ -2478,9 +2478,9 @@ void parse_type_spec (void) {
         } else if (tok.kind == TOK_CHAR) {
         
             if (parsed_type_size == DATA_CHAR) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate 'char'");
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate 'char'");
             } else if (parsed_type_size != DATA_NONE) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "multiple data types in declaration specifiers");
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "multiple data types in declaration specifiers");
             } else {
                 parsed_type_size = DATA_CHAR;
             }
@@ -2488,9 +2488,9 @@ void parse_type_spec (void) {
         } else if (tok.kind == TOK_SHORT) {
         
             if (parsed_type_size == DATA_SHORT) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate 'short'");
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate 'short'");
             } else if (parsed_type_size != DATA_NONE) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "multiple data types in declaration specifiers");
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "multiple data types in declaration specifiers");
             } else {
                 parsed_type_size = DATA_SHORT;
             }
@@ -2498,9 +2498,9 @@ void parse_type_spec (void) {
         } else if (tok.kind == TOK_INT) {
         
             if (parsed_type_size == DATA_INT) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate 'int'");
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate 'int'");
             } else if (parsed_type_size != DATA_NONE) {
-                /*report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "multiple data types in declaration specifiers");*/
+                /*report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "multiple data types in declaration specifiers");*/
             } else {
                 parsed_type_size = DATA_INT;
             }
@@ -2510,9 +2510,9 @@ void parse_type_spec (void) {
             if (parsed_type_size == DATA_LONG) {
                 parsed_type_size = DATA_LLONG;
             } else if (parsed_type_size == DATA_LLONG) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "too many 'long' keywords");
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "too many 'long' keywords");
             } else if (parsed_type_size != DATA_NONE) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "multiple data types in declaration specifiers");
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "multiple data types in declaration specifiers");
             } else {
                 parsed_type_size = DATA_LONG;
             }
@@ -2524,9 +2524,9 @@ void parse_type_spec (void) {
         } else if (tok.kind == TOK_FLOAT) {
         
             if (parsed_type_size == DATA_FLOAT) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate 'float'");
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate 'float'");
             } else if (parsed_type_size != DATA_NONE) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "multiple data types in declaration specifiers");
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "multiple data types in declaration specifiers");
             } else {
             
                 parsed_type_size = DATA_FLOAT;
@@ -2542,9 +2542,9 @@ void parse_type_spec (void) {
                 saw_double = 1;
             
             } else if (parsed_type_size == DATA_DOUBLE) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate 'double'");
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate 'double'");
             } else if (parsed_type_size != DATA_NONE) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "multiple data types in declaration specifiers");
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "multiple data types in declaration specifiers");
             } else {
             
                 parsed_type_size = DATA_DOUBLE;
@@ -2555,9 +2555,9 @@ void parse_type_spec (void) {
         } else if (tok.kind == TOK_VOID) {
         
             if (parsed_type_size == DATA_VOID) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate 'void'");
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate 'void'");
             } else if (parsed_type_size != DATA_NONE) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "multiple data types in declaration specifiers");
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "multiple data types in declaration specifiers");
             } else {
             
                 parsed_type_size = DATA_VOID;
@@ -2572,7 +2572,7 @@ void parse_type_spec (void) {
             if (strcmp (tok.ident, "__int8") == 0) {
             
                 if (parsed_type_size != DATA_NONE) {
-                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "multiple data types in declaration specifiers");
+                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "multiple data types in declaration specifiers");
                 } else {
                     parsed_type_size = DATA_CHAR & 0x1f;
                 }
@@ -2580,7 +2580,7 @@ void parse_type_spec (void) {
             } else if (strcmp (tok.ident, "__int16") == 0) {
             
                 if (parsed_type_size != DATA_NONE) {
-                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "multiple data types in declaration specifiers");
+                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "multiple data types in declaration specifiers");
                 } else {
                     parsed_type_size = DATA_SHORT & 0x1f;
                 }
@@ -2588,7 +2588,7 @@ void parse_type_spec (void) {
             } else if (strcmp (tok.ident, "__int32") == 0) {
             
                 if (parsed_type_size != DATA_NONE) {
-                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "multiple data types in declaration specifiers");
+                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "multiple data types in declaration specifiers");
                 } else {
                     parsed_type_size = DATA_INT & 0x1f;
                 }
@@ -2596,7 +2596,7 @@ void parse_type_spec (void) {
             } else {
             
                 if (parsed_type_size != DATA_NONE) {
-                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "multiple data types in declaration specifiers");
+                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "multiple data types in declaration specifiers");
                 } else {
                     parsed_type_size = DATA_LLONG & 0x1f;
                 }
@@ -2740,7 +2740,7 @@ void parse_type_spec (void) {
                 
                 if (!is_type_start (tok.kind)) {
                 
-                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "expected member declaration");
+                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected member declaration");
                     
                     skip_balanced_until (TOK_SEMI, TOK_RBRACE, TOK_EOF);
                     _accept (TOK_SEMI);
@@ -3081,11 +3081,11 @@ void parse_type_spec (void) {
     parsed_type_is_floating = (saw_float || saw_double) ? 1 : 0;
     
     if (saw_signed && saw_unsigned) {
-        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "both signed and unsigned specified");
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "both signed and unsigned specified");
     }
 
     if ((saw_signed || saw_unsigned) && (saw_float || saw_double || saw_void)) {
-        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "signed/unsigned invalid for this type");
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "signed/unsigned invalid for this type");
     }
 
     parsed_type_is_unsigned = saw_unsigned ? 1 : 0;
@@ -3093,7 +3093,7 @@ void parse_type_spec (void) {
     
     if (!saw) {
     
-        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "expected type");
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected type");
         get_token ();
     
     }
@@ -3321,7 +3321,7 @@ void parse_direct_declarator (char **out_name) {
                             if (declarator_depth == 1) {
                             
                                 if (find_pending_param_from (param_name, old_style_param_start) >= 0) {
-                                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate parameter '%s'", param_name);
+                                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate parameter '%s'", param_name);
                                 } else {
                                     add_pending_param (param_name, param_size, type_alignment (param_size), 0, 0, unknown_typedef_pointer ? 1 : 0, DATA_INT & 0x1f, 0);
                                 }
@@ -3341,7 +3341,7 @@ void parse_direct_declarator (char **out_name) {
                             if (declarator_depth == 1) {
                             
                                 if (find_pending_param_from (maybe_type_name, old_style_param_start) >= 0) {
-                                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate parameter '%s'", maybe_type_name);
+                                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate parameter '%s'", maybe_type_name);
                                 } else {
                                     add_pending_param (maybe_type_name, DATA_INT & 0x1f, type_alignment (DATA_INT & 0x1f), 0, 0, 0, 0, 0);
                                 }

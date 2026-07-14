@@ -1139,6 +1139,9 @@ struct vector *preprocess_line (char **line, char *real_start, char *real_caret,
                 tok->start = in_macro ? *line : (real_start ? real_start : *line);
                 tok->caret = in_macro ? start : (real_caret ? real_caret : start);
                 
+                tok->report_start = in_macro ? (real_start ? real_start : *line) : *line;
+                tok->report_caret = in_macro ? (real_caret ? real_caret : start) : start;
+                
                 tok->ident = temp;
                 tok->len = (caret - start);
                 
@@ -1164,6 +1167,9 @@ struct vector *preprocess_line (char **line, char *real_start, char *real_caret,
             
             tok->start = in_macro ? *line : (real_start ? real_start : *line);
             tok->caret = in_macro ? start : (real_caret ? real_caret : start);
+            
+            tok->report_start = in_macro ? (real_start ? real_start : *line) : *line;
+            tok->report_caret = in_macro ? (real_caret ? real_caret : start) : start;
             
             tok->ident = xstrndup (start, (int) (caret - start));
             tok->len = (caret - start);
@@ -1220,6 +1226,9 @@ struct vector *preprocess_line (char **line, char *real_start, char *real_caret,
                 tok->start = in_macro ? *line : (real_start ? real_start : *line);
                 tok->caret = in_macro ? start : (real_caret ? real_caret : start);
                 
+                tok->report_start = in_macro ? (real_start ? real_start : *line) : *line;
+                tok->report_caret = in_macro ? (real_caret ? real_caret : start) : start;
+                
                 tok->ident = temp;
                 tok->len = (caret - start);
                 
@@ -1245,6 +1254,9 @@ struct vector *preprocess_line (char **line, char *real_start, char *real_caret,
             
             tok->start = in_macro ? *line : (real_start ? real_start : *line);
             tok->caret = in_macro ? start : (real_caret ? real_caret : start);
+            
+            tok->report_start = in_macro ? (real_start ? real_start : *line) : *line;
+            tok->report_caret = in_macro ? (real_caret ? real_caret : start) : start;
             
             tok->ident = xstrndup (start, (int) (caret - start));
             tok->len = (caret - start);
@@ -1374,6 +1386,9 @@ struct vector *preprocess_line (char **line, char *real_start, char *real_caret,
             tok->start = in_macro ? *line : (real_start ? real_start : *line);
             tok->caret = in_macro ? start : (real_caret ? real_caret : start);
             
+            tok->report_start = in_macro ? (real_start ? real_start : *line) : *line;
+            tok->report_caret = in_macro ? (real_caret ? real_caret : start) : start;
+            
             tok->ident = xstrndup (start, (int) (caret - start));
             tok->len = (caret - start);
             
@@ -1431,6 +1446,9 @@ struct vector *preprocess_line (char **line, char *real_start, char *real_caret,
             
             tok->start = in_macro ? *line : (real_start ? real_start : *line);
             tok->caret = in_macro ? start : (real_caret ? real_caret : start);
+            
+            tok->report_start = in_macro ? (real_start ? real_start : *line) : *line;
+            tok->report_caret = in_macro ? (real_caret ? real_caret : start) : start;
             
             tok->ident = xstrndup (start, (int) (caret - start));
             tok->len = (caret - start);
@@ -1544,6 +1562,9 @@ struct vector *preprocess_line (char **line, char *real_start, char *real_caret,
             tok->start = in_macro ? *line : (real_start ? real_start : *line);
             tok->caret = in_macro ? start : (real_caret ? real_caret : start);
             
+            tok->report_start = in_macro ? (real_start ? real_start : *line) : *line;
+            tok->report_caret = in_macro ? (real_caret ? real_caret : start) : start;
+            
             tok->ident = xstrndup (start, (int) (caret - start));
             tok->len = (caret - start);
             
@@ -1603,6 +1624,9 @@ struct vector *preprocess_line (char **line, char *real_start, char *real_caret,
             
             tok->start = in_macro ? *line : (real_start ? real_start : *line);
             tok->caret = in_macro ? start : (real_caret ? real_caret : start);
+            
+            tok->report_start = in_macro ? (real_start ? real_start : *line) : *line;
+            tok->report_caret = in_macro ? (real_caret ? real_caret : start) : start;
             
             vec_push (&vector_tokens, tok);
             continue;

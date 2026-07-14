@@ -192,10 +192,7 @@ static int amd64_member_owner_matches (int mi, int owner_size, const char *owner
     }
     
     if (owner_tag_name && owner_tag_name[0]) {
-    
-        return member_infos[mi].owner_tag_name
-            && strcmp (member_infos[mi].owner_tag_name, owner_tag_name) == 0;
-    
+        return member_infos[mi].owner_tag_name && strcmp (member_infos[mi].owner_tag_name, owner_tag_name) == 0;
     }
     
     return member_infos[mi].owner_tag_name == 0;
@@ -353,7 +350,7 @@ static void save_typedef_name (const char *name, int size, int is_unsigned, int 
     
         if (typedef_name_count >= MAX_TYPEDEF_NAMES) {
         
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "too many typedef names");
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "too many typedef names");
             return;
         
         }
@@ -400,8 +397,7 @@ static void save_typedef_name (const char *name, int size, int is_unsigned, int 
         
         for (mi = 0; mi < member_info_count; mi++) {
         
-            if (member_infos[mi].owner_size == size
-                && member_infos[mi].owner_tag_name == 0) {
+            if (member_infos[mi].owner_size == size && member_infos[mi].owner_tag_name == 0) {
                 member_infos[mi].owner_tag_name = xstrdup (name);
             }
         
@@ -6096,13 +6092,13 @@ static void install_pending_params_as_locals (void) {
         
         if (local_symbol_count >= MAX_LOCAL_SYMBOLS) {
         
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "too many local symbols");
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "too many local symbols");
             break;
         
         }
         
         if (local_symbol_exists_in_current_scope (pending_params[i].name, 0)) {
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate parameter '%s'", pending_params[i].name);
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate parameter '%s'", pending_params[i].name);
         }
         
         local_symbols[local_symbol_count].name = xstrdup (pending_params[i].name);
@@ -8241,7 +8237,7 @@ static void parse_local_initializer_value (struct local_init *init, int object_s
         
         if (tok.kind != TOK_IDENT) {
         
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "expected identifier after '&'");
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected identifier after '&'");
             return;
         
         }
@@ -8636,7 +8632,7 @@ static void parse_block (void) {
             if (!declaration_phase) {
             
                 if (state->std == 90) {
-                    report_line_at (get_filename (), get_line_number (), (state->pedantic ? REPORT_ERROR : REPORT_WARNING), tok.start, tok.caret, "ISO C90 forbids mixed declarations and code");
+                    report_line_at (get_filename (), get_line_number (), (state->pedantic ? REPORT_ERROR : REPORT_WARNING), tok.report_start, tok.report_caret, "ISO C90 forbids mixed declarations and code");
                 }
             
             }
@@ -8955,8 +8951,7 @@ static void parse_block (void) {
                             object_offset = new_offset;
                             object_size = elem_index * elem_size;
                             
-                            if (local_symbol_count > 0 && name && local_symbols[local_symbol_count - 1].name
-                                && strcmp (local_symbols[local_symbol_count - 1].name, name) == 0) {
+                            if (local_symbol_count > 0 && name && local_symbols[local_symbol_count - 1].name && strcmp (local_symbols[local_symbol_count - 1].name, name) == 0) {
                             
                                 local_symbols[local_symbol_count - 1].offset = object_offset;
                                 local_symbols[local_symbol_count - 1].size = object_size;
@@ -10826,7 +10821,7 @@ static int parse_incdec_identifier_now (enum token_kind *op, char **name, const 
     
     if (tok.kind != TOK_IDENT) {
     
-        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "expected identifier after %s", *op == TOK_INCR ? "++" : "--");
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected identifier after %s", *op == TOK_INCR ? "++" : "--");
         
         *name = 0;
         return 1;
@@ -11081,7 +11076,7 @@ static int emit_load_prefix_incdec_deref_to_reg_now (const char *reg) {
     
     if (tok.kind != TOK_IDENT) {
     
-        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "expected identifier after *");
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected identifier after *");
         
         free (saved_tok->ident);
         free ((char *) saved_tok->start);
@@ -11273,7 +11268,7 @@ static int emit_load_prefix_incdec_member_to_reg_now (const char *reg) {
         
         if (tok.kind != TOK_IDENT) {
         
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "expected identifier after %s", op == TOK_INCR ? "++" : "--");
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected identifier after %s", op == TOK_INCR ? "++" : "--");
             return 1;
         
         }
@@ -11376,7 +11371,7 @@ static int emit_load_prefix_incdec_member_to_reg_now (const char *reg) {
     
     if (tok.kind != TOK_ARROW && tok.kind != TOK_DOT) {
     
-        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "expected member after %s", op == TOK_INCR ? "++" : "--");
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected member after %s", op == TOK_INCR ? "++" : "--");
         return 1;
     
     }
@@ -12493,6 +12488,8 @@ static int token_is_floating_constant_now (void);
 static void emit_store_floating_member_to_addr_reg_now (const char *addr_reg, int offset, int size);
 static void emit_load_floating_rhs_expression_now (int result_size);
 static void emit_load_assignment_rhs_to_reg (const char *reg);
+
+static int emit_load_deref_assignment_expression_to_reg_now (const char *reg);
 static void emit_floating_stack_to_int_pair_now (const char *lo, const char *hi);
 static void emit_integer_pair_to_floating_stack_now (const char *lo, const char *hi, int size);
 
@@ -12596,6 +12593,13 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
                 return;
             
             }
+        
+        }
+        
+        if (tok.kind == TOK_STAR && emit_load_deref_assignment_expression_to_reg_now (lo)) {
+        
+            emit_extend_pair_high_from_low (lo, hi, DATA_INT & 0x1f, 0);
+            return;
         
         }
         
@@ -13045,7 +13049,7 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
         enum token_kind postfix_op = TOK_EOF;
         char *name = xstrdup (tok.ident);
         
-        const char *name_start = tok.start, *name_caret = tok.caret;
+        const char *name_start = tok.report_start, *name_caret = tok.report_caret;
         unsigned long name_line = get_line_number ();
         
         int postfix_incdec = 0;
@@ -13054,6 +13058,61 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
         int64_s enum_value;
         
         get_token ();
+        
+        /*
+         * An assignment is an expression and may appear anywhere a value is
+         * accepted, including directly as a function argument:
+         *
+         *     kmalloc (sector_size = disk->sector_size * count)
+         *
+         * The old 64-bit primary parser consumed the identifier as an ordinary
+         * value and left '=' for the call parser, which then reported
+         * "expected )".  Parse the assignment here, store the converted
+         * 64-bit value, and leave that same value in the requested result pair.
+         */
+        if (tok.kind == TOK_ASSIGN) {
+
+            struct local_symbol *dst = find_local_symbol (name);
+            
+            int dst_global = find_global_symbol (name);
+            int dst_size = dst ? dst->size : (dst_global >= 0 ? get_global_symbol_size (name) : 0);
+            int dst_pointer = dst ? (dst->is_array || dst->pointer_depth > 0) : (dst_global >= 0 && (get_global_symbol_array (name) || get_global_symbol_pointer_depth (name) > 0));
+            
+            if (!dst && dst_global < 0) {
+            
+                report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret, "unknown symbol '%s'", name);
+                get_token ();
+                
+                emit_load_assignment_rhs_expression_to_pair (lo, hi, 1);
+                free (name);
+                
+                return;
+            
+            }
+            
+            if (dst_size == (DATA_LLONG & 0x1f) && !dst_pointer) {
+            
+                get_token ();
+                emit_load_assignment_rhs_expression_to_pair (lo, hi, dst ? dst->is_unsigned : get_global_symbol_unsigned (name));
+                
+                if (dst) {
+                
+                    if (dst->is_static && dst->static_label) {
+                        emit_store_pair_to_global64 (dst->static_label, lo, hi);
+                    } else {
+                        emit_store_pair_to_local64 (dst->offset, lo, hi);
+                    }
+                
+                } else {
+                    emit_store_pair_to_global64 (name, lo, hi);
+                }
+                
+                free (name);
+                return;
+            
+            }
+        
+        }
         
         if (strcmp (name, "__scc_builtin_va_arg") == 0 && tok.kind == TOK_LPAREN) {
         
@@ -13962,9 +14021,7 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
                     assign_op = tok.kind;
                     get_token ();
                     
-                    if (assign_op == TOK_ASSIGN && subscript_elem_size > (DATA_LLONG & 0x1f)
-                        && tok.kind == TOK_IDENT && tok.ident
-                        && get_global_symbol_kind (tok.ident) == GLOBAL_SYMBOL_FUNCTION) {
+                    if (assign_op == TOK_ASSIGN && subscript_elem_size > (DATA_LLONG & 0x1f) && tok.kind == TOK_IDENT && tok.ident && get_global_symbol_kind (tok.ident) == GLOBAL_SYMBOL_FUNCTION) {
                     
                         char *rhs_name = xstrdup (tok.ident);
                         
@@ -14906,7 +14963,7 @@ static int emit_load_address_of_parenthesized_postfix_to_reg_now (const char *re
     
     if (tok.kind != TOK_IDENT) {
     
-        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "expected identifier after '&('");
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected identifier after '&('");
         
         expect (TOK_RPAREN, ")");
         return 1;
@@ -15011,7 +15068,7 @@ static int emit_load_address_of_parenthesized_postfix_to_reg_now (const char *re
     
     } else {
     
-        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "unknown symbol '%s'", name);
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "unknown symbol '%s'", name);
         free (name);
         
         expect (TOK_RPAREN, ")");
@@ -15424,8 +15481,7 @@ static int emit_aggregate_copy_from_current_rhs_to_addr_reg_now (const char *add
         ptr_depth = ptr_sym ? ptr_sym->pointer_depth : get_global_symbol_pointer_depth (ptr_name);
         ptr_pointed_size = ptr_sym ? ptr_sym->pointed_size : get_global_symbol_pointed_size (ptr_name);
         
-        if (!ptr_sym && ptr_global_index >= 0
-            && get_global_symbol_kind (ptr_name) == GLOBAL_SYMBOL_FUNCTION) {
+        if (!ptr_sym && ptr_global_index >= 0 && get_global_symbol_kind (ptr_name) == GLOBAL_SYMBOL_FUNCTION) {
         
             const char *call_start = tok.start;
             const char *call_caret = tok.caret;
@@ -15790,7 +15846,7 @@ static int emit_aggregate_copy_from_current_rhs_to_addr_reg_now (const char *add
                 
                 if (tok.kind != TOK_IDENT || !tok.ident) {
                 
-                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret,
+                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret,
                         "expected member name after %s", member_op == TOK_ARROW ? "->" : ".");
                     
                     free (ptr_name);
@@ -16678,7 +16734,7 @@ static int emit_parse_builtin_va_arg_address_to_reg_now (const char *reg, int *o
     
     if (!is_type_start (tok.kind)) {
     
-        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "expected type name in __scc_builtin_va_arg");
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected type name in __scc_builtin_va_arg");
         
         free (name);
         return 1;
@@ -17928,25 +17984,66 @@ static int source_starts_deref_assignment_at_now (const char *p) {
         return 0;
     }
     
-    p++;
+    {
     
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        int parens = 0;
         p++;
-    }
-    
-    if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
-        return 0;
-    }
-    
-    p++;
-    
-    while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
-           (*p >= '0' && *p <= '9') || *p == '_') {
+        
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+        
+        while (*p == '(') {
+        
+            parens++;
+            p++;
+            
+            while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+                p++;
+            }
+        
+        }
+        
+        if (*p == '&') {
+        
+            p++;
+            
+            while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+                p++;
+            }
+        
+        }
+        
+        if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
+            return 0;
+        }
+        
         p++;
-    }
+        
+        while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+               (*p >= '0' && *p <= '9') || *p == '_') {
+            p++;
+        }
+        
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+        
+        while (parens > 0 && *p == ')') {
+        
+            parens--;
+            p++;
+            
+            while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+                p++;
+            }
+        
+        }
+        
+        if (parens != 0) {
+            return 0;
+        }
     
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
-        p++;
     }
     
     if (*p == '=' && p[1] != '=') {
@@ -17954,7 +18051,7 @@ static int source_starts_deref_assignment_at_now (const char *p) {
     }
     
     if ((p[0] == '+' || p[0] == '-' || p[0] == '*' || p[0] == '/' ||
-         p[0] == '%' || p[0] == '&' || p[0] == '^' || p[0] == '|') &&
+        p[0] == '%' || p[0] == '&' || p[0] == '^' || p[0] == '|') &&
         p[1] == '=') {
         return 1;
     }
@@ -17986,6 +18083,8 @@ static int emit_load_deref_assignment_expression_to_reg_now (const char *reg) {
     int pointed_size = DATA_INT & 0x1f;
     int value_pointer_depth = 0;
     int store_size = DATA_INT & 0x1f;
+    int operand_parens = 0;
+    int address_of_operand = 0;
     
     if (tok.kind != TOK_STAR) {
         return 0;
@@ -17996,6 +18095,20 @@ static int emit_load_deref_assignment_expression_to_reg_now (const char *reg) {
     }
     
     get_token ();
+    
+    while (tok.kind == TOK_LPAREN) {
+    
+        operand_parens++;
+        get_token ();
+    
+    }
+    
+    if (tok.kind == TOK_AMPER) {
+    
+        address_of_operand = 1;
+        get_token ();
+    
+    }
     
     name_start = tok.start;
     name_caret = tok.caret;
@@ -18010,6 +18123,13 @@ static int emit_load_deref_assignment_expression_to_reg_now (const char *reg) {
     
     name = xstrdup (tok.ident);
     get_token ();
+    
+    while (operand_parens > 0) {
+    
+        expect (TOK_RPAREN, ")");
+        operand_parens--;
+    
+    }
     
     if (!is_assignment_operator (tok.kind)) {
     
@@ -18026,21 +18146,47 @@ static int emit_load_deref_assignment_expression_to_reg_now (const char *reg) {
     
     if (sym) {
     
-        pointer_depth = sym->pointer_depth;
-        pointed_size = sym->pointed_size;
+        if (address_of_operand) {
         
-        if (sym->is_static && sym->static_label) {
-            emit_load_global_to_reg ("rcx", sym->static_label, DATA_PTR);
+            pointer_depth = 1;
+            pointed_size = sym->size;
+            
+            if (sym->is_static && sym->static_label) {
+                emit_load_address_to_reg_now ("rcx", sym->static_label);
+            } else {
+                emit_load_local_address_to_reg_now ("rcx", sym->offset);
+            }
+        
         } else {
-            emit_load_local_to_reg ("rcx", sym->offset, DATA_PTR);
+        
+            pointer_depth = sym->pointer_depth;
+            pointed_size = sym->pointed_size;
+            
+            if (sym->is_static && sym->static_label) {
+                emit_load_global_to_reg ("rcx", sym->static_label, DATA_PTR);
+            } else {
+                emit_load_local_to_reg ("rcx", sym->offset, DATA_PTR);
+            }
+        
         }
     
     } else if (global_index >= 0) {
     
-        pointer_depth = get_global_symbol_pointer_depth (name);
-        pointed_size = get_global_symbol_pointed_size (name);
+        if (address_of_operand) {
         
-        emit_load_global_to_reg ("rcx", name, DATA_PTR);
+            pointer_depth = 1;
+            pointed_size = get_global_symbol_size (name);
+            
+            emit_load_address_to_reg_now ("rcx", name);
+        
+        } else {
+        
+            pointer_depth = get_global_symbol_pointer_depth (name);
+            pointed_size = get_global_symbol_pointed_size (name);
+            
+            emit_load_global_to_reg ("rcx", name, DATA_PTR);
+        
+        }
     
     } else {
     
@@ -18104,6 +18250,13 @@ static int emit_load_deref_assignment_expression_to_reg_now (const char *reg) {
         } else {
             fprintf (state->ofp, "    movq %%rax, %%%s\n", reg);
         }
+    
+    }
+    
+    while (tok.kind == TOK_COMMA) {
+    
+        get_token ();
+        emit_load_assignment_rhs_expression_to_reg (reg);
     
     }
     
@@ -27953,9 +28106,9 @@ static int parse_prefix_incdec_statement (void) {
     if (tok.kind != TOK_IDENT) {
     
         if (indirect) {
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "expected identifier after *");
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected identifier after *");
         } else {
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "expected identifier after %s", op == TOK_INCR ? "++" : "--");
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected identifier after %s", op == TOK_INCR ? "++" : "--");
         }
         
         skip_balanced_until (TOK_SEMI, TOK_EOF, TOK_EOF);
@@ -29741,6 +29894,7 @@ static int parse_indirect_assignment_statement (void) {
 static int source_starts_parenthesized_star_now (void) {
 
     const char *p = tok.caret ? tok.caret : tok.start;
+    int depth = 0;
     
     if (!p) {
         return 0;
@@ -29754,13 +29908,38 @@ static int source_starts_parenthesized_star_now (void) {
         return 0;
     }
     
+    depth = 1;
     p++;
     
     while (*p == ' ' || *p == '\t') {
         p++;
     }
     
-    return *p == '*';
+    if (*p != '*') {
+        return 0;
+    }
+    
+    while (*p && depth > 0) {
+    
+        if (*p == '(') {
+            depth++;
+        } else if (*p == ')') {
+            depth--;
+        }
+        
+        p++;
+    
+    }
+    
+    if (depth != 0) {
+        return 0;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    return *p == '.' || (*p == '-' && p[1] == '>');
 
 }
 
@@ -31858,7 +32037,7 @@ static int parse_inline_asm_statement (void) {
     
     if (!is_string_token ()) {
     
-        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "expected asm template string");
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected asm template string");
         
         skip_balanced_until (TOK_SEMI, TOK_EOF, TOK_EOF);
         expect (TOK_SEMI, ";");
@@ -31884,7 +32063,7 @@ static int parse_inline_asm_statement (void) {
                 
                 if (!is_string_token ()) {
                 
-                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "expected asm input constraint string");
+                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected asm input constraint string");
                     
                     skip_balanced_until (TOK_RPAREN, TOK_EOF, TOK_EOF);
                     break;
@@ -33675,7 +33854,7 @@ static void parse_for_header_expression_until (enum token_kind end_token) {
             free (name);
         
         } else {
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "expected identifier after %s", op == TOK_INCR ? "++" : "--");
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected identifier after %s", op == TOK_INCR ? "++" : "--");
         }
         
         FINISH_FOR_HEADER_EXPR (0);
@@ -34116,7 +34295,7 @@ static void parse_do_statement (void) {
         }
     
     } else {
-        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "expected while after do statement");
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected while after do statement");
     }
     
     emit_statement_label (break_label);
@@ -36136,8 +36315,8 @@ static int parse_postfix_assignment_statement_now (void) {
         
         if (lvalue_size > (DATA_LLONG & 0x1f)
             && tok.kind == TOK_IDENT && tok.ident && token_identifier_is_function_call_rhs_now ()
-            && get_global_symbol_kind (tok.ident) == GLOBAL_SYMBOL_FUNCTION
-            && get_global_symbol_size (tok.ident) > (DATA_LLONG & 0x1f)) {
+                && get_global_symbol_kind (tok.ident) == GLOBAL_SYMBOL_FUNCTION
+                    && get_global_symbol_size (tok.ident) > (DATA_LLONG & 0x1f)) {
         
             char *rhs_name = xstrdup (tok.ident);
             const char *rhs_start = tok.start;
@@ -37208,7 +37387,7 @@ static int parse_possible_knr_function (void) {
                     }
                     
                     if (param_name && find_pending_param_from (param_name, old_style_param_start) >= 0) {
-                        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate parameter '%s'", param_name);
+                        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate parameter '%s'", param_name);
                     } else {
                     
                         add_pending_param (param_name, param_size, type_alignment (param_size),
@@ -37232,7 +37411,7 @@ static int parse_possible_knr_function (void) {
             } else if (token_is_ident ()) {
             
                 if (find_pending_param_from (tok.ident, old_style_param_start) >= 0) {
-                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "duplicate parameter '%s'", tok.ident);
+                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate parameter '%s'", tok.ident);
                 } else {
                 
                     add_pending_param (tok.ident, DATA_INT & 0x1f, type_alignment (DATA_INT & 0x1f), 0, 0, 0, 0, 0);
@@ -37624,7 +37803,7 @@ static void parse_global_initializer_values (int64_s *values, char **symbols, in
             get_token ();
             
             if (tok.kind != TOK_IDENT) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "expected identifier after '&'");
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected identifier after '&'");
             } else {
             
                 char addr_symbol[256];
@@ -37900,7 +38079,7 @@ static void emit_global_address (const char *symbol, int size) {
     }
     
     if (size != DATA_PTR) {
-        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "address initializer requires pointer-sized object");
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "address initializer requires pointer-sized object");
     }
     
     emit_extern_reference_symbol (symbol, DATA_PTR);
@@ -38226,7 +38405,7 @@ static void queue_string_literal_global (const char *label, const int64_s *value
     
     if (pending_string_literal_count >= MAX_PENDING_STRING_LITERALS) {
     
-        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "too many string literals");
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "too many string literals");
         return;
     
     }
@@ -38736,7 +38915,7 @@ static void parse_external_after_type (void) {
     if (tok.kind == TOK_SEMI) {
         get_token ();
     } else if (is_type_start (tok.kind)) {
-        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "missing ';' after declaration");
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "missing ';' after declaration");
     } else {
         expect (TOK_SEMI, ";");
     }
@@ -38782,7 +38961,7 @@ void compile_translation_unit64 (void) {
             continue;
         }
         
-        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "expected external declaration");
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected external declaration");
         get_token ();
     
     }
