@@ -29954,11 +29954,28 @@ static int rhs_current_operand_is_unsigned_now (void) {
         struct local_symbol *src = find_local_symbol (tok.ident);
         
         if (src) {
+        
+            /*
+             * Relational comparisons of pointers use the unsigned address
+             * ordering.  Treat arrays the same way because an array operand
+             * decays to a pointer in an expression.
+             */
+            if (src->pointer_depth > 0 || src->is_array) {
+                return 1;
+            }
+            
             return src->is_unsigned ? 1 : 0;
+        
         }
         
         if (find_global_symbol (tok.ident) >= 0) {
+        
+            if (get_global_symbol_pointer_depth (tok.ident) > 0 || get_global_symbol_array (tok.ident)) {
+                return 1;
+            }
+            
             return get_global_symbol_unsigned (tok.ident) ? 1 : 0;
+        
         }
     
     }
@@ -30528,8 +30545,8 @@ static int emit_statement_ident_immediate_compare_jump_if_false_now (int label) 
         emit_apply_postfix_member_access_to_reg_now ("eax");
     }
     
-    if (postfix_member_seen && postfix_member_is_unsigned) {
-        is_unsigned = 1;
+    if (postfix_member_seen) {
+        is_unsigned = postfix_member_is_unsigned ? 1 : 0;
     }
     
     if (!token_is_statement_compare_operator (tok.kind)) {

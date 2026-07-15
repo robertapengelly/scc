@@ -13347,7 +13347,7 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
                         return;
                     }
                     
-                    if (assign_op == TOK_ASSIGN && lvalue_size == (DATA_LLONG & 0x1f)) {
+                    if (assign_op == TOK_ASSIGN && lvalue_size == (DATA_LLONG & 0x1f) && postfix_member_pointer_depth == 0) {
                     
                         emit_push_reg_now (lo);
                         
@@ -18910,7 +18910,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                         
                         }
                         
-                        if (emit_aggregate_copy_from_current_rhs_to_addr_reg_now ("rdx", assign_member_offset, assign_member_size)) {
+                        if (postfix_member_pointer_depth == 0 && emit_aggregate_copy_from_current_rhs_to_addr_reg_now ("rdx", assign_member_offset, assign_member_size)) {
                             return;
                         }
                         
@@ -19376,22 +19376,19 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             
             get_token ();
             
-            if (tok.kind == TOK_LPAREN &&
-                find_global_symbol (lhs_name) >= 0 &&
+            if (tok.kind == TOK_LPAREN && find_global_symbol (lhs_name) >= 0 &&
                 get_global_symbol_kind (lhs_name) == GLOBAL_SYMBOL_FUNCTION) {
             
-                int fptr_depth = get_global_symbol_pointer_depth (lhs_name);
-                int fpointed_size = get_global_symbol_pointed_size (lhs_name);
-                
                 emit_call_identifier_to_reg_now (lhs_name, reg, lhs_start, lhs_caret, lhs_line);
                 
-                if (fptr_depth > 1) {
-                    deref_size = DATA_PTR;
-                } else if (fptr_depth == 1 && fpointed_size > 0) {
-                    deref_size = fpointed_size;
-                }
-                
-                emit_load_deref_reg_now (reg, deref_size);
+                /*
+                 * This path is used by a dereferenced function result which is
+                 * subsequently treated as a pointer, as in (*func())->member.
+                 * The value fetched by the unary '*' is therefore a pointer,
+                 * regardless of the size of the final pointed-to aggregate.
+                 */
+                emit_load_deref_reg_now (reg, DATA_PTR & 0x1f);
+                set_rhs_last_pointer_info (1, DATA_CHAR & 0x1f);
                 
                 free (lhs_name);
                 return;
@@ -29847,17 +29844,8 @@ static int parse_indirect_assignment_statement (void) {
             
             emit_push_reg_now ("rdx");
             
-            if (deref_size == (DATA_LLONG & 0x1f)) {
-            
-                emit_load_assignment_rhs_expression_to_pair ("rax", "rdx", 1);
-                emit_pop_reg_now ("rcx");
-            
-            } else {
-            
-                emit_load_assignment_rhs_expression_to_reg ("rax");
-                emit_pop_reg_now ("rdx");
-            
-            }
+            emit_load_assignment_rhs_expression_to_reg ("rax");
+            emit_pop_reg_now ("rdx");
         
         } else {
         
@@ -29874,11 +29862,7 @@ static int parse_indirect_assignment_statement (void) {
         
         }
         
-        if (deref_size == (DATA_LLONG & 0x1f) && !deref_is_floating) {
-            emit_store_pair_to_deref_reg_now ("rcx", "rax", "rdx");
-        } else {
-            emit_store_reg_to_deref_reg_now ("rdx", "rax", deref_size);
-        }
+        emit_store_reg_to_deref_reg_now ("rdx", "rax", deref_size);
     
     } else {
         skip_balanced_until (TOK_SEMI, TOK_EOF, TOK_EOF);
@@ -32633,11 +32617,28 @@ static int rhs_current_operand_is_unsigned_now (void) {
         struct local_symbol *src = find_local_symbol (tok.ident);
         
         if (src) {
+        
+            /*
+             * Relational comparisons of pointers use the unsigned address
+             * ordering.  Treat arrays the same way because an array operand
+             * decays to a pointer in an expression.
+             */
+            if (src->pointer_depth > 0 || src->is_array) {
+                return 1;
+            }
+            
             return src->is_unsigned ? 1 : 0;
+        
         }
         
         if (find_global_symbol (tok.ident) >= 0) {
+        
+            if (get_global_symbol_pointer_depth (tok.ident) > 0 || get_global_symbol_array (tok.ident)) {
+                return 1;
+            }
+            
             return get_global_symbol_unsigned (tok.ident) ? 1 : 0;
+        
         }
     
     }
@@ -33207,8 +33208,8 @@ static int emit_statement_ident_immediate_compare_jump_if_false_now (int label) 
         emit_apply_postfix_member_access_to_reg_now ("rax");
     }
     
-    if (postfix_member_seen && postfix_member_is_unsigned) {
-        is_unsigned = 1;
+    if (postfix_member_seen) {
+        is_unsigned = postfix_member_is_unsigned ? 1 : 0;
     }
     
     if (!token_is_statement_compare_operator (tok.kind)) {
@@ -36301,7 +36302,7 @@ static int parse_postfix_assignment_statement_now (void) {
         
         }
         
-        if (lvalue_size == (DATA_LLONG & 0x1f)) {
+        if (lvalue_size == (DATA_LLONG & 0x1f) && postfix_member_pointer_depth == 0) {
         
             emit_push_reg_now ("rdx");
             
@@ -36343,7 +36344,7 @@ static int parse_postfix_assignment_statement_now (void) {
         
         }
         
-        if (emit_aggregate_copy_from_current_rhs_to_addr_reg_now ("rdx", 0, lvalue_size)) {
+        if (postfix_member_pointer_depth == 0 && emit_aggregate_copy_from_current_rhs_to_addr_reg_now ("rdx", 0, lvalue_size)) {
             return 1;
         }
         
