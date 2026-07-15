@@ -32141,6 +32141,16 @@ static int emit_statement_rhs_const32_to_rdx_if_possible (void) {
     
     if (token_is_const_condition_operand_now ()) {
     
+        /**
+         * A sizeof expression may continue with arithmetic, for example
+         * sizeof (array) / sizeof (array[0]).  const64_from_current_operand()
+         * consumes only the leading sizeof operand, so leave all sizeof
+         * conditions to the normal expression emitter.
+         */
+        if (token_is_sizeof_keyword ()) {
+            return 0;
+        }
+        
         if (current_integer_expr_is_foldable_now ()) {
             v = const64_from_current_foldable_expr ();
         } else {
@@ -32812,6 +32822,16 @@ static int emit_statement_rhs_const32_or_enum_to_rdx_if_possible (void) {
     
     if (token_is_const_condition_operand_now ()) {
     
+        /**
+         * A sizeof expression may continue with arithmetic, for example
+         * sizeof (array) / sizeof (array[0]).  const64_from_current_operand()
+         * consumes only the leading sizeof operand, so leave all sizeof
+         * conditions to the normal expression emitter.
+         */
+        if (token_is_sizeof_keyword ()) {
+            return 0;
+        }
+        
         if (current_integer_expr_is_foldable_now ()) {
             v = const64_from_current_foldable_expr ();
         } else {
