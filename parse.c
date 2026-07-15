@@ -2858,7 +2858,7 @@ void parse_type_spec (void) {
                         } else {
                         
                             member_info_elem_size = declarator_is_pointer ?
-                                (declarator_pointer_depth > 1 ? DATA_PTR : (parsed_type_is_aggregate ? parsed_type_size : (parsed_type_size & 0x1f))) :
+                                (parsed_type_is_aggregate ? parsed_type_size : (parsed_type_size & 0x1f)) :
                                     (declarator_has_array ? member_type_size : member_size);
                         
                         }

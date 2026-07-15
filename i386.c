@@ -6912,10 +6912,6 @@ static int declarator_element_size_from_fields (int base_size, const int *field_
 
 static int declarator_pointed_size_now (void) {
 
-    if (declarator_pointer_depth > 1) {
-        return DATA_PTR;
-    }
-    
     if (parsed_type_is_aggregate) {
         return parsed_type_size;
     }
@@ -12924,8 +12920,6 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
                  */
                 if (is_array && pointer_depth > 0) {
                     elem_size = DATA_PTR;
-                } else if (pointer_depth > 1) {
-                    elem_size = DATA_PTR;
                 } else if (pointer_depth == 1 && member_tag_name) {
                 
                     struct aggregate_tag_entry *entry = find_aggregate_tag (member_tag_name, 0);
@@ -12977,13 +12971,30 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
                 
                 }
                 
-                subscript_elem_size = index_step_size (elem_size);
+                subscript_elem_size = pointer_depth > 1 ? (DATA_PTR & 0x1f) : index_step_size (elem_size);
                 
                 if (subscript_elem_size <= 0) {
                     subscript_elem_size = DATA_INT & 0x1f;
                 }
                 
-                emit_parse_postfix_subscript_scaled_address_to_reg_now (reg, subscript_elem_size);
+                if (pointer_depth > 1) {
+                
+                    emit_parse_postfix_subscripts_to_reg_now (reg, subscript_elem_size, pointer_depth, elem_size);
+                    subscript_elem_size = index_step_size (elem_size);
+                    
+                    if (!is_assignment_operator (tok.kind)) {
+                    
+                        postfix_member_pointer_depth = 0;
+                        postfix_member_pointed_size = elem_size;
+                        postfix_member_size = subscript_elem_size;
+                        
+                        continue;
+                    
+                    }
+                
+                } else {
+                    emit_parse_postfix_subscript_scaled_address_to_reg_now (reg, subscript_elem_size);
+                }
                 
                 if (tok.kind == TOK_ARROW && subscript_elem_size <= (DATA_PTR & 0x1f)) {
                 
