@@ -7540,7 +7540,7 @@ static int64_s sizeof_from_current_token (void) {
      * routed into expr_const64() as if the identifier inside the parentheses
      * were an integer constant expression.
      */
-    if (sizeof_text_simple_identifier_now (tok.start, name, sizeof (name), &parenthesized) && sizeof_symbol_object_now (name, &size)) {
+    if (sizeof_text_simple_identifier_now (tok.caret, name, sizeof (name), &parenthesized) && sizeof_symbol_object_now (name, &size)) {
     
         sizeof_consume_simple_identifier_now (parenthesized);
         
