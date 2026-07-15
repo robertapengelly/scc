@@ -6102,13 +6102,7 @@ static int recover_unknown_rhs_identifier (void) {
 }*/
 
 static void skip_initializer (void) {
-
-    if (tok.kind == TOK_LBRACE) {
-        skip_balanced_until (TOK_COMMA, TOK_SEMI, TOK_EOF);
-    } else {
-        skip_balanced_until (TOK_COMMA, TOK_SEMI, TOK_EOF);
-    }
-
+    skip_balanced_until (TOK_COMMA, TOK_RBRACE, TOK_EOF);
 }
 
 static void apply_typedef_array_to_declarator (void) {
@@ -7538,12 +7532,15 @@ static void parse_local_string_field_initializer (struct local_init *inits, int 
 static void parse_local_aggregate_initializer_values (struct local_init *inits, int *init_count, int max_inits, long base_offset, const int *fields, int field_count) {
 
     int field_index = 0;
-    long field_offset = 0;
     int braced = 0;
     
+    long field_offset = 0;
+    
     if (tok.kind == TOK_LBRACE) {
+    
         braced = 1;
         get_token ();
+    
     }
     
     while (field_index < field_count) {
@@ -24150,8 +24147,8 @@ static int emit_load_assignment_binary_expression_prec_to_reg (const char *reg, 
     
     }
     
-    if (postfix_member_seen && postfix_member_is_unsigned) {
-        is_unsigned = 1;
+    if (postfix_member_seen) {
+        is_unsigned = postfix_member_is_unsigned ? 1 : 0;
     }
     
     expr_pointer_depth = rhs_last_pointer_depth;
@@ -24318,17 +24315,9 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
     int64_s rhs_enum_value;
     enum token_kind op;
     
-    int lhs_pointer_depth;
-    int is_unsigned;
+    int is_unsigned = emit_load_assignment_binary_expression_prec_to_reg (reg, 1);;
+    int lhs_pointer_depth = rhs_last_pointer_depth;
     int rhs_is_enum;
-    
-    is_unsigned = rhs_current_operand_is_unsigned_now ();
-    
-    if (emit_load_assignment_binary_expression_prec_to_reg (reg, 1)) {
-        is_unsigned = 1;
-    }
-    
-    lhs_pointer_depth = rhs_last_pointer_depth;
     
     if (assignment32_stop_before_condition_operator && is_assignment32_condition_stop_operator (tok.kind)) {
         return;
@@ -30741,8 +30730,8 @@ static int emit_statement_member_enum_compare_jump_if_false_now (int label) {
         emit_apply_postfix_member_access_to_reg_now ("eax");
     }
     
-    if (postfix_member_seen && postfix_member_is_unsigned) {
-        is_unsigned = 1;
+    if (postfix_member_seen) {
+        is_unsigned = postfix_member_is_unsigned ? 1 : 0;
     }
     
     if (!token_is_statement_compare_operator (tok.kind)) {
@@ -35114,6 +35103,42 @@ static int global_initializer_cast_before_string_now (void) {
 
 }
 
+static int global_initializer_cast_before_symbol_now (void) {
+
+    const char *p = tok.caret;
+    int depth;
+    
+    if (!p || *p != '(') {
+        return 0;
+    }
+    
+    p++;
+    depth = 1;
+    
+    while (*p && depth > 0) {
+    
+        if (*p == '(') {
+            depth++;
+        } else if (*p == ')') {
+            depth--;
+        }
+        
+        p++;
+    
+    }
+    
+    if (depth != 0) {
+        return 0;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    return ident_start_now ((unsigned char) *p);
+
+}
+
 static void append_global_zero_initializer_value (int64_s *values, char **symbols, int max_values, int *count) {
 
     if (*count < max_values) {
@@ -35253,6 +35278,36 @@ static void parse_global_initializer_values (int64_s *values, char **symbols, in
             
             expect (TOK_RPAREN, ")");
             (*count)++;
+        
+        } else if (global_initializer_accept_symbol_addresses && tok.kind == TOK_LPAREN && global_initializer_cast_before_symbol_now ()) {
+        
+            int cast_size = 0;
+            int cast_is_unsigned = 0;
+            int cast_is_pointer = 0;
+            
+            get_token ();
+            
+            if (!token_starts_type_name () || !parse_cast_type_name (&cast_size, &cast_is_unsigned, &cast_is_pointer)) {
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "invalid cast in global initializer");
+            } else if (tok.kind != TOK_IDENT || find_global_symbol (tok.ident) < 0) {
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "global symbol expected after cast");
+            } else {
+            
+                if (*count < max_values) {
+                
+                    values[*count].low = 0;
+                    values[*count].high = 0;
+                    
+                    if (symbols) {
+                        symbols[*count] = xstrdup (tok.ident);
+                    }
+                
+                }
+                
+                (*count)++;
+                get_token ();
+            
+            }
         
         } else if (tok.kind == TOK_LPAREN && global_initializer_cast_before_string_now ()) {
         

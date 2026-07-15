@@ -974,7 +974,7 @@ void skip_balanced_until (enum token_kind stop1, enum token_kind stop2, enum tok
                 brace--;
             } else {
             
-                if (stop1 == TOK_RPAREN || stop2 == TOK_RPAREN || stop3 == TOK_RPAREN) {
+                if (stop1 == TOK_RBRACE || stop2 == TOK_RBRACE || stop3 == TOK_RBRACE) {
                     return;
                 }
             
@@ -988,7 +988,7 @@ void skip_balanced_until (enum token_kind stop1, enum token_kind stop2, enum tok
                 brack--;
             } else {
             
-                if (stop1 == TOK_RPAREN || stop2 == TOK_RPAREN || stop3 == TOK_RPAREN) {
+                if (stop1 == TOK_RBRACK || stop2 == TOK_RBRACK || stop3 == TOK_RBRACK) {
                     return;
                 }
             

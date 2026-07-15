@@ -1274,11 +1274,11 @@ struct vector *preprocess_line (char **line, char *real_start, char *real_caret,
             
                 char *pm;
                 
-                if ((key = find_macro (sname))) {
+                if ((key = find_macro (sname)) && (m = get_macro (key)) && (m->nargs < 0 || *skip_whitespace (caret) == '(')) {
                 
                     hashtab_put (&hashtab_seen_macros, key, sname);
                     
-                    if ((m = get_macro (key))) {
+                    {
                     
                         if (m->nargs >= 0) {
                             caret = skip_whitespace (caret);
@@ -1348,34 +1348,20 @@ struct vector *preprocess_line (char **line, char *real_start, char *real_caret,
                     
                     hashtab_remove (&hashtab_seen_macros, key);
                     
-                    /*while (!is_end_of_line[(int) *caret]) {
-                    
-                        if (isspace ((int) *caret)) {
-                            break;
-                        }
-                        
-                        if (state->mode == CC_MODE_PREPROCESS) {
-                            fputc (*caret, state->ofp);
-                        }
-                        
-                        caret++;
-                    
-                    }*/
-                    
+                    free (sname);
                     continue;
                 
                 }
             
             }
             
-            free (sname);
-            
             if (state->mode == CC_MODE_PREPROCESS) {
             
                 if (state->ofp) {
-                    fprintf (state->ofp, "%.*s", (int) (caret - start), start);
+                    fprintf (state->ofp, "%s", sname);
                 }
                 
+                free (sname);
                 continue;
             
             }
@@ -1389,10 +1375,9 @@ struct vector *preprocess_line (char **line, char *real_start, char *real_caret,
             tok->report_start = in_macro ? (real_start ? real_start : *line) : *line;
             tok->report_caret = in_macro ? (real_caret ? real_caret : start) : start;
             
-            tok->ident = xstrndup (start, (int) (caret - start));
-            tok->len = (caret - start);
-            
+            tok->len = strlen (tok->ident = sname);
             vec_push (&vector_tokens, tok);
+            
             continue;
         
         }
