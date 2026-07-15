@@ -27138,9 +27138,13 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
     int64_s rhs_enum_value;
     enum token_kind op;
     
-    int is_unsigned = emit_load_assignment_binary_expression_prec_to_reg (reg, 1);;
-    int lhs_pointer_depth = rhs_last_pointer_depth;
+    int lhs_pointer_depth;
+    int is_unsigned;
+    
     int rhs_is_enum;
+    
+    is_unsigned = emit_load_assignment_binary_expression_prec_to_reg (reg, 1);
+    lhs_pointer_depth = rhs_last_pointer_depth;
     
     if (assignment32_stop_before_condition_operator && is_assignment32_condition_stop_operator (tok.kind)) {
         return;
