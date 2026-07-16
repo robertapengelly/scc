@@ -14100,9 +14100,11 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
                     
                     } else {
                     
-                        emit_load_deref_reg_now (reg, subscript_elem_size);
+                        emit_load_deref_reg_ex_now (reg, subscript_elem_size, is_unsigned);
+                        
                         emit_push_reg_now (reg);
                         emit_load_assignment_rhs_expression_to_reg ("rdx");
+                        
                         emit_pop_reg_now (reg);
                         emit_assignment_binary_op (assign_op, 0);
                     
@@ -14172,9 +14174,8 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
                     postfix_member_pointer_depth--;
                 }
                 
-                if (postfix_member_pointer_depth != 0
-                    || postfix_member_size <= (DATA_PTR & 0x1f)) {
-                    emit_load_deref_reg_now (reg, subscript_elem_size);
+                if (postfix_member_pointer_depth != 0 || postfix_member_size <= (DATA_PTR & 0x1f)) {
+                    emit_load_deref_reg_ex_now (reg, subscript_elem_size, is_unsigned);
                 }
                 
                 continue;
