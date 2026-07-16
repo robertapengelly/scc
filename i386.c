@@ -7529,12 +7529,28 @@ static void parse_local_string_field_initializer (struct local_init *inits, int 
 
 }
 
-static void parse_local_aggregate_initializer_values (struct local_init *inits, int *init_count, int max_inits, long base_offset, const int *fields, int field_count) {
+static void append_local_zero_initializer (struct local_init *inits, int *init_count, int max_inits, long offset, int size) {
 
-    int field_index = 0;
-    int braced = 0;
+    if (*init_count >= max_inits) {
+        return;
+    }
     
-    long field_offset = 0;
+    inits[*init_count].offset = offset;
+    inits[*init_count].size = size;
+    inits[*init_count].kind = LOCAL_INIT_CONST;
+    inits[*init_count].symbol = 0;
+    inits[*init_count].value.low = 0;
+    inits[*init_count].value.high = 0;
+    inits[*init_count].source_offset = 0;
+    inits[*init_count].source_size = 0;
+    
+    (*init_count)++;
+
+}
+
+static void parse_local_aggregate_initializer_group (struct local_init *inits, int *init_count, int max_inits, long base_offset, const int *fields, int field_count, int *field_index, long *field_offset) {
+
+    int braced = 0;
     
     if (tok.kind == TOK_LBRACE) {
     
@@ -7543,115 +7559,87 @@ static void parse_local_aggregate_initializer_values (struct local_init *inits, 
     
     }
     
-    while (field_index < field_count) {
+    while (*field_index < field_count) {
     
-        int field_size = fields[field_index];
+        int field_size;
         
-        if (field_size < 0) {
+        while (*field_index < field_count && fields[*field_index] < 0) {
         
-            field_offset += -field_size;
-            
-            field_index++;
-            continue;
+            *field_offset += -fields[*field_index];
+            (*field_index)++;
         
+        }
+        
+        if (*field_index >= field_count) {
+            break;
         }
         
         if (braced && tok.kind == TOK_RBRACE) {
         
+            get_token ();
+            return;
+        
+        }
+        
+        field_size = fields[*field_index];
+        
+        if (tok.kind == TOK_LBRACE) {
+            parse_local_aggregate_initializer_group (inits, init_count, max_inits, base_offset, fields, field_count, field_index, field_offset);
+        } else {
+        
             if (*init_count < max_inits) {
             
-                inits[*init_count].offset = base_offset + field_offset;
-                inits[*init_count].size = field_size;
-                inits[*init_count].kind = LOCAL_INIT_CONST;
-                inits[*init_count].symbol = 0;
-                inits[*init_count].value.low = 0;
-                inits[*init_count].value.high = 0;
-                inits[*init_count].source_offset = 0;
-                inits[*init_count].source_size = 0;
+                if (is_string_token ()) {
+                    parse_local_string_field_initializer (inits, init_count, max_inits, base_offset + *field_offset, field_size);
+                } else {
                 
-                (*init_count)++;
+                    inits[*init_count].offset = base_offset + *field_offset;
+                    inits[*init_count].size = field_size;
+                    
+                    parse_local_initializer_value (&inits[*init_count], 0, 0);
+                    (*init_count)++;
+                
+                }
             
+            } else {
+                skip_initializer ();
             }
             
-            field_offset += field_size;
-            field_index++;
+            *field_offset += field_size;
+            (*field_index)++;
+        
+        }
+        
+        if (!braced) {
+            return;
+        }
+        
+        if (_accept (TOK_COMMA)) {
+        
+            if (tok.kind == TOK_RBRACE) {
+            
+                get_token ();
+                return;
+            
+            }
             
             continue;
         
         }
         
-        if (*init_count < max_inits) {
+        if (tok.kind == TOK_RBRACE) {
         
-            if (is_string_token ()) {
-                parse_local_string_field_initializer (inits, init_count, max_inits, base_offset + field_offset, field_size);
-            } else {
-            
-                inits[*init_count].offset = base_offset + field_offset;
-                inits[*init_count].size = field_size;
-                
-                parse_local_initializer_value (&inits[*init_count], 0, 0);
-                (*init_count)++;
-            
-            }
+            get_token ();
+            return;
         
-        } else {
-            skip_initializer ();
         }
         
-        field_offset += field_size;
-        field_index++;
-        
-        if (braced) {
-        
-            if (!_accept (TOK_COMMA)) {
-                break;
-            }
-            
-            if (tok.kind == TOK_RBRACE) {
-                break;
-            }
-        
-        } else {
-            break;
-        }
+        break;
     
     }
     
     if (braced) {
     
-        while (field_index < field_count) {
-        
-            int field_size = fields[field_index];
-            
-            if (field_size < 0) {
-            
-                field_offset += -field_size;
-                
-                field_index++;
-                continue;
-            
-            }
-            
-            if (*init_count < max_inits) {
-            
-                inits[*init_count].offset = base_offset + field_offset;
-                inits[*init_count].size = field_size;
-                inits[*init_count].kind = LOCAL_INIT_CONST;
-                inits[*init_count].symbol = 0;
-                inits[*init_count].value.low = 0;
-                inits[*init_count].value.high = 0;
-                inits[*init_count].source_offset = 0;
-                inits[*init_count].source_size = 0;
-                
-                (*init_count)++;
-            
-            }
-            
-            field_offset += field_size;
-            field_index++;
-        
-        }
-        
         while (tok.kind != TOK_EOF && tok.kind != TOK_RBRACE) {
         
             skip_initializer ();
@@ -7659,9 +7647,36 @@ static void parse_local_aggregate_initializer_values (struct local_init *inits, 
             if (!_accept (TOK_COMMA)) {
                 break;
             }
+        
         }
         
         expect (TOK_RBRACE, "}");
+    
+    }
+
+}
+
+static void parse_local_aggregate_initializer_values (struct local_init *inits, int *init_count, int max_inits, long base_offset, const int *fields, int field_count) {
+
+    int field_index = 0;
+    long field_offset = 0;
+    
+    parse_local_aggregate_initializer_group (inits, init_count, max_inits, base_offset, fields, field_count, &field_index, &field_offset);
+    
+    while (field_index < field_count) {
+    
+        int field_size = fields[field_index];
+        
+        if (field_size < 0) {
+            field_offset += -field_size;
+        } else {
+        
+            append_local_zero_initializer (inits, init_count, max_inits, base_offset + field_offset, field_size);
+            field_offset += field_size;
+        
+        }
+        
+        field_index++;
     
     }
 
