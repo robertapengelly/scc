@@ -236,7 +236,13 @@ static int amd64_relayout_aggregate_members (int owner_size, const char *owner_t
             size = DATA_INT & 0x1f;
         }
         
-        align = amd64_member_layout_alignment (size);
+        /*
+         * An array has the alignment of its element type, not the
+         * alignment implied by the array's total storage size.  Using
+         * size here made, for example, unsigned short reserved[4]
+         * eight-byte aligned on AMD64 and shifted every following member.
+         */
+        align = amd64_member_layout_alignment (member_infos[mi].is_array ? member_infos[mi].elem_size : size);
         
         if (align > max_align) {
             max_align = align;
@@ -7674,6 +7680,15 @@ static int declarator_element_size_from_fields (int base_size, const int *field_
 
 static int declarator_pointed_size_now (void) {
 
+    /*
+     * For T ** (and deeper), one increment of the declared object moves
+     * across a pointer, not across the ultimate base type T.  Keeping the
+     * base type size here made void **, int **, etc. advance by 4 on AMD64.
+     */
+    if (declarator_pointer_depth > 1) {
+        return DATA_PTR & 0x1f;
+    }
+    
     if (parsed_type_is_aggregate) {
         return parsed_type_size;
     }
@@ -8672,6 +8687,10 @@ static void parse_block (void) {
                 char static_label[128];
                 
                 int declaration_dllimport = parsed_dllimport;
+                int declared_pointer_depth;
+                int declared_pointed_size;
+                int declared_type_size;
+                int declared_type_is_aggregate;
                 
                 for (i = 0; i < MAX_AGG_FIELDS; i++) {
                     init_symbols[i] = 0;
@@ -8697,6 +8716,21 @@ static void parse_block (void) {
                 name_caret = last_declarator_name_caret;
                 
                 make_declarator_fields (object_fields, &object_field_count, parsed_field_sizes, parsed_field_count, parsed_type_size, parsed_type_is_aggregate);
+                
+                /*
+                 * Initializer parsing reuses the parsed_type_* globals while
+                 * resolving casts, symbols and macro-expanded expressions.
+                 * Preserve this declarator's completed base type before the
+                 * initializer is consumed, otherwise a large initializer can
+                 * leave parsed_type_size describing its last expression.  In
+                 * particular, an array of 16-byte structures then gets recorded
+                 * as an array of 8-byte pointers and subscripting scales by 8.
+                 */
+                declared_type_size = parsed_type_size;
+                declared_type_is_aggregate = parsed_type_is_aggregate;
+                
+                declared_pointer_depth = declarator_effective_pointer_depth_now ();
+                declared_pointed_size = declarator_effective_pointed_size_now (declared_type_size, object_fields, object_field_count);
                 
                 if (parsed_type_is_void && !declarator_is_pointer && !declarator_has_function) {
                     report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret, "variable '%s' declared void", name ? name : "");
@@ -8779,9 +8813,8 @@ static void parse_block (void) {
                     set_local_symbol_floating (name, declarator_is_pointer ? 0 : parsed_type_is_floating);
                     set_local_symbol_array (name, declarator_has_array);
                     set_local_symbol_array_dimensions (name, declarator_has_array ? declarator_array_dimensions : 0);
-                    set_local_symbol_array_element_size (name, declarator_array_element_size_now (parsed_type_size));
-                    set_local_symbol_pointer_info (name, declarator_effective_pointer_depth_now (),
-                        declarator_effective_pointed_size_now (parsed_type_size, object_fields, object_field_count));
+                    set_local_symbol_array_element_size (name, declarator_array_element_size_now (declared_type_size));
+                    set_local_symbol_pointer_info (name, declared_pointer_depth, declared_pointed_size);
                     
                     if (!declarator_is_pointer && parsed_type_tag_name[0]) {
                     
@@ -9148,19 +9181,17 @@ static void parse_block (void) {
                     
                     if (add_global_symbol (static_label, GLOBAL_SYMBOL_OBJECT, 0, name_start, name_caret, name_line)) {
                     
-                        set_global_symbol_size (static_label, declarator_is_pointer ? DATA_PTR : declarator_object_size (parsed_type_size));
-                        set_global_symbol_pointer_info (static_label, declarator_pointer_depth,
-                            declarator_is_pointer ? declarator_pointed_size_now () :
-                                declarator_element_size_from_fields (parsed_type_size, object_fields, object_field_count));
+                        set_global_symbol_size (static_label, declarator_is_pointer ? DATA_PTR : declarator_object_size (declared_type_size));
+                        set_global_symbol_pointer_info (static_label, declared_pointer_depth, declared_pointed_size);
                         set_global_symbol_unsigned (static_label, (declarator_is_pointer || declarator_has_function) ? 0 : parsed_type_is_unsigned);
                         set_global_symbol_floating (static_label, (declarator_is_pointer || declarator_has_function) ? 0 : parsed_type_is_floating);
                         set_global_symbol_array (static_label, declarator_has_array);
                         set_global_symbol_array_count (static_label, declarator_has_array ? declarator_array_count : 0);
                         set_global_symbol_array_dimensions (static_label, declarator_has_array ? declarator_array_dimensions : 0);
-                        set_global_symbol_array_element_size (static_label, declarator_array_element_size_now (parsed_type_size));
+                        set_global_symbol_array_element_size (static_label, declarator_array_element_size_now (declared_type_size));
                         
                         emit_block_static_object (static_label,
-                            declarator_is_pointer ? DATA_PTR : (parsed_type_is_aggregate ? parsed_type_size : (parsed_type_size & 0x1f)),
+                            declarator_is_pointer ? DATA_PTR : (declared_type_is_aggregate ? declared_type_size : (declared_type_size & 0x1f)),
                                 declarator_has_array, declarator_array_count,
                                     object_fields, object_field_count,
                                         init_values, init_symbols, init_value_count,
@@ -9169,8 +9200,8 @@ static void parse_block (void) {
                     }
                     
                     add_static_local_symbol (name, static_label,
-                        declarator_object_size (parsed_type_size),
-                            type_alignment (declarator_is_pointer ? DATA_PTR : parsed_type_size),
+                        declarator_object_size (declared_type_size),
+                            type_alignment (declarator_is_pointer ? DATA_PTR : declared_type_size),
                                 (declarator_is_pointer ? 0 : parsed_type_is_unsigned),
                                     block_scope_start, name_line, name_start, name_caret);
                     
@@ -9178,8 +9209,7 @@ static void parse_block (void) {
                     set_local_symbol_array (name, declarator_has_array);
                     set_local_symbol_array_dimensions (name, declarator_has_array ? declarator_array_dimensions : 0);
                     set_local_symbol_array_element_size (name, declarator_array_element_size_now (parsed_type_size));
-                    set_local_symbol_pointer_info (name, declarator_effective_pointer_depth_now (),
-                        declarator_effective_pointed_size_now (parsed_type_size, object_fields, object_field_count));
+                    set_local_symbol_pointer_info (name, declared_pointer_depth, declared_pointed_size);
                     
                     if (!declarator_is_pointer && parsed_type_tag_name[0]) {
                     
