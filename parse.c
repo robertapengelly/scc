@@ -1002,6 +1002,34 @@ void skip_balanced_until (enum token_kind stop1, enum token_kind stop2, enum tok
 
 }
 
+static int member_owner_name_matches (const char *recorded_name, const char *requested_name) {
+
+    struct typedef_entry *entry;
+    
+    if (!recorded_name || !requested_name) {
+        return 0;
+    }
+    
+    if (strcmp (recorded_name, requested_name) == 0) {
+        return 1;
+    }
+    
+    entry = find_typedef_name (requested_name);
+    
+    if (entry && entry->tag_name && strcmp (recorded_name, entry->tag_name) == 0) {
+        return 1;
+    }
+    
+    entry = find_typedef_name (recorded_name);
+    
+    if (entry && entry->tag_name && strcmp (entry->tag_name, requested_name) == 0) {
+        return 1;
+    }
+    
+    return 0;
+
+}
+
 int find_member_info_ex_bounded (const char *name, int max_size, const char *owner_tag_name, int *offset, int *size, int *elem_size, int *pointer_depth, int *is_array, int *is_floating) {
 
     int best;
@@ -1025,9 +1053,7 @@ int find_member_info_ex_bounded (const char *name, int max_size, const char *own
     
         for (i = member_info_count - 1; i >= 0; i--) {
         
-            if (member_infos[i].name && strcmp (member_infos[i].name, name) == 0
-                && member_infos[i].owner_tag_name
-                && strcmp (member_infos[i].owner_tag_name, owner_tag_name) == 0) {
+            if (member_infos[i].name && strcmp (member_infos[i].name, name) == 0 && member_infos[i].owner_tag_name && member_owner_name_matches (member_infos[i].owner_tag_name, owner_tag_name)) {
             
                 best = i;
                 break;

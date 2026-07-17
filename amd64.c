@@ -80,6 +80,7 @@ static int index_step_size (int size) {
 
 static int rhs_last_pointer_depth = 0;
 static int rhs_last_pointed_size = 0;
+static int pending_cast_subscript_is_unsigned = -1;
 
 static void set_rhs_last_pointer_info (int depth, int size) {
 
@@ -8710,11 +8711,11 @@ static void parse_block (void) {
                 
                 if (parsed_storage_class == STORAGE_TYPEDEF && name) {
                 
-                    save_typedef_name (name, declarator_object_size (parsed_type_size),
-                        (declarator_is_pointer ? 0 : parsed_type_is_unsigned),
-                            (declarator_is_pointer ? 0 : parsed_type_is_void),
-                                (!declarator_is_pointer && (parsed_type_is_aggregate || declarator_has_array)),
-                                    (!declarator_is_pointer && declarator_has_array),
+                    save_typedef_name (name, (declarator_is_pointer || declarator_function_is_pointer) ? DATA_PTR : declarator_object_size (parsed_type_size),
+                        ((declarator_is_pointer || declarator_function_is_pointer) ? 0 : parsed_type_is_unsigned),
+                            ((declarator_is_pointer || declarator_function_is_pointer) ? 0 : parsed_type_is_void),
+                                (!(declarator_is_pointer || declarator_function_is_pointer) && (parsed_type_is_aggregate || declarator_has_array)),
+                                    (!(declarator_is_pointer || declarator_function_is_pointer) && declarator_has_array),
                                         declarator_array_count, parsed_type_size,
                                             (declarator_calling_convention != TOK_EOF) ? declarator_calling_convention : parsed_calling_convention,
                                                 object_fields, object_field_count);
@@ -10847,7 +10848,9 @@ static int parse_incdec_identifier_now (enum token_kind *op, char **name, const 
 
 static void emit_apply_postfix_member_access_to_reg_now (const char *reg);
 static void emit_apply_postfix_member_incdec_now (const char *reg, enum token_kind op);
+
 static void emit_load_member_from_addr_reg_now (const char *dst_reg, const char *addr_reg, int offset, int size);
+static void emit_load_member_from_addr_reg_ex_now (const char *dst_reg, const char *addr_reg, int offset, int size, int is_unsigned);
 
 static struct token *clone_current_token_now (void);
 static void emit_store_reg_to_deref_reg_now (const char *addr_reg, const char *value_reg, int size);
@@ -11371,7 +11374,7 @@ static int emit_load_prefix_incdec_member_to_reg_now (const char *reg) {
     if (postfix_member_seen && tok.kind != TOK_ARROW && tok.kind != TOK_DOT) {
     
         emit_apply_postfix_member_incdec_now (reg, op);
-        emit_load_member_from_addr_reg_now (reg, "rdx", postfix_member_offset, postfix_member_size);
+        emit_load_member_from_addr_reg_ex_now (reg, "rdx", postfix_member_offset, postfix_member_size, postfix_member_is_unsigned);
         
         return 1;
     
@@ -12374,9 +12377,18 @@ static int emit_parse_postfix_copy_source_address_now (const char *reg, struct l
 
 static void emit_load_postfix_lvalue_address_to_pair_ex_now (const char *lo, const char *hi, int size, int is_unsigned) {
 
+    int scalar_size;
+    
     if (!state->ofp) {
         return;
     }
+    
+    /*
+     * Type flags share the size value.  Never compare the encoded value
+     * against a byte size or an unsigned scalar can be mistaken for an
+     * aggregate and loaded as two unrelated 32-bit halves.
+     */
+    scalar_size = size & 0x1f;
     
     /*
      * emit_parse_postfix_copy_source_address_now() leaves LO holding the
@@ -12395,7 +12407,7 @@ static void emit_load_postfix_lvalue_address_to_pair_ex_now (const char *lo, con
      * which passes garbage to WaitForEvent and makes get_key return
      * immediately.
      */
-    if (size > (DATA_PTR & 0x1f)) {
+    if (scalar_size > (DATA_PTR & 0x1f)) {
     
         emit_push_reg_now (lo);
         
@@ -12419,7 +12431,7 @@ static void emit_load_postfix_lvalue_address_to_pair_ex_now (const char *lo, con
     
     } else {
     
-        emit_load_deref_reg_ex_now (lo, size, is_unsigned);
+        emit_load_deref_reg_ex_now (lo, scalar_size, is_unsigned);
         
         if (state->syntax & ASM_SYNTAX_INTEL) {
             fprintf (state->ofp, "    xor %s, %s\n", hi, hi);
@@ -12553,7 +12565,12 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
                     int applied_postfix = 0;
                     
                     if (cast_is_pointer) {
+                    
                         set_rhs_last_pointer_info (1, cast_size > 0 ? cast_size : (DATA_INT & 0x1f));
+                        
+                        postfix_copy_lvalue_size = last_cast_type_object_size > 0 ? last_cast_type_object_size : (cast_size > 0 ? cast_size : (DATA_INT & 0x1f));
+                        postfix_copy_lvalue_tag_name = last_cast_type_tag_name[0] ? last_cast_type_tag_name : 0;
+                    
                     } else {
                         emit_extend_pair_high_from_low (lo, hi, cast_size, cast_is_unsigned);
                     }
@@ -12842,7 +12859,7 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
                 
                 } else {
                 
-                    emit_load_deref_reg_now (lo, cast_deref_size);
+                    emit_load_deref_reg_ex_now (lo, cast_deref_size, 1);
                     emit_extend_pair_high_from_low (lo, hi, cast_deref_size, 1);
                 
                 }
@@ -12931,7 +12948,10 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
             if (src->pointer_depth > 1) {
                 deref_size = DATA_PTR & 0x1f;
             } else if (src->pointer_depth == 1 && src->pointed_size > 0) {
+            
                 deref_size = src->pointed_size & 0x1f;
+                deref_unsigned = src->pointed_is_unsigned ? 1 : 0;
+            
             }
             
             if (src->is_static && src->static_label) {
@@ -12945,7 +12965,10 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
             if (get_global_symbol_pointer_depth (name) > 1) {
                 deref_size = DATA_PTR & 0x1f;
             } else if (get_global_symbol_pointer_depth (name) == 1 && get_global_symbol_pointed_size (name) > 0) {
+            
                 deref_size = get_global_symbol_pointed_size (name) & 0x1f;
+                deref_unsigned = get_global_symbol_pointed_is_unsigned (name) ? 1 : 0;
+            
             }
             
             emit_load_global_to_reg (lo, name, DATA_PTR);
@@ -12968,33 +12991,14 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
         
         if (deref_size == (DATA_LLONG & 0x1f)) {
         
-            emit_push_reg_now (lo);
+            const char *addr_reg = (strcmp (lo, "rcx") != 0 && strcmp (hi, "rcx") != 0) ? "rcx" : "rsi";
             
-            emit_load_deref_reg_now (lo, DATA_INT & 0x1f);
-            emit_pop_reg_now (hi);
-            
-            if (state->ofp) {
-            
-                if (state->syntax & ASM_SYNTAX_INTEL) {
-                
-                    const char *dhi = amd64_dword_reg_name_from_any (hi);
-                    const char *qhi = amd64_qword_reg_name_from_any (hi);
-                    
-                    if (state->syntax & ASM_SYNTAX_NASM) {
-                        fprintf (state->ofp, "    mov %s, dword [%s + 4]\n", dhi, qhi);
-                    } else {
-                        fprintf (state->ofp, "    mov %s, dword ptr [%s + 4]\n", dhi, qhi);
-                    }
-                
-                } else {
-                    fprintf (state->ofp, "    movl 4(%%%s), %%%s\n", amd64_qword_reg_name_from_any (hi), amd64_dword_reg_name_from_any (hi));
-                }
-            
-            }
+            emit_copy_reg_now (addr_reg, lo);
+            emit_load_pair_from_deref_reg_now (lo, hi, addr_reg);
         
         } else {
         
-            emit_load_deref_reg_now (lo, deref_size);
+            emit_load_deref_reg_ex_now (lo, deref_size, deref_unsigned);
             emit_extend_pair_high_from_low (lo, hi, deref_size, deref_unsigned);
         
         }
@@ -14262,14 +14266,16 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
                     if (state->syntax & ASM_SYNTAX_NASM) {
                     
                         if (size == 1) {
-                            fprintf (state->ofp, "    movzx %s, byte [%s + %d]\n", dreg, reg, offset);
+                            fprintf (state->ofp, "    %s %s, byte [%s + %d]\n", is_unsigned ? "movzx" : "movsx", is_unsigned ? dreg : reg, reg, offset);
                         } else if (size == 2) {
-                            fprintf (state->ofp, "    movzx %s, word [%s + %d]\n", dreg, reg, offset);
+                            fprintf (state->ofp, "    %s %s, word [%s + %d]\n", is_unsigned ? "movzx" : "movsx", is_unsigned ? dreg : reg, reg, offset);
                         } else {
                         
                             if (qword) {
                                 fprintf (state->ofp, "    mov %s, qword [%s + %d]\n", reg, reg, offset);
-                            } else {
+                            } else if (is_unsigned) {
+                                fprintf (state->ofp, "    mov %s, dword [%s + %d]\n", dreg, reg, offset);
+                             } else {
                                 fprintf (state->ofp, "    movsxd %s, dword [%s + %d]\n", reg, reg, offset);
                             }
                         
@@ -14278,13 +14284,15 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
                     } else {
                     
                         if (size == 1) {
-                            fprintf (state->ofp, "    movzx %s, byte ptr [%s + %d]\n", dreg, reg, offset);
+                            fprintf (state->ofp, "    %s %s, byte ptr [%s + %d]\n", is_unsigned ? "movzx" : "movsx", is_unsigned ? dreg : reg, reg, offset);
                         } else if (size == 2) {
-                            fprintf (state->ofp, "    movzx %s, word ptr [%s + %d]\n", dreg, reg, offset);
+                            fprintf (state->ofp, "    %s %s, word ptr [%s + %d]\n", is_unsigned ? "movzx" : "movsx", is_unsigned ? dreg : reg, reg, offset);
                         } else {
                         
                             if (qword) {
                                 fprintf (state->ofp, "    mov %s, qword ptr [%s + %d]\n", reg, reg, offset);
+                            } else if (is_unsigned) {
+                                fprintf (state->ofp, "    mov %s, dword ptr [%s + %d]\n", dreg, reg, offset);
                             } else {
                                 fprintf (state->ofp, "    movsxd %s, dword ptr [%s + %d]\n", reg, reg, offset);
                             }
@@ -14296,11 +14304,13 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
                 } else {
                 
                     if (size == 1) {
-                        fprintf (state->ofp, "    movzbl %d(%%%s), %%%s\n", offset, reg, amd64_dword_reg_name_from_any (reg));
+                        fprintf (state->ofp, "    %s %d(%%%s), %%%s\n", is_unsigned ? "movzbl" : "movsbq", offset, reg, is_unsigned ? amd64_dword_reg_name_from_any (reg) : reg);
                     } else if (size == 2) {
-                        fprintf (state->ofp, "    movzwl %d(%%%s), %%%s\n", offset, reg, amd64_dword_reg_name_from_any (reg));
+                        fprintf (state->ofp, "    %s %d(%%%s), %%%s\n", is_unsigned ? "movzwl" : "movswq", offset, reg, is_unsigned ? amd64_dword_reg_name_from_any (reg) : reg);
                     } else if (size == (DATA_PTR & 0x1f) || size == (DATA_LLONG & 0x1f)) {
                         fprintf (state->ofp, "    movq %d(%%%s), %%%s\n", offset, reg, reg);
+                    } else if (is_unsigned) {
+                        fprintf (state->ofp, "    movl %d(%%%s), %%%s\n", offset, reg, amd64_dword_reg_name_from_any (reg));
                     } else {
                         fprintf (state->ofp, "    movslq %d(%%%s), %%%s\n", offset, reg, reg);
                     }
@@ -14869,7 +14879,7 @@ static int emit_handle_subscript_after_loaded_pointer_to_reg_now (const char *re
             emit_load_assignment_rhs_expression_to_reg (reg);
         } else {
         
-            emit_load_deref_reg_now (reg, subscript_elem_size);
+            emit_load_deref_reg_ex_now (reg, subscript_elem_size, pointer_depth <= 1 ? pointed_is_unsigned : 0);
             emit_push_reg_now (reg);
             
             emit_load_assignment_rhs_expression_to_reg ("rdx");
@@ -14900,58 +14910,53 @@ static int emit_handle_subscript_after_loaded_pointer_to_reg_now (const char *re
 
 }
 
-static void emit_load_member_from_addr_reg_now (const char *dst_reg, const char *addr_reg, int offset, int size) {
+static void emit_load_member_from_addr_reg_ex_now (const char *dst_reg, const char *addr_reg, int offset, int size, int is_unsigned) {
 
-    const char *qreg;
+    const char *qreg, *dreg;
     
     if (!state->ofp) {
         return;
     }
     
     qreg = amd64_qword_reg_name_from_any (dst_reg);
+    dreg = amd64_dword_reg_name_from_any (dst_reg);
     
     if (state->syntax & ASM_SYNTAX_INTEL) {
     
-        if (state->syntax & ASM_SYNTAX_NASM) {
+        const char *ptr = (state->syntax & ASM_SYNTAX_NASM) ? "" : "ptr ";
         
-            if (size == (DATA_CHAR & 0x1f)) {
-                fprintf (state->ofp, "    movsx %s, byte [%s + %d]\n", qreg, addr_reg, offset);
-            } else if (size == (DATA_SHORT & 0x1f)) {
-                fprintf (state->ofp, "    movsx %s, word [%s + %d]\n", qreg, addr_reg, offset);
-            } else if (amd64_scalar_size_is_qword (size)) {
-                fprintf (state->ofp, "    mov %s, qword [%s + %d]\n", qreg, addr_reg, offset);
-            } else {
-                fprintf (state->ofp, "    movsxd %s, dword [%s + %d]\n", qreg, addr_reg, offset);
-            }
-        
+        if (size == (DATA_CHAR & 0x1f)) {
+            fprintf (state->ofp, "    %s %s, byte %s[%s + %d]\n", is_unsigned ? "movzx" : "movsx", is_unsigned ? dreg : qreg, ptr, addr_reg, offset);
+        } else if (size == (DATA_SHORT & 0x1f)) {
+            fprintf (state->ofp, "    %s %s, word %s[%s + %d]\n", is_unsigned ? "movzx" : "movsx", is_unsigned ? dreg : qreg, ptr, addr_reg, offset);
+        } else if (amd64_scalar_size_is_qword (size)) {
+            fprintf (state->ofp, "    mov %s, qword %s[%s + %d]\n", qreg, ptr, addr_reg, offset);
+        } else if (is_unsigned) {
+            fprintf (state->ofp, "    mov %s, dword %s[%s + %d]\n", dreg, ptr, addr_reg, offset);
         } else {
-        
-            if (size == (DATA_CHAR & 0x1f)) {
-                fprintf (state->ofp, "    movsx %s, byte ptr [%s + %d]\n", qreg, addr_reg, offset);
-            } else if (size == (DATA_SHORT & 0x1f)) {
-                fprintf (state->ofp, "    movsx %s, word ptr [%s + %d]\n", qreg, addr_reg, offset);
-            } else if (amd64_scalar_size_is_qword (size)) {
-                fprintf (state->ofp, "    mov %s, qword ptr [%s + %d]\n", qreg, addr_reg, offset);
-            } else {
-                fprintf (state->ofp, "    movsxd %s, dword ptr [%s + %d]\n", qreg, addr_reg, offset);
-            }
-        
+            fprintf (state->ofp, "    movsxd %s, dword %s[%s + %d]\n", qreg, ptr, addr_reg, offset);
         }
     
     } else {
     
         if (size == (DATA_CHAR & 0x1f)) {
-            fprintf (state->ofp, "    movsbq %d(%%%s), %%%s\n", offset, addr_reg, qreg);
+            fprintf (state->ofp, "    %s %d(%%%s), %%%s\n", is_unsigned ? "movzbl" : "movsbq", offset, addr_reg, is_unsigned ? dreg : qreg);
         } else if (size == (DATA_SHORT & 0x1f)) {
-            fprintf (state->ofp, "    movswq %d(%%%s), %%%s\n", offset, addr_reg, qreg);
+            fprintf (state->ofp, "    %s %d(%%%s), %%%s\n", is_unsigned ? "movzwl" : "movswq", offset, addr_reg, is_unsigned ? dreg : qreg);
         } else if (amd64_scalar_size_is_qword (size)) {
             fprintf (state->ofp, "    movq %d(%%%s), %%%s\n", offset, addr_reg, qreg);
+        } else if (is_unsigned) {
+            fprintf (state->ofp, "    movl %d(%%%s), %%%s\n", offset, addr_reg, dreg);
         } else {
             fprintf (state->ofp, "    movslq %d(%%%s), %%%s\n", offset, addr_reg, qreg);
         }
     
     }
 
+}
+
+static void emit_load_member_from_addr_reg_now (const char *dst_reg, const char *addr_reg, int offset, int size) {
+    emit_load_member_from_addr_reg_ex_now (dst_reg, addr_reg, offset, size, 0);
 }
 
 static int emit_load_address_of_parenthesized_postfix_to_reg_now (const char *reg) {
@@ -18596,6 +18601,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             long saved_declarator_array_count = declarator_array_count;
             long saved_declarator_first_array_count = declarator_first_array_count;
             
+            char *cast_tag_name = 0;
             char *cast_name = 0;
             
             int cast_base_size;
@@ -18621,6 +18627,10 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             
             cast_base_size = parsed_type_size & 0x1f;
             cast_is_unsigned = parsed_type_is_unsigned;
+            
+            if (parsed_type_tag_name[0]) {
+                cast_tag_name = xstrdup (parsed_type_tag_name);
+            }
             
             if (tok.kind != TOK_RPAREN) {
                 parse_declarator (&cast_name);
@@ -18671,8 +18681,21 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             
             emit_load_assignment_rhs_to_reg (reg);
             
+            if (cast_pointer_depth > 0) {
+            
+                postfix_copy_lvalue_size = cast_pointed_size;
+                postfix_copy_lvalue_tag_name = cast_tag_name;
+            
+            }
+            
             while (tok.kind == TOK_ARROW || tok.kind == TOK_DOT) {
                 emit_apply_postfix_member_access_to_reg_now (reg);
+            }
+            
+            postfix_copy_lvalue_tag_name = 0;
+            
+            if (cast_tag_name) {
+                free (cast_tag_name);
             }
             
             if (tok.kind == TOK_LBRACK) {
@@ -18684,12 +18707,22 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                 }
                 
                 emit_parse_postfix_subscript_scaled_address_to_reg_now (reg, cast_subscript_elem_size);
-                emit_load_deref_reg_now (reg, cast_subscript_elem_size);
+                
+                emit_load_deref_reg_ex_now (reg, cast_subscript_elem_size, cast_pointer_depth > 1 ? 1 : cast_is_unsigned);
+                pending_cast_subscript_is_unsigned = -1;
             
             }
             
             if (cast_pointer_depth > 0) {
+            
                 set_rhs_last_pointer_info (cast_pointer_depth, cast_pointed_size);
+                
+                if (tok.kind == TOK_RPAREN) {
+                    pending_cast_subscript_is_unsigned = cast_is_unsigned ? 1 : 0;
+                } else if (tok.kind != TOK_LBRACK) {
+                    pending_cast_subscript_is_unsigned = -1;
+                }
+            
             } else {
             
                 emit_apply_integer_cast_to_reg_now (reg, cast_base_size, cast_is_unsigned);
@@ -18758,6 +18791,20 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         
         if (paren_call_name) {
             free (paren_call_name);
+        }
+        
+        /*
+         * A member access may follow the completed parenthesized value, as in:
+         *
+         *     ((TYPE *)(object->member))->callback (...)
+         *
+         * The inner expression has already left its pointed object size in
+         * postfix_copy_lvalue_size.  Apply the outer postfix chain now instead
+         * of returning with ->callback still pending and subsequently treating
+         * object->member itself as the function pointer.
+         */
+        while (tok.kind == TOK_ARROW || tok.kind == TOK_DOT) {
+            emit_apply_postfix_member_access_to_reg_now (reg);
         }
         
         if (tok.kind == TOK_LBRACK) {
@@ -18849,7 +18896,8 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             
             }
             
-            emit_load_deref_reg_now (reg, subscript_elem_size);
+            emit_load_deref_reg_ex_now (reg, subscript_elem_size, pending_cast_subscript_is_unsigned >= 0 ? pending_cast_subscript_is_unsigned : 0);
+            pending_cast_subscript_is_unsigned = -1;
             
             if (subscript_pointer_depth > 0) {
                 subscript_pointer_depth--;
@@ -19558,7 +19606,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                     }
                 
                 } else {
-                    emit_load_member_from_addr_reg_now (reg, reg, offset, member_load_size);
+                    emit_load_member_from_addr_reg_ex_now (reg, reg, offset, member_load_size, member_pointer_depth == 0 ? last_found_member_is_unsigned : 1);
                 }
                 
                 if (lhs_has_postfix) {
@@ -19700,7 +19748,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                     deref_size = lhs_sym->pointed_size;
                 }
                 
-                emit_load_deref_reg_now (reg, deref_size);
+                emit_load_deref_reg_ex_now (reg, deref_size, lhs_sym->pointer_depth == 1 ? lhs_sym->pointed_is_unsigned : 0);
                 
                 if (lhs_sym->pointer_depth > 1) {
                     set_rhs_last_pointer_info (lhs_sym->pointer_depth - 1, lhs_sym->pointed_size);
@@ -19739,7 +19787,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                     deref_size = get_global_symbol_pointed_size (lhs_name);
                 }
                 
-                emit_load_deref_reg_now (reg, deref_size);
+                emit_load_deref_reg_ex_now (reg, deref_size, get_global_symbol_pointer_depth (lhs_name) == 1 ? get_global_symbol_pointed_is_unsigned (lhs_name) : 0);
                 
                 if (get_global_symbol_pointer_depth (lhs_name) > 1) {
                     set_rhs_last_pointer_info (get_global_symbol_pointer_depth (lhs_name) - 1, get_global_symbol_pointed_size (lhs_name));
@@ -22957,7 +23005,7 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
                 emit_load_floating_member_from_addr_reg_now ("rax", member_offset, member_size);
             } else {
             
-                emit_load_member_from_addr_reg_now ("rax", "rax", member_offset, member_size);
+                emit_load_member_from_addr_reg_ex_now ("rax", "rax", member_offset, member_size, last_found_member_is_unsigned);
                 emit_rax_bool_to_floating_stack_now ();
             
             }
@@ -28866,7 +28914,7 @@ static int parse_parenthesized_pointer_member_indirect_assignment_statement (voi
 
 }
 
-static int paren_text_starts_type_name_now (void) {
+static int paren_immediately_starts_type_name_now (void) {
 
     const char *p;
     
@@ -28891,7 +28939,48 @@ static int paren_text_starts_type_name_now (void) {
         p++;
     }
     
-    if (*p == '(') {
+    if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
+        return 0;
+    }
+    
+    while (((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_') && n < (int) sizeof (name) - 1) {
+        name[n++] = *p++;
+    }
+    
+    name[n] = '\0';
+    
+    if (strcmp (name, "char") == 0 || strcmp (name, "short") == 0 ||
+        strcmp (name, "int") == 0 || strcmp (name, "long") == 0 ||
+        strcmp (name, "signed") == 0 || strcmp (name, "unsigned") == 0 ||
+        strcmp (name, "void") == 0 || strcmp (name, "struct") == 0 ||
+        strcmp (name, "union") == 0 || strcmp (name, "enum") == 0) {
+        return 1;
+    }
+    
+    return find_typedef_name (name) != 0;
+
+}
+
+static int paren_text_starts_type_name_now (void) {
+
+    const char *p;
+    
+    char name[128];
+    int n = 0;
+    
+    if (tok.caret) {
+        p = tok.caret;
+    } else if (tok.start) {
+        p = tok.start;
+    } else {
+        return 0;
+    }
+    
+    if (*p != '(') {
+        return 0;
+    }
+    
+    do {
     
         p++;
         
@@ -28899,7 +28988,7 @@ static int paren_text_starts_type_name_now (void) {
             p++;
         }
     
-    }
+    } while (*p == '(');
     
     if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
         return 0;
@@ -28923,7 +29012,29 @@ static int paren_text_starts_type_name_now (void) {
 
 }
 
-static int parse_cast_indirect_assignment_statement (void) {
+static int cast_address_operand_is_plain_identifier_now (void) {
+
+    const char *p;
+    
+    if (tok.kind != TOK_IDENT || !tok.caret || !tok.ident) {
+        return 0;
+    }
+    
+    p = tok.caret + strlen (tok.ident);
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    if (*p == '.' || *p == '[' || (*p == '-' && p[1] == '>')) {
+        return 0;
+    }
+    
+    return 1;
+
+}
+
+static int parse_cast_indirect_assignment_statement (int lvalue_outer_paren_depth) {
 
     int saved_type_size = parsed_type_size;
     int saved_storage_class = parsed_storage_class;
@@ -28949,31 +29060,36 @@ static int parse_cast_indirect_assignment_statement (void) {
     int base_size;
     int deref_size;
     int pointer_depth;
-    int i;
+    int deref_is_unsigned, i;
     
-    enum token_kind op;
-    int has_outer_paren = 0;
+    enum token_kind addr_op, op;
+    int outer_paren_depth = 0;
     
     if (tok.kind != TOK_LPAREN) {
         return 0;
     }
-    
-    get_token ();
     
     /*
      * Accept the common casted-dereference lvalue spelling:
      *
      *     *((char *)ptr + n) = v;
      *
-     * parse_indirect_assignment_statement() enters here at the outer '(';
-     * the actual cast type begins after the inner '('.
+     * Count only parentheses wrapping the cast expression.  The parenthesis
+     * which starts the cast itself is consumed separately, otherwise it is
+     * incorrectly expected again after the address expression.
      */
-    if (tok.kind == TOK_LPAREN) {
+    while (tok.kind == TOK_LPAREN && !paren_immediately_starts_type_name_now ()) {
     
-        has_outer_paren = 1;
+        outer_paren_depth++;
         get_token ();
     
     }
+    
+    if (tok.kind != TOK_LPAREN) {
+        return 0;
+    }
+    
+    get_token ();
     
     if (!is_type_start (tok.kind)) {
         return 0;
@@ -28984,7 +29100,9 @@ static int parse_cast_indirect_assignment_statement (void) {
     }
     
     parse_type_spec ();
+    
     base_size = parsed_type_size & 0x1f;
+    deref_is_unsigned = parsed_type_is_unsigned ? 1 : 0;
     
     if (tok.kind != TOK_RPAREN) {
         parse_declarator (&cast_name);
@@ -29047,7 +29165,7 @@ static int parse_cast_indirect_assignment_statement (void) {
          *
          *     *((char *)ptr + *actualRead) = '\n';
          */
-        if (tok.kind == TOK_IDENT) {
+        if (tok.kind == TOK_IDENT && cast_address_operand_is_plain_identifier_now ()) {
         
             char *addr_name = xstrdup (tok.ident);
             
@@ -29084,13 +29202,55 @@ static int parse_cast_indirect_assignment_statement (void) {
             emit_load_assignment_rhs_to_reg ("rdx");
         }
         
-        while (tok.kind == TOK_PLUS || tok.kind == TOK_MINUS) {
+        for (;;) {
         
-            enum token_kind addr_op = tok.kind;
+            while (outer_paren_depth > 0 && tok.kind == TOK_RPAREN) {
+            
+                get_token ();
+                outer_paren_depth--;
+            
+            }
+            
+            if (tok.kind != TOK_PLUS && tok.kind != TOK_MINUS) {
+                break;
+            }
+            
+            addr_op = tok.kind;
             get_token ();
             
             emit_push_reg_now ("rdx");
-            emit_load_assignment_rhs_to_reg ("rax");
+            
+            if (tok.kind == TOK_IDENT && cast_address_operand_is_plain_identifier_now ()) {
+            
+                struct local_symbol *index_sym;
+                
+                char *index_name = xstrdup (tok.ident);
+                int index_global_index;
+                
+                get_token ();
+                
+                index_sym = find_local_symbol (index_name);
+                index_global_index = find_global_symbol (index_name);
+                
+                if (index_sym) {
+                
+                    if (index_sym->is_static && index_sym->static_label) {
+                        emit_load_global_to_reg ("rax", index_sym->static_label, index_sym->size);
+                    } else {
+                        emit_load_local_to_reg ("rax", index_sym->offset, index_sym->size);
+                    }
+                
+                } else if (index_global_index >= 0) {
+                    emit_load_global_to_reg ("rax", index_name, global_symbols[index_global_index].size);
+                } else {
+                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.start, tok.caret, "unknown symbol '%s'", index_name);
+                }
+                
+                free (index_name);
+            
+            } else {
+                emit_load_assignment_rhs_to_reg ("rax");
+            }
             
             if (deref_size > 1) {
                 emit_scale_reg_by_const_now ("rax", deref_size);
@@ -29110,7 +29270,11 @@ static int parse_cast_indirect_assignment_statement (void) {
         skip_balanced_until (TOK_RPAREN, TOK_SEMI, TOK_EOF);
     }
     
-    if (has_outer_paren) {
+    while (outer_paren_depth-- > 0) {
+        expect (TOK_RPAREN, ")");
+    }
+    
+    while (lvalue_outer_paren_depth-- > 0) {
         expect (TOK_RPAREN, ")");
     }
     
@@ -29135,10 +29299,17 @@ static int parse_cast_indirect_assignment_statement (void) {
     } else {
     
         emit_push_reg_now ("rdx");
-        emit_load_deref_reg_now ("rax", deref_size);
+        
+        emit_push_reg_now ("rdx");
+        emit_pop_reg_now ("rax");
+        
+        emit_load_deref_reg_ex_now ("rax", deref_size, deref_is_unsigned);
+        
         emit_push_reg_now ("rax");
         emit_load_assignment_rhs_expression_to_reg ("rdx");
+        
         emit_pop_reg_now ("rax");
+        
         emit_assignment_binary_op (op, 0);
         emit_pop_reg_now ("rdx");
     
@@ -29219,6 +29390,9 @@ static int parse_parenthesized_indirect_assignment_statement (void) {
     } else {
     
         emit_push_reg_now ("rdx");
+        
+        emit_push_reg_now ("rdx");
+        emit_pop_reg_now ("rax");
         
         emit_load_deref_reg_now ("rax", deref_size);
         emit_push_reg_now ("rax");
@@ -29389,9 +29563,8 @@ static int parse_indirect_assignment_statement (void) {
     
         if (tok.kind == TOK_LPAREN) {
         
-            if (paren_text_starts_type_name_now () ||
-                (tok.start && tok.start[0] == '(' && tok.start[1] == '(')) {
-                return parse_cast_indirect_assignment_statement ();
+            if (paren_text_starts_type_name_now ()) {
+                return parse_cast_indirect_assignment_statement (0);
             }
             
             if (lparen_expression_starts_with_star_now ()) {
@@ -29912,12 +30085,16 @@ static int source_starts_parenthesized_star_now (void) {
         return 0;
     }
     
-    depth = 1;
-    p++;
+    do {
     
-    while (*p == ' ' || *p == '\t') {
+        depth++;
         p++;
-    }
+        
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+    
+    } while (*p == '(');
     
     if (*p != '*') {
         return 0;
@@ -29943,7 +30120,10 @@ static int source_starts_parenthesized_star_now (void) {
         p++;
     }
     
-    return *p == '.' || (*p == '-' && p[1] == '>');
+    return *p == '.' || (*p == '-' && p[1] == '>') ||
+        *p == '=' || *p == '+' || *p == '-' || *p == '*' ||
+           *p == '/' || *p == '%' || *p == '&' || *p == '|' ||
+               *p == '^' || *p == '<' || *p == '>';
 
 }
 
@@ -29962,18 +30142,28 @@ static int parse_parenthesized_indirect_member_assignment_statement (void) {
     int member_offset = 0;
     int member_size = DATA_INT & 0x1f;
     int saw_close = 0;
+    int lvalue_outer_paren_depth = 0;
     
     if (tok.kind != TOK_LPAREN || !source_starts_parenthesized_star_now ()) {
         return 0;
     }
     
-    get_token ();
+    while (tok.kind == TOK_LPAREN) {
+    
+        lvalue_outer_paren_depth++;
+        get_token ();
+    
+    }
     
     if (tok.kind != TOK_STAR) {
         return 0;
     }
     
     get_token ();
+    
+    if (tok.kind == TOK_LPAREN && paren_text_starts_type_name_now ()) {
+        return parse_cast_indirect_assignment_statement (lvalue_outer_paren_depth);
+    }
     
     /*
      * Parse only the object expression inside the parenthesized dereference.
@@ -36589,6 +36779,10 @@ static void parse_statement (void) {
     
     }
     
+    if (tok.kind == TOK_LPAREN && parse_parenthesized_indirect_member_assignment_statement ()) {
+        return;
+    }
+    
     if (tok.kind == TOK_LPAREN) {
     
         int parenthesized_assignment_is_unsigned;
@@ -36600,10 +36794,6 @@ static void parse_statement (void) {
         
         }
     
-    }
-    
-    if (tok.kind == TOK_LPAREN && parse_parenthesized_indirect_member_assignment_statement ()) {
-        return;
     }
     
     if (parse_indirect_assignment_statement ()) {
@@ -38765,11 +38955,11 @@ static void parse_external_after_type (void) {
             
                 make_declarator_fields (object_fields, &object_field_count, parsed_field_sizes, parsed_field_count, parsed_type_size, parsed_type_is_aggregate);
                 
-                save_typedef_name (name, declarator_object_size (parsed_type_size),
-                    (declarator_is_pointer ? 0 : parsed_type_is_unsigned),
-                        (declarator_is_pointer ? 0 : parsed_type_is_void),
-                            (!declarator_is_pointer && (parsed_type_is_aggregate || declarator_has_array)),
-                                (!declarator_is_pointer && declarator_has_array),
+                save_typedef_name (name, (declarator_is_pointer || declarator_function_is_pointer) ? DATA_PTR : declarator_object_size (parsed_type_size),
+                    ((declarator_is_pointer || declarator_function_is_pointer) ? 0 : parsed_type_is_unsigned),
+                        ((declarator_is_pointer || declarator_function_is_pointer) ? 0 : parsed_type_is_void),
+                            (!(declarator_is_pointer || declarator_function_is_pointer) && (parsed_type_is_aggregate || declarator_has_array)),
+                                (!(declarator_is_pointer || declarator_function_is_pointer) && declarator_has_array),
                                     declarator_array_count, parsed_type_size,
                                         (declarator_calling_convention != TOK_EOF) ? declarator_calling_convention : parsed_calling_convention,
                                             object_fields, object_field_count);
