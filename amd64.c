@@ -18442,11 +18442,14 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
      */
     if (_accept (TOK_LPAREN)) {
     
+        char *paren_lvalue_name = 0;
         char *paren_call_name = 0;
         
         const char *paren_call_start = 0;
         const char *paren_call_caret = 0;
+        const char *paren_lvalue_end = 0;
         
+        unsigned long paren_lvalue_line = 0;
         unsigned long paren_call_line = 0;
         
         if (emit_load_deref_assignment_expression_to_reg_now (reg)) {
@@ -18572,6 +18575,14 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         
         if (emit_load_parenthesized_indirect_member_to_reg_now (reg)) {
             return;
+        }
+        
+        if (tok.kind == TOK_IDENT && tok.ident) {
+        
+            paren_lvalue_name = xstrdup (tok.ident);
+            paren_lvalue_end = tok.caret + strlen (tok.ident);
+            paren_lvalue_line = get_line_number ();
+        
         }
         
         if (tok.kind == TOK_IDENT && tok.ident &&
@@ -18816,11 +18827,42 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             }
         
         } else {
+        
+            int simple_parenthesized_lvalue = 0;
+            
+            const char *p = paren_lvalue_end;
+            const char *rparen_caret = tok.kind == TOK_RPAREN ? tok.caret : 0;
+            
+            if (paren_lvalue_name && p && rparen_caret) {
+            
+                while (p < rparen_caret && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) {
+                    p++;
+                }
+                
+                simple_parenthesized_lvalue = (p == rparen_caret);
+            
+            }
+            
             expect (TOK_RPAREN, ")");
+            
+            if (simple_parenthesized_lvalue && (tok.kind == TOK_INCR || tok.kind == TOK_DECR)) {
+            
+                enum token_kind postfix_op = tok.kind;
+                struct local_symbol *sym = find_local_symbol (paren_lvalue_name);
+                
+                get_token ();
+                emit_incdec_symbol_now (sym, paren_lvalue_name, postfix_op, paren_lvalue_line, 0, 0);
+            
+            }
+        
         }
         
         if (paren_call_name) {
             free (paren_call_name);
+        }
+        
+        if (paren_lvalue_name) {
+            free (paren_lvalue_name);
         }
         
         /*
@@ -38549,6 +38591,61 @@ static void emit_global_label (const char *name, int is_static) {
 
 }
 
+static int global_object_alignment (int size, int is_array, const int *field_sizes, int field_count, int is_aggregate) {
+
+    int align = 1;
+    int i;
+    
+    /* Arrays have the alignment of their element type, not their total size. */
+    if (is_array && field_count > 0 && field_sizes[0] > 0) {
+        size = field_sizes[0];
+    }
+    
+    if (is_aggregate && field_count > 0) {
+    
+        for (i = 0; i < field_count; i++) {
+        
+            int fsize = field_sizes[i];
+            int falign;
+            
+            /* Negative entries are explicit padding, not members. */
+            if (fsize <= 0) {
+                continue;
+            }
+            
+            falign = type_alignment (fsize);
+            
+            if (falign > align) {
+                align = falign;
+            }
+        
+        }
+        
+        return align;
+    
+    }
+    
+    return type_alignment (size);
+
+}
+
+static void emit_global_alignment (int align) {
+
+    if (align <= 1) {
+        return;
+    }
+
+    if (state->syntax & ASM_SYNTAX_MASM) {
+        masm_flush_data_line ();
+        fprintf (state->ofp, "align %d\n", align);
+    } else if (state->syntax & ASM_SYNTAX_NASM) {
+        fprintf (state->ofp, "align %d\n", align);
+    } else {
+        fprintf (state->ofp, "    .balign %d\n", align);
+    }
+
+}
+
 static void emit_global_data_label (const char *name, int is_static) {
 
     const char *asm_name = asm_global_symbol_name (name);
@@ -38598,6 +38695,7 @@ static void emit_global_object (const char *name, int size, int is_array, long a
     
         switch_section (SECTION_BSS);
         
+        emit_global_alignment (global_object_alignment (size, is_array, field_sizes, field_count, is_aggregate));
         emit_global_data_label (name, is_static);
         emit_global_space (total);
         
@@ -38606,6 +38704,8 @@ static void emit_global_object (const char *name, int size, int is_array, long a
     }
     
     switch_section (SECTION_DATA);
+    
+    emit_global_alignment (global_object_alignment (size, is_array, field_sizes, field_count, is_aggregate));
     emit_global_data_label (name, is_static);
     
     value_index = 0;
