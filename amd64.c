@@ -12901,8 +12901,33 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
             emit_load_assignment_rhs_expression_to_reg (lo);
             expect (TOK_RPAREN, ")");
             
-            emit_load_deref_reg_now (lo, DATA_INT & 0x1f);
-            emit_extend_pair_high_from_low (lo, hi, DATA_INT & 0x1f, 1);
+            /*
+             * The parenthesized operand may be a pointer expression rather
+             * than a plain int address, for example:
+             *
+             *     *((size_t *)ptr - 1)
+             *
+             * Preserve the pointed-to width recorded by the scalar expression
+             * parser.  Loading DATA_INT unconditionally truncated 64-bit
+             * objects reached through a grouped cast/arithmetic expression.
+             */
+            if (rhs_last_pointer_depth > 1) {
+                deref_size = DATA_PTR & 0x1f;
+            } else if (rhs_last_pointer_depth == 1 && rhs_last_pointed_size > 0) {
+                deref_size = rhs_last_pointed_size & 0x1f;
+            }
+            
+            if (deref_size == (DATA_LLONG & 0x1f)) {
+            
+                emit_copy_reg_now (addr_reg, lo);
+                emit_load_pair_from_deref_reg_now (lo, hi, addr_reg);
+            
+            } else {
+            
+                emit_load_deref_reg_ex_now (lo, deref_size, deref_unsigned);
+                emit_extend_pair_high_from_low (lo, hi, deref_size, deref_unsigned);
+            
+            }
             
             return;
         
