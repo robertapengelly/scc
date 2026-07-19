@@ -51,6 +51,8 @@ static int index_step_size (int size) {
 
 static int rhs_last_pointer_depth = 0;
 static int rhs_last_pointed_size = 0;
+static int rhs_last_scalar_is_unsigned = -1;
+
 static int pending_cast_subscript_is_unsigned = -1;
 
 static void set_rhs_last_pointer_info (int depth, int size) {
@@ -5885,6 +5887,7 @@ static void switch_section (int sec) {
 }*/
 
 static int last_deref_cast_type_is_floating = 0;
+static int last_deref_cast_type_is_unsigned = 0;
 
 static int parse_deref_cast_type_name (int *out_size) {
 
@@ -5912,9 +5915,12 @@ static int parse_deref_cast_type_name (int *out_size) {
     
     int size = DATA_INT & 0x1f;
     int ok = 0, i;
+    
+    int cast_is_unsigned = 0;
     int cast_is_floating = 0;
     
     last_deref_cast_type_is_floating = 0;
+    last_deref_cast_type_is_unsigned = 0;
     
     for (i = 0; i < saved_field_count && i < MAX_AGG_FIELDS; i++) {
         saved_fields[i] = parsed_field_sizes[i];
@@ -5932,6 +5938,8 @@ static int parse_deref_cast_type_name (int *out_size) {
         parse_type_spec ();
         
         size = parsed_type_size & 0x1f;
+        
+        cast_is_unsigned = parsed_type_is_unsigned;
         cast_is_floating = parsed_type_is_floating;
         
         if (tok.kind != TOK_RPAREN) {
@@ -5958,6 +5966,7 @@ static int parse_deref_cast_type_name (int *out_size) {
             get_token ();
             ok = 1;
             
+            last_deref_cast_type_is_unsigned = cast_is_unsigned;
             last_deref_cast_type_is_floating = cast_is_floating;
         
         } else {
@@ -17207,6 +17216,7 @@ static int current_floating_token_is_nonzero_now (void) {
 
 static void emit_load_assignment_rhs_to_reg (const char *reg) {
 
+    rhs_last_scalar_is_unsigned = -1;
     clear_rhs_last_pointer_info ();
     
     if (tok.kind == TOK_STAR && source_starts_double_deref_at_now (tok.caret)) {
@@ -17480,7 +17490,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             
             parse_type_spec ();
             
-            cast_base_size = parsed_type_size & 0x1f;
+            cast_base_size = parsed_type_is_aggregate ? parsed_type_size : (parsed_type_size & 0x1f);
             cast_is_unsigned = parsed_type_is_unsigned;
             
             if (parsed_type_tag_name[0]) {
@@ -18262,6 +18272,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         int deref_size = DATA_CHAR & 0x1f;
         int deref_pointer_depth = 0;
         int deref_pointed_size = 0;
+        int deref_is_unsigned = 0;
         
         if (emit_load_deref_parenthesized_deref_postfix_incdec_to_reg_now (reg)) {
             return;
@@ -18610,7 +18621,8 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                     deref_size = lhs_sym->pointed_size;
                 }
                 
-                emit_load_deref_reg_ex_now (reg, deref_size, get_global_symbol_pointer_depth (lhs_name) == 1 ? get_global_symbol_pointed_is_unsigned (lhs_name) : 0);
+                rhs_last_scalar_is_unsigned = (lhs_sym->pointer_depth == 1) ? (lhs_sym->pointed_is_unsigned ? 1 : 0) : -1;
+                emit_load_deref_reg_ex_now (reg, deref_size, lhs_sym->pointer_depth == 1 ? lhs_sym->pointed_is_unsigned : 0);
                 
                 if (lhs_sym->pointer_depth > 1) {
                     set_rhs_last_pointer_info (lhs_sym->pointer_depth - 1, lhs_sym->pointed_size);
@@ -18649,7 +18661,8 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                     deref_size = get_global_symbol_pointed_size (lhs_name);
                 }
                 
-                emit_load_deref_reg_now (reg, deref_size);
+                rhs_last_scalar_is_unsigned = (get_global_symbol_pointer_depth (lhs_name) == 1) ? (get_global_symbol_pointed_is_unsigned (lhs_name) ? 1 : 0) : -1;
+                emit_load_deref_reg_ex_now (reg, deref_size, get_global_symbol_pointer_depth (lhs_name) == 1 ? get_global_symbol_pointed_is_unsigned (lhs_name) : 0);
                 
                 if (get_global_symbol_pointer_depth (lhs_name) > 1) {
                     set_rhs_last_pointer_info (get_global_symbol_pointer_depth (lhs_name) - 1, get_global_symbol_pointed_size (lhs_name));
@@ -18685,6 +18698,8 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             
                 if (parse_deref_cast_type_name (&deref_size)) {
                 
+                    deref_is_unsigned = last_deref_cast_type_is_unsigned;
+                    
                     /*
                      * parse_deref_cast_type_name() consumes the cast parentheses
                      * only.  Do not consume a following ')' here: in expressions
@@ -19002,7 +19017,8 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         deref_pointer_depth = rhs_last_pointer_depth;
         deref_pointed_size = rhs_last_pointed_size;
         
-        emit_load_deref_reg_now (reg, deref_size);
+        rhs_last_scalar_is_unsigned = deref_is_unsigned ? 1 : 0;
+        emit_load_deref_reg_ex_now (reg, deref_size, deref_is_unsigned);
         
         if (deref_pointer_depth > 1) {
             set_rhs_last_pointer_info (deref_pointer_depth - 1, deref_pointed_size);
@@ -24176,6 +24192,10 @@ static int emit_load_assignment_binary_expression_prec_to_reg (const char *reg, 
     
     is_unsigned = rhs_current_operand_is_unsigned_now ();
     emit_load_assignment_rhs_to_reg (reg);
+    
+    if (rhs_last_scalar_is_unsigned >= 0) {
+        is_unsigned = rhs_last_scalar_is_unsigned;
+    }
     
     /*
      * Some statement-condition paths can leave a postfix member chain after
@@ -35432,6 +35452,28 @@ static void parse_global_initializer_values_padded_elements (int64_s *values, ch
 
 }
 
+static const char *global_initializer_symbol_name_now (void) {
+
+    struct local_symbol *local;
+    
+    if (tok.kind != TOK_IDENT) {
+        return 0;
+    }
+    
+    local = find_local_symbol (tok.ident);
+    
+    if (local && local->is_static && local->static_label) {
+        return local->static_label;
+    }
+    
+    if (find_global_symbol (tok.ident) >= 0) {
+        return tok.ident;
+    }
+    
+    return 0;
+
+}
+
 static void parse_global_initializer_values (int64_s *values, char **symbols, int max_values, int *count) {
 
     if (tok.kind == TOK_LBRACE) {
@@ -35648,7 +35690,7 @@ static void parse_global_initializer_values (int64_s *values, char **symbols, in
             
             }
         
-        } else if (global_initializer_accept_symbol_addresses && tok.kind == TOK_IDENT && find_global_symbol (tok.ident) >= 0) {
+        } else if (global_initializer_accept_symbol_addresses && global_initializer_symbol_name_now ()) {
         
             if (*count < max_values) {
             
@@ -35656,7 +35698,7 @@ static void parse_global_initializer_values (int64_s *values, char **symbols, in
                 values[*count].high = 0;
                 
                 if (symbols) {
-                    symbols[*count] = xstrdup (tok.ident);
+                    symbols[*count] = xstrdup (global_initializer_symbol_name_now ());
                 }
             
             }

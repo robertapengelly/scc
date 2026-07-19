@@ -38047,6 +38047,28 @@ static void parse_global_initializer_values_padded_elements (int64_s *values, ch
 
 }
 
+static const char *global_initializer_symbol_name_now (void) {
+
+    struct local_symbol *local;
+    
+    if (tok.kind != TOK_IDENT) {
+        return 0;
+    }
+    
+    local = find_local_symbol (tok.ident);
+    
+    if (local && local->is_static && local->static_label) {
+        return local->static_label;
+    }
+    
+    if (find_global_symbol (tok.ident) >= 0) {
+        return tok.ident;
+    }
+    
+    return 0;
+
+}
+
 static void parse_global_initializer_values (int64_s *values, char **symbols, int max_values, int *count) {
 
     if (tok.kind == TOK_LBRACE) {
@@ -38263,7 +38285,7 @@ static void parse_global_initializer_values (int64_s *values, char **symbols, in
             
             }
         
-        } else if (global_initializer_accept_symbol_addresses && tok.kind == TOK_IDENT && find_global_symbol (tok.ident) >= 0) {
+        } else if (global_initializer_accept_symbol_addresses && global_initializer_symbol_name_now ()) {
         
             if (*count < max_values) {
             
@@ -38271,7 +38293,7 @@ static void parse_global_initializer_values (int64_s *values, char **symbols, in
                 values[*count].high = 0;
                 
                 if (symbols) {
-                    symbols[*count] = xstrdup (tok.ident);
+                    symbols[*count] = xstrdup (global_initializer_symbol_name_now ());
                 }
             
             }
