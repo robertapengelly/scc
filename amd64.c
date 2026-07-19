@@ -230,7 +230,7 @@ static int amd64_relayout_aggregate_members (int owner_size, const char *owner_t
         
         }
         
-        size = member_infos[mi].size & 0x1f;
+        size = member_infos[mi].is_array ? member_infos[mi].size : (member_infos[mi].size & 0x1f);
         
         if (size <= 0) {
             size = DATA_INT & 0x1f;
