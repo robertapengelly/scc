@@ -12540,6 +12540,8 @@ static void emit_load_floating_rhs_expression_now (int result_size);
 static void emit_load_assignment_rhs_to_reg (const char *reg);
 
 static int emit_load_deref_assignment_expression_to_reg_now (const char *reg);
+static int emit_statement_rhs_const32_to_rdx_if_possible (void);
+
 static void emit_floating_stack_to_int_pair_now (const char *lo, const char *hi);
 static void emit_integer_pair_to_floating_stack_now (const char *lo, const char *hi, int size);
 
@@ -16308,6 +16310,23 @@ static int emit_parse_postfix_copy_source_address_now (const char *reg, struct l
             last_elem_size = elem_size;
             last_lvalue_size = elem_size;
             
+            /*
+             * A subscript changes the final lvalue from the whole array member
+             * to one array element.  Keep the postfix metadata synchronized or
+             * the 64-bit expression loader will later use the array's total
+             * storage size as the scalar load width (e.g. UINT8 Length[2]
+             * becomes a 16-bit load for Length[i]).
+             */
+            if (postfix_member_seen) {
+            
+                postfix_member_size = index_step_size (elem_size);
+                
+                if (postfix_member_pointer_depth > 0) {
+                    postfix_member_pointer_depth--;
+                }
+            
+            }
+            
             current_object_size = elem_size;
             continue;
         
@@ -19101,7 +19120,10 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                         emit_push_reg_now ("rdx");
                         emit_push_reg_now (reg);
                         
-                        emit_load_assignment_rhs_expression_to_reg ("rdx");
+                        if (!emit_statement_rhs_const32_to_rdx_if_possible ()) {
+                            emit_load_assignment_rhs_expression_to_reg ("rdx");
+                        }
+                        
                         emit_pop_reg_now (reg);
                         
                         emit_assignment_binary_op (op, 0);
@@ -28517,9 +28539,11 @@ static int parse_parenthesized_pointer_member_indirect_assignment_statement (voi
                     emit_load_member_from_addr_reg_now ("rax", "rdx", 0, prefix_deref_size);
                     emit_push_reg_now ("rax");
                     
-                    emit_load_assignment_rhs_expression_to_reg ("rdx");
-                    emit_pop_reg_now ("rax");
+                    if (!emit_statement_rhs_const32_to_rdx_if_possible ()) {
+                        emit_load_assignment_rhs_expression_to_reg ("rdx");
+                    }
                     
+                    emit_pop_reg_now ("rax");
                     emit_assignment_binary_op (prefix_assign_op, 0);
                 
                 }
@@ -28695,7 +28719,11 @@ static int parse_parenthesized_pointer_member_indirect_assignment_statement (voi
                     emit_push_reg_now ("rdx");
                     emit_load_member_from_addr_reg_now ("rax", "rdx", 0, deref_size);
                     emit_push_reg_now ("rax");
-                    emit_load_assignment_rhs_expression_to_reg ("rdx");
+                    
+                    if (!emit_statement_rhs_const32_to_rdx_if_possible ()) {
+                        emit_load_assignment_rhs_expression_to_reg ("rdx");
+                    }
+                    
                     emit_pop_reg_now ("rax");
                     emit_assignment_binary_op (op, 0);
                 
@@ -28991,7 +29019,11 @@ static int parse_parenthesized_pointer_member_indirect_assignment_statement (voi
         
             emit_load_member_from_addr_reg_now ("rax", "rdx", 0, deref_size);
             emit_push_reg_now ("rax");
-            emit_load_assignment_rhs_expression_to_reg ("rdx");
+            
+            if (!emit_statement_rhs_const32_to_rdx_if_possible ()) {
+                emit_load_assignment_rhs_expression_to_reg ("rdx");
+            }
+            
             emit_pop_reg_now ("rax");
             emit_assignment_binary_op (op, 0);
         
@@ -29401,9 +29433,11 @@ static int parse_cast_indirect_assignment_statement (int lvalue_outer_paren_dept
         emit_pop_reg_now ("rax");
         
         emit_load_deref_reg_ex_now ("rax", deref_size, deref_is_unsigned);
-        
         emit_push_reg_now ("rax");
-        emit_load_assignment_rhs_expression_to_reg ("rdx");
+        
+        if (!emit_statement_rhs_const32_to_rdx_if_possible ()) {
+            emit_load_assignment_rhs_expression_to_reg ("rdx");
+        }
         
         emit_pop_reg_now ("rax");
         
@@ -29494,7 +29528,10 @@ static int parse_parenthesized_indirect_assignment_statement (void) {
         emit_load_deref_reg_now ("rax", deref_size);
         emit_push_reg_now ("rax");
         
-        emit_load_assignment_rhs_expression_to_reg ("rdx");
+        if (!emit_statement_rhs_const32_to_rdx_if_possible ()) {
+            emit_load_assignment_rhs_expression_to_reg ("rdx");
+        }
+        
         emit_pop_reg_now ("rax");
         
         emit_assignment_binary_op (op, 0);
@@ -29624,7 +29661,10 @@ static int parse_indirect_assignment_statement (void) {
                         emit_load_member_from_addr_reg_now ("rax", "rcx", 0, deref_size);
                         emit_push_reg_now ("rax");
                         
-                        emit_load_assignment_rhs_expression_to_reg ("rdx");
+                        if (!emit_statement_rhs_const32_to_rdx_if_possible ()) {
+                            emit_load_assignment_rhs_expression_to_reg ("rdx");
+                        }
+                        
                         emit_pop_reg_now ("rax");
                         
                         emit_assignment_binary_op (op, 0);
@@ -29823,7 +29863,11 @@ static int parse_indirect_assignment_statement (void) {
                 emit_push_reg_now ("rdx");
                 emit_load_member_from_addr_reg_now ("rax", "rdx", 0, deref_size);
                 emit_push_reg_now ("rax");
-                emit_load_assignment_rhs_expression_to_reg ("rdx");
+                
+                if (!emit_statement_rhs_const32_to_rdx_if_possible ()) {
+                    emit_load_assignment_rhs_expression_to_reg ("rdx");
+                }
+                
                 emit_pop_reg_now ("rax");
                 emit_assignment_binary_op (op, 0);
             
@@ -30004,7 +30048,11 @@ static int parse_indirect_assignment_statement (void) {
             
                 emit_load_member_from_addr_reg_now ("rax", "rdx", 0, deref_size);
                 emit_push_reg_now ("rax");
-                emit_load_assignment_rhs_expression_to_reg ("rdx");
+                
+                if (!emit_statement_rhs_const32_to_rdx_if_possible ()) {
+                    emit_load_assignment_rhs_expression_to_reg ("rdx");
+                }
+                
                 emit_pop_reg_now ("rax");
                 emit_assignment_binary_op (op, 0);
             
@@ -30144,7 +30192,10 @@ static int parse_indirect_assignment_statement (void) {
             emit_push_reg_now ("rdx");
             emit_push_reg_now ("rax");
             
-            emit_load_assignment_rhs_expression_to_reg ("rdx");
+            if (!emit_statement_rhs_const32_to_rdx_if_possible ()) {
+                emit_load_assignment_rhs_expression_to_reg ("rdx");
+            }
+            
             emit_pop_reg_now ("rax");
             
             emit_assignment_binary_op (op, 0);
@@ -30417,7 +30468,11 @@ static int parse_parenthesized_indirect_member_assignment_statement (void) {
                 emit_load_member_from_addr_reg_now ("rax", "rdx", 0, deref_size);
                 emit_push_reg_now ("rdx");
                 emit_push_reg_now ("rax");
-                emit_load_assignment_rhs_expression_to_reg ("rdx");
+                
+                if (!emit_statement_rhs_const32_to_rdx_if_possible ()) {
+                    emit_load_assignment_rhs_expression_to_reg ("rdx");
+                }
+                
                 emit_pop_reg_now ("rax");
                 emit_assignment_binary_op (op, 0);
                 emit_pop_reg_now ("rdx");
@@ -30499,7 +30554,11 @@ static int parse_parenthesized_indirect_member_assignment_statement (void) {
             emit_load_member_from_addr_reg_now ("rax", "rdx", member_offset, member_size);
             emit_push_reg_now ("rdx");
             emit_push_reg_now ("rax");
-            emit_load_assignment_rhs_expression_to_reg ("rdx");
+            
+            if (!emit_statement_rhs_const32_to_rdx_if_possible ()) {
+                emit_load_assignment_rhs_expression_to_reg ("rdx");
+            }
+            
             emit_pop_reg_now ("rax");
             emit_assignment_binary_op (op, 0);
             emit_pop_reg_now ("rdx");
@@ -31142,7 +31201,11 @@ static int parse_identifier_assignment_statement (void) {
                 emit_load_member_from_addr_reg_now ("rax", "rdx", 0, elem_size);
                 emit_push_reg_now ("rdx");
                 emit_push_reg_now ("rax");
-                emit_load_assignment_rhs_expression_to_reg ("rdx");
+                
+                if (!emit_statement_rhs_const32_to_rdx_if_possible ()) {
+                    emit_load_assignment_rhs_expression_to_reg ("rdx");
+                }
+                
                 emit_pop_reg_now ("rax");
                 emit_assignment_binary_op (op, 0);
                 emit_pop_reg_now ("rdx");
@@ -31229,7 +31292,11 @@ static int parse_identifier_assignment_statement (void) {
                             emit_load_member_from_addr_reg_now ("rax", "rdx", 0, elem_size);
                             emit_push_reg_now ("rdx");
                             emit_push_reg_now ("rax");
-                            emit_load_assignment_rhs_expression_to_reg ("rdx");
+                            
+                            if (!emit_statement_rhs_const32_to_rdx_if_possible ()) {
+                                emit_load_assignment_rhs_expression_to_reg ("rdx");
+                            }
+                            
                             emit_pop_reg_now ("rax");
                             emit_assignment_binary_op (op, 0);
                             emit_pop_reg_now ("rdx");
@@ -31330,7 +31397,11 @@ static int parse_identifier_assignment_statement (void) {
                             emit_load_member_from_addr_reg_now ("rax", "rdx", member_offset, member_size);
                             emit_push_reg_now ("rdx");
                             emit_push_reg_now ("rax");
-                            emit_load_assignment_rhs_expression_to_reg ("rdx");
+                            
+                            if (!emit_statement_rhs_const32_to_rdx_if_possible ()) {
+                                emit_load_assignment_rhs_expression_to_reg ("rdx");
+                            }
+                            
                             emit_pop_reg_now ("rax");
                             emit_assignment_binary_op (op, 0);
                             emit_pop_reg_now ("rdx");
@@ -36692,7 +36763,10 @@ static int parse_postfix_assignment_statement_now (void) {
         emit_load_member_from_addr_reg_now ("rax", "rdx", 0, lvalue_size);
         emit_push_reg_now ("rax");
         
-        emit_load_assignment_rhs_expression_to_reg ("rdx");
+        if (!emit_statement_rhs_const32_to_rdx_if_possible ()) {
+            emit_load_assignment_rhs_expression_to_reg ("rdx");
+        }
+        
         emit_pop_reg_now ("rax");
         
         emit_assignment_binary_op (assign_op, 0);
