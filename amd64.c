@@ -11672,13 +11672,13 @@ static int expression_text_mentions_64bit_symbol (const char *p) {
             
                 struct local_symbol *sym = find_local_symbol (name);
                 
-                if (sym && sym->size == (DATA_LLONG & 0x1f) && !sym->is_floating && !sym->is_array && !sym->tag_name) {
+                if (sym && sym->size == (DATA_LLONG & 0x1f) && !sym->is_floating && !sym->is_array && !sym->tag_name && sym->pointer_depth == 0) {
                     return 1;
                 }
             
             }
             
-            if (find_global_symbol (name) >= 0 && get_global_symbol_size (name) == (DATA_LLONG & 0x1f) && !get_global_symbol_floating (name) && !get_global_symbol_array (name) && !get_global_symbol_tag_name (name)) {
+            if (find_global_symbol (name) >= 0 && get_global_symbol_size (name) == (DATA_LLONG & 0x1f) && !get_global_symbol_floating (name) && !get_global_symbol_array (name) && !get_global_symbol_tag_name (name) && get_global_symbol_pointer_depth (name) == 0) {
                 return 1;
             }
             
