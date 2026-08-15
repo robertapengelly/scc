@@ -12590,6 +12590,24 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
                 
                 }
                 
+                /*
+                 * A cast to a scalar type narrower than long long means the
+                 * operand itself is a scalar expression, even when the final
+                 * assignment destination is 64-bit.  Keeping such operands in
+                 * the pair parser makes unary forms such as (int) **p hit the
+                 * pair parser's single-dereference-only TOK_STAR path.  Parse
+                 * the operand with the normal scalar parser and widen the cast
+                 * result into the requested pair instead.
+                 */
+                if (!cast_is_pointer && !last_cast_type_is_floating && (cast_size & 0x1f) != (DATA_LLONG & 0x1f)) {
+                
+                    emit_load_assignment_rhs_to_reg (lo);
+                    emit_extend_pair_high_from_low (lo, hi, cast_size, cast_is_unsigned);
+                    
+                    return;
+                
+                }
+                
                 emit_load_assignment_rhs_to_pair (lo, hi);
                 
                 {
