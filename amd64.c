@@ -13302,26 +13302,98 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
                 return;
             }
             
-            if (state->ofp) {
+            {
             
-                if (state->syntax & ASM_SYNTAX_INTEL) {
+                int return_pointer = get_global_symbol_pointer_depth (name) > 0;
+                int return_size = return_pointer ? (DATA_PTR & 0x1f) : get_global_symbol_size (name);
+                int return_unsigned = return_pointer ? 1 : get_global_symbol_unsigned (name);
                 
-                    if (strcmp (lo, "rax") != 0) {
-                        fprintf (state->ofp, "    mov %s, rax\n", lo);
-                    }
+                const char *qlo = amd64_qword_reg_name_from_any (lo);
+                const char *dlo = amd64_dword_reg_name_from_any (lo);
+                const char *qhi = amd64_qword_reg_name_from_any (hi);
+                
+                if (state->ofp) {
+                
+                    if (state->syntax & ASM_SYNTAX_INTEL) {
                     
-                    if (strcmp (hi, "rdx") != 0) {
-                        fprintf (state->ofp, "    mov %s, rdx\n", hi);
-                    }
-                
-                } else {
-                
-                    if (strcmp (lo, "rax") != 0) {
-                        fprintf (state->ofp, "    movq %%rax, %%%s\n", lo);
-                    }
+                        if (return_size == (DATA_LLONG & 0x1f) || return_pointer) {
+                        
+                            if (strcmp (qlo, "rax") != 0) {
+                                fprintf (state->ofp, "    mov %s, rax\n", qlo);
+                            }
+                        
+                        } else if (return_size == (DATA_CHAR & 0x1f)) {
+                        
+                            if (return_unsigned) {
+                                fprintf (state->ofp, "    movzx %s, al\n", dlo);
+                            } else {
+                                fprintf (state->ofp, "    movsx %s, al\n", qlo);
+                            }
+                        
+                        } else if (return_size == (DATA_SHORT & 0x1f)) {
+                        
+                            if (return_unsigned) {
+                                fprintf (state->ofp, "    movzx %s, ax\n", dlo);
+                            } else {
+                                fprintf (state->ofp, "    movsx %s, ax\n", qlo);
+                            }
+                        
+                        } else {
+                        
+                            if (return_unsigned) {
+                            
+                                if (strcmp (dlo, "eax") != 0) {
+                                    fprintf (state->ofp, "    mov %s, eax\n", dlo);
+                                }
+                            
+                            } else {
+                                fprintf (state->ofp, "    movsxd %s, eax\n", qlo);
+                            }
+                        
+                        }
+                        
+                        fprintf (state->ofp, "    xor %s, %s\n", qhi, qhi);
                     
-                    if (strcmp (hi, "rdx") != 0) {
-                        fprintf (state->ofp, "    movq %%rdx, %%%s\n", hi);
+                    } else {
+                    
+                        if (return_size == (DATA_LLONG & 0x1f) || return_pointer) {
+                        
+                            if (strcmp (qlo, "rax") != 0) {
+                                fprintf (state->ofp, "    movq %%rax, %%%s\n", qlo);
+                            }
+                        
+                        } else if (return_size == (DATA_CHAR & 0x1f)) {
+                        
+                            if (return_unsigned) {
+                                fprintf (state->ofp, "    movzbl %%al, %%%s\n", dlo);
+                            } else {
+                                fprintf (state->ofp, "    movsbq %%al, %%%s\n", qlo);
+                            }
+                        
+                        } else if (return_size == (DATA_SHORT & 0x1f)) {
+                        
+                            if (return_unsigned) {
+                                fprintf (state->ofp, "    movzwl %%ax, %%%s\n", dlo);
+                            } else {
+                                fprintf (state->ofp, "    movswq %%ax, %%%s\n", qlo);
+                            }
+                        
+                        } else {
+                        
+                            if (return_unsigned) {
+                            
+                                if (strcmp (dlo, "eax") != 0) {
+                                    fprintf (state->ofp, "    movl %%eax, %%%s\n", dlo);
+                                }
+                            
+                            } else {
+                                fprintf (state->ofp, "    movslq %%eax, %%%s\n", qlo);
+                            }
+                        
+                        }
+                        
+                        fprintf (state->ofp, "    xorq %%%s, %%%s\n", qhi, qhi);
+                    
                     }
                 
                 }

@@ -11479,10 +11479,23 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
             }
             
             emit_load_assignment_rhs_expression_to_reg (lo);
+            
+            if (rhs_last_pointer_depth > 1) {
+            
+                deref_size = DATA_PTR & 0x1f;
+                deref_unsigned = 1;
+            
+            } else if (rhs_last_pointer_depth == 1) {
+            
+                deref_size = rhs_last_pointed_size > 0 ? rhs_last_pointed_size : (DATA_INT & 0x1f);
+                deref_unsigned = rhs_last_scalar_is_unsigned >= 0 ? rhs_last_scalar_is_unsigned : 0;
+            
+            }
+            
             expect (TOK_RPAREN, ")");
             
-            emit_load_deref_reg_now (lo, DATA_INT & 0x1f);
-            emit_extend_pair_high_from_low (lo, hi, DATA_INT & 0x1f, 1);
+            emit_load_deref_reg_ex_now (lo, deref_size, deref_unsigned);
+            emit_extend_pair_high_from_low (lo, hi, deref_size, deref_unsigned);
             
             return;
         
@@ -11835,27 +11848,52 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
                 return;
             }
             
-            if (state->ofp) {
+            {
             
-                if (state->syntax & ASM_SYNTAX_INTEL) {
+                int return_size = get_global_symbol_pointer_depth (name) > 0 ? (DATA_PTR & 0x1f) : get_global_symbol_size (name);
+                int return_unsigned = get_global_symbol_pointer_depth (name) > 0 ? 1 : get_global_symbol_unsigned (name);
                 
-                    if (strcmp (lo, "eax") != 0) {
-                        fprintf (state->ofp, "    mov %s, eax\n", lo);
-                    }
+                if ((return_size & 0x1f) == (DATA_LLONG & 0x1f)) {
+                
+                    if (state->ofp) {
                     
-                    if (strcmp (hi, "edx") != 0) {
-                        fprintf (state->ofp, "    mov %s, edx\n", hi);
+                        if (state->syntax & ASM_SYNTAX_INTEL) {
+                        
+                            if (strcmp (lo, "eax") != 0) {
+                                fprintf (state->ofp, "    mov %s, eax\n", lo);
+                            }
+                            
+                            if (strcmp (hi, "edx") != 0) {
+                                fprintf (state->ofp, "    mov %s, edx\n", hi);
+                            }
+                        
+                        } else {
+                        
+                            if (strcmp (lo, "eax") != 0) {
+                                fprintf (state->ofp, "    movl %%eax, %%%s\n", lo);
+                            }
+                            
+                            if (strcmp (hi, "edx") != 0) {
+                                fprintf (state->ofp, "    movl %%edx, %%%s\n", hi);
+                            }
+                        
+                        }
+                    
                     }
                 
                 } else {
                 
-                    if (strcmp (lo, "eax") != 0) {
-                        fprintf (state->ofp, "    movl %%eax, %%%s\n", lo);
+                    if (strcmp (lo, "eax") != 0 && state->ofp) {
+                    
+                        if (state->syntax & ASM_SYNTAX_INTEL) {
+                            fprintf (state->ofp, "    mov %s, eax\n", lo);
+                        } else {
+                            fprintf (state->ofp, "    movl %%eax, %%%s\n", lo);
+                        }
+                    
                     }
                     
-                    if (strcmp (hi, "edx") != 0) {
-                        fprintf (state->ofp, "    movl %%edx, %%%s\n", hi);
-                    }
+                    emit_extend_pair_high_from_low (lo, hi, return_size, return_unsigned);
                 
                 }
             
