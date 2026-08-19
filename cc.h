@@ -4,10 +4,10 @@
 #ifndef     _CC_H
 #define     _CC_H
 
+#include    <stdint.h>
 #include    <stdio.h>
 
 #include    "list.h"
-#include    "stdint.h"
 #include    "vector.h"
 
 struct cc_state {

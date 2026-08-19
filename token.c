@@ -765,7 +765,7 @@ static int chrpos (char *s, int ch) {
 
 }
 
-#include    "stdint.h"
+#include    <stdint.h>
 
 static int hex_char (uint64_t *out, struct token *tok, int idx) {
 

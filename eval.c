@@ -3,6 +3,7 @@
  *****************************************************************************/
 #include    <assert.h>
 #include    <ctype.h>
+#include    <stdint.h>
 #include    <stdio.h>
 #include    <stdlib.h>
 #include    <string.h>
@@ -13,7 +14,6 @@
 #include    "lib.h"
 #include    "macro.h"
 #include    "report.h"
-#include    "stdint.h"
 
 static uint64_t eval_expr (uint64_t lhs, char *start, char **pp, int outer_prec, int brackets);
 
