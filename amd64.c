@@ -6222,90 +6222,6 @@ static void switch_section (int sec) {
 
 }
 
-static int current_token_spells_identifier_now (const char *name) {
-
-    const char *p;
-    size_t len;
-    
-    if (!name || !*name) {
-        return 0;
-    }
-    
-    if (tok.ident && strcmp (tok.ident, name) == 0) {
-        return 1;
-    }
-    
-    /*
-     * Some declaration modifiers are real tokens rather than TOK_IDENT.
-     * Use the original source spelling as a generic fallback so the
-     * declaration parser can accept them in either specifier position:
-     *
-     *     __dllexport void f(void);
-     *     void __dllexport f(void);
-     */
-    p = tok.caret ? tok.caret : tok.start;
-    
-    if (!p) {
-       return 0;
-    }
-    
-    while (*p == ' ' || *p == '\t') {
-        p++;
-    }
-    
-    len = strlen (name);
-    
-    if (strncmp (p, name, len) != 0) {
-        return 0;
-    }
-    
-    if ((p[len] >= 'A' && p[len] <= 'Z') ||
-        (p[len] >= 'a' && p[len] <= 'z') ||
-        (p[len] >= '0' && p[len] <= '9') ||
-        p[len] == '_') {
-        return 0;
-    }
-    
-    return 1;
-
-}
-
-static void consume_post_type_declaration_modifiers_now (int *out_dllimport, int *out_dllexport) {
-
-    for (;;) {
-    
-        if (current_token_spells_identifier_now ("__dllimport")) {
-        
-            if (out_dllimport) {
-                *out_dllimport = 1;
-            }
-            
-            parsed_dllimport = 1;
-            get_token ();
-            
-            continue;
-        
-        }
-        
-        if (current_token_spells_identifier_now ("__dllexport")) {
-        
-            if (out_dllexport) {
-                *out_dllexport = 1;
-            }
-            
-            parsed_dllexport = 1;
-            get_token ();
-            
-            continue;
-        
-        }
-        
-        break;
-    
-    }
-
-}
-
 static int last_deref_cast_type_is_floating = 0;
 
 static int parse_deref_cast_type_name (int *out_size) {
@@ -37617,7 +37533,7 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     if (emit_body) {
     
         if (parsed_dllimport) {
-            report_line_at (get_filename (), last_declarator_name_line, REPORT_ERROR, last_declarator_name_start, last_declarator_name_caret, "function '%s' cannot be defined with '__dllimport'", name);
+            report_line_at (get_filename (), last_declarator_name_line, REPORT_ERROR, last_declarator_name_start, last_declarator_name_caret, "function '%s' cannot be defined with '__declspec(dllimport)'", name);
         }
         
         should_emit = add_global_symbol (name, GLOBAL_SYMBOL_FUNCTION, 0, last_declarator_name_start, last_declarator_name_caret, last_declarator_name_line);
@@ -39278,7 +39194,6 @@ static void parse_external_after_type (void) {
         declaration_dllimport = parsed_dllimport;
         declaration_dllexport = parsed_dllexport;
         
-        consume_post_type_declaration_modifiers_now (&declaration_dllimport, &declaration_dllexport);
         parse_declarator (&name);
         
         declaration_dllimport = declaration_dllimport || parsed_dllimport || declarator_dllimport;

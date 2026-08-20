@@ -14,6 +14,7 @@
 #include    "vector.h"
 
 struct typedef_entry typedef_names[MAX_TYPEDEF_NAMES];
+
 int typedef_name_count = 0;
 int anonymous_aggregate_owner_id = 1;
 
@@ -404,42 +405,85 @@ static void parse_decl_modifier (void) {
         if (parsed_calling_convention == TOK_EOF && declarator_calling_convention == TOK_EOF) {
             parsed_calling_convention = TOK_STDCALL;
         }
-    
-    } else if (tok.kind == TOK_DLLEXPORT) {
-    
-        if (parsed_dllexport) {
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '__dllexport'");
-        } else if (parsed_dllimport) {
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "'__dllexport' and '__dllimport' cannot both be specified");
-        } else {
         
-            declarator_dllexport = 1;
-            parsed_dllexport = 1;
-        
-        }
-    
-    } else if (tok.kind == TOK_DLLIMPORT) {
-    
-        if (parsed_dllimport) {
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '__dllimport'");
-        } else if (parsed_dllexport) {
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "'__dllexport' and '__dllimport' cannot both be specified");
-        } else {
-        
-            declarator_dllimport = 1;
-            parsed_dllimport = 1;
-        
-        }
+        get_token ();
+        return;
     
     }
     
-    get_token ();
+    if (tok.kind == TOK_DECLSPEC) {
+    
+        const char *declspec_start = tok.report_start;
+        const char *declspec_caret = tok.report_caret;
+        
+        get_token ();
+        
+        if (!_accept (TOK_LPAREN)) {
+        
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, declspec_start, declspec_caret, "expected '(' after '__declspec'");
+            return;
+        
+        }
+        
+        if (tok.kind != TOK_IDENT || !tok.ident) {
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected attribute in '__declspec'");
+        } else if (strcmp (tok.ident, "dllexport") == 0) {
+        
+            if (parsed_dllexport) {
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '__declspec(dllexport)'");
+            } else if (parsed_dllimport) {
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "'__declspec(dllexport)' and '__declspec(dllimport)' cannot both be specified");
+            } else {
+            
+                declarator_dllexport = 1;
+                parsed_dllexport = 1;
+            
+            }
+            
+            get_token ();
+        
+        } else if (strcmp (tok.ident, "dllimport") == 0) {
+        
+            if (parsed_dllimport) {
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '__declspec(dllimport)'");
+            } else if (parsed_dllexport) {
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "'__declspec(dllexport)' and '__declspec(dllimport)' cannot both be specified");
+            } else {
+            
+                declarator_dllimport = 1;
+                parsed_dllimport = 1;
+            
+            }
+            
+            get_token ();
+         
+        } else if (strcmp (tok.ident, "packed") == 0) {
+        
+            if (parsed_type_is_packed) {
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '__declspec(packed)'");
+            } else {
+                parsed_type_is_packed = 1;
+            }
+            
+            get_token ();
+        
+        } else {
+        
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "unsupported '__declspec' attribute '%s'", tok.ident);
+            get_token ();
+        
+        }
+        
+        expect (TOK_RPAREN, ")");
+        return;
+    
+    }
 
 }
 
 void parse_declarator_inner (char **out_name) {
 
-    while (tok.kind == TOK_STDCALL || tok.kind == TOK_DLLEXPORT || tok.kind == TOK_DLLIMPORT) {
+    while (tok.kind == TOK_STDCALL || tok.kind == TOK_DECLSPEC) {
     
         if (tok.kind == TOK_STDCALL) {
         
@@ -462,7 +506,7 @@ void parse_declarator_inner (char **out_name) {
         
         get_token ();
         
-        while (tok.kind == TOK_CONST || tok.kind == TOK_VOLATILE || tok.kind == TOK_RESTRICT || tok.kind == TOK_STDCALL || tok.kind == TOK_DLLEXPORT || tok.kind == TOK_DLLIMPORT) {
+        while (tok.kind == TOK_CONST || tok.kind == TOK_VOLATILE || tok.kind == TOK_RESTRICT || tok.kind == TOK_STDCALL || tok.kind == TOK_DECLSPEC) {
         
             if (tok.kind == TOK_STDCALL) {
             
@@ -472,7 +516,7 @@ void parse_declarator_inner (char **out_name) {
                 
                 get_token ();
             
-            } else if (tok.kind == TOK_DLLEXPORT || tok.kind == TOK_DLLIMPORT) {
+            } else if (tok.kind == TOK_DECLSPEC) {
                 parse_decl_modifier ();
             } else {
                 get_token ();
@@ -1781,7 +1825,7 @@ int is_type_start (enum token_kind k) {
             return 0;
         
         case TOK_AUTO:          case TOK_REGISTER:      case TOK_STATIC:
-        case TOK_DLLEXPORT:     case TOK_DLLIMPORT:     case TOK_PACKED:
+        case TOK_DECLSPEC:      case TOK_STDCALL:
         case TOK_EXTERN:        case TOK_TYPEDEF:       case TOK_INLINE:
         case TOK_CONST:         case TOK_VOLATILE:      case TOK_RESTRICT:
         case TOK_SIGNED:        case TOK_UNSIGNED:
@@ -2447,11 +2491,11 @@ void parse_type_spec (void) {
     
     while (tok.kind == TOK_AUTO || tok.kind == TOK_REGISTER || tok.kind == TOK_STATIC ||
            tok.kind == TOK_EXTERN || tok.kind == TOK_TYPEDEF || tok.kind == TOK_CONST ||
-           tok.kind == TOK_PACKED || tok.kind == TOK_VOLATILE || tok.kind == TOK_SIGNED || tok.kind == TOK_UNSIGNED ||
+           tok.kind == TOK_VOLATILE || tok.kind == TOK_SIGNED || tok.kind == TOK_UNSIGNED ||
            tok.kind == TOK_SHORT || tok.kind == TOK_LONG || tok.kind == TOK_CHAR ||
            tok.kind == TOK_INT || tok.kind == TOK_VOID || tok.kind == TOK_FLOAT ||
            tok.kind == TOK_DOUBLE || tok.kind == TOK_INLINE || tok.kind == TOK_RESTRICT ||
-           tok.kind == TOK_DLLEXPORT || tok.kind == TOK_DLLIMPORT || tok.kind == TOK_STDCALL || token_is_ms_int_type_name ()) {
+           tok.kind == TOK_DECLSPEC || tok.kind == TOK_STDCALL || token_is_ms_int_type_name ()) {
         
         saw = 1;
         
@@ -2462,7 +2506,7 @@ void parse_type_spec (void) {
             saw_real_type = 1;
         }
         
-        if (tok.kind == TOK_STDCALL || tok.kind == TOK_DLLEXPORT || tok.kind == TOK_DLLIMPORT) {
+        if (tok.kind == TOK_STDCALL || tok.kind == TOK_DECLSPEC) {
         
             parse_decl_modifier ();
             continue;
@@ -2499,8 +2543,6 @@ void parse_type_spec (void) {
         
         } else if (tok.kind == TOK_INLINE) {
             parsed_type_is_inline = 1;
-        } else if (tok.kind == TOK_PACKED) {
-            parsed_type_is_packed = 1;
         } else if (tok.kind == TOK_CHAR) {
         
             if (parsed_type_size == DATA_CHAR) {
@@ -2722,10 +2764,13 @@ void parse_type_spec (void) {
         clear_parsed_fields ();
         get_token ();
         
-        if (tok.kind == TOK_PACKED) {
+        while (tok.kind == TOK_DECLSPEC) {
         
-            aggregate_is_packed = 1;
-            get_token ();
+            parse_decl_modifier ();
+            
+            if (parsed_type_is_packed) {
+                aggregate_is_packed = 1;
+            }
         
         }
         
@@ -2741,10 +2786,13 @@ void parse_type_spec (void) {
         
         }
         
-        if (tok.kind == TOK_PACKED) {
+        while (tok.kind == TOK_DECLSPEC) {
         
-            aggregate_is_packed = 1;
-            get_token ();
+            parse_decl_modifier ();
+            
+            if (parsed_type_is_packed) {
+                aggregate_is_packed = 1;
+            }
         
         }
         

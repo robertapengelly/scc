@@ -34980,7 +34980,7 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     if (emit_body) {
     
         if (parsed_dllimport) {
-            report_line_at (get_filename (), last_declarator_name_line, REPORT_ERROR, last_declarator_name_start, last_declarator_name_caret, "function '%s' cannot be defined with '__dllimport'", name);
+            report_line_at (get_filename (), last_declarator_name_line, REPORT_ERROR, last_declarator_name_start, last_declarator_name_caret, "function '%s' cannot be defined with '__declspec(dllimport)'", name);
         }
         
         should_emit = add_global_symbol (name, GLOBAL_SYMBOL_FUNCTION, 0, last_declarator_name_start, last_declarator_name_caret, last_declarator_name_line);
