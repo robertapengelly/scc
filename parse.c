@@ -23,8 +23,10 @@ enum token_kind postfix_member_calling_convention = TOK_EOF;
 enum token_kind parsed_calling_convention = TOK_EOF;
 
 struct vector vec_dllexports = { 0 };
+
 int parsed_dllexport = 0;
 int parsed_dllimport = 0;
+int parsed_noreturn = 0;
 
 int parsed_type_size = DATA_NONE;
 int parsed_type_is_inline = 0;
@@ -57,9 +59,11 @@ int declarator_function_has_prototype = 0;
 int declarator_function_is_variadic = 0;
 int declarator_array_unsized = 0;
 
-int declarator_is_pointer = 0;
 int declarator_pointer_depth = 0;
+int declarator_is_pointer = 0;
+
 int declarator_has_array = 0;
+int declarator_noreturn = 0;
 
 int declarator_dllexport = 0;
 int declarator_dllimport = 0;
@@ -467,6 +471,19 @@ static void parse_decl_modifier (void) {
             
             get_token ();
         
+        } else if (strcmp (tok.ident, "noreturn") == 0) {
+        
+            if (parsed_noreturn || declarator_noreturn) {
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '__declspec(noreturn)'");
+            } else {
+            
+                declarator_noreturn = 1;
+                parsed_noreturn = 1;
+            
+            }
+            
+            get_token ();
+        
         } else {
         
             report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "unsupported '__declspec' attribute '%s'", tok.ident);
@@ -580,6 +597,7 @@ void parse_declarator (char **out_name) {
     
     int saved_declarator_dllexport = declarator_dllexport;
     int saved_declarator_dllimport = declarator_dllimport;
+    int saved_declarator_noreturn = declarator_noreturn;
     
     unsigned long saved_captured_declarator_name_line = captured_declarator_name_line;
     
@@ -594,6 +612,7 @@ void parse_declarator (char **out_name) {
         
         declarator_dllexport = 0;
         declarator_dllimport = 0;
+        declarator_noreturn = 0;
         
         captured_declarator_name_location = 0;
         captured_declarator_name_start = 0;
@@ -658,6 +677,7 @@ void parse_declarator (char **out_name) {
         declarator_calling_convention = saved_declarator_calling_convention;
         declarator_dllexport = saved_declarator_dllexport;
         declarator_dllimport = saved_declarator_dllimport;
+        declarator_noreturn = saved_declarator_noreturn;
     
     }
 
@@ -2486,6 +2506,7 @@ void parse_type_spec (void) {
     
     parsed_dllexport = 0;
     parsed_dllimport = 0;
+    parsed_noreturn = 0;
     
     clear_parsed_fields ();
     

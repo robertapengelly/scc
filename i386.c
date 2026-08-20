@@ -70,8 +70,11 @@ static void clear_rhs_last_pointer_info (void) {
 }
 
 static int current_function_has_return_statement = 0;
+static int statement_ends_control_flow = 0;
+
 static int current_parse_block_depth = 0;
 static int current_function_is_void = 0;
+static int current_function_is_noreturn = 0;
 static int current_function_is_floating = 0;
 static int current_function_return_size = DATA_NONE;
 static int current_function_return_is_unsigned = 0;
@@ -253,6 +256,7 @@ static void clear_global_symbols (void) {
         global_symbols[i].is_unsigned = 0;
         global_symbols[i].is_floating = 0;
         global_symbols[i].returns_void = 0;
+        global_symbols[i].is_noreturn = 0;
         
         global_symbols[i].calling_convention = TOK_EOF;
         
@@ -728,6 +732,16 @@ static void set_global_symbol_returns_void (const char *name, int returns_void) 
 
 }
 
+static void set_global_symbol_noreturn (const char *name, int is_noreturn) {
+
+    int i = find_global_symbol (name);
+    
+    if (i >= 0) {
+        global_symbols[i].is_noreturn = is_noreturn ? 1 : 0;
+    }
+
+}
+
 static void set_global_symbol_calling_convention (const char *name, enum token_kind calling_convention) {
 
     int i = find_global_symbol (name);
@@ -756,6 +770,18 @@ static int get_global_symbol_returns_void (const char *name) {
     
     if (i >= 0) {
         return global_symbols[i].returns_void;
+    }
+    
+    return 0;
+
+}
+
+static int get_global_symbol_noreturn (const char *name) {
+
+    int i = find_global_symbol (name);
+    
+    if (i >= 0 && global_symbols[i].kind == GLOBAL_SYMBOL_FUNCTION) {
+        return global_symbols[i].is_noreturn;
     }
     
     return 0;
@@ -929,6 +955,7 @@ static int add_global_symbol (const char *name, int kind, int is_extern, const c
     global_symbols[global_symbol_count].pointed_is_floating = 0;
     global_symbols[global_symbol_count].pointed_is_unsigned = 0;
     global_symbols[global_symbol_count].returns_void = 0;
+    global_symbols[global_symbol_count].is_noreturn = 0;
     global_symbols[global_symbol_count].calling_convention = TOK_EOF;
     
     {
@@ -7862,6 +7889,7 @@ static void parse_block (void) {
                 char static_label[128];
                 
                 int declaration_dllimport = parsed_dllimport;
+                int declaration_noreturn = parsed_noreturn;
                 
                 for (i = 0; i < MAX_AGG_FIELDS; i++) {
                     init_symbols[i] = 0;
@@ -7870,6 +7898,8 @@ static void parse_block (void) {
                 parse_declarator (&name);
                 
                 declaration_dllimport = declaration_dllimport || parsed_dllimport || declarator_dllimport;
+                declaration_noreturn = declaration_noreturn || parsed_noreturn || declarator_noreturn;
+                
                 apply_typedef_array_to_declarator ();
                 
                 if (declarator_has_array && declarator_array_unsized && tok.kind == TOK_ASSIGN) {
@@ -7923,6 +7953,10 @@ static void parse_block (void) {
                         set_global_symbol_unsigned (name, (declarator_is_pointer || declarator_has_function) ? 0 : parsed_type_is_unsigned);
                         set_global_symbol_floating (name, (declarator_is_pointer || (declarator_has_function && declarator_function_is_pointer)) ? 0 : parsed_type_is_floating);
                         set_global_symbol_returns_void (name, declarator_has_function && parsed_type_is_void && !declarator_is_pointer && !declarator_function_is_pointer);
+                        
+                        if (declaration_noreturn) {
+                            set_global_symbol_noreturn (name, 1);
+                        }
                         
                         if (declarator_has_function) {
                         
@@ -23087,6 +23121,10 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
     FILE **arg_tmp_ofps = 0;
     FILE **new_arg_tmp_ofps = 0;
     
+    if (get_global_symbol_noreturn (name)) {
+        statement_ends_control_flow = 1;
+    }
+    
     if (tok.kind != TOK_LPAREN) {
         return;
     }
@@ -23643,6 +23681,10 @@ static int goto_ref_count = 0;
 static int current_break_label = -1;
 static int current_continue_label = -1;
 
+/* Track escapes from the innermost loop for fall-through analysis. */
+static int *current_loop_escape_seen = 0;
+static int current_loop_break_label_for_flow = -1;
+
 static long current_break_cleanup_base = 0;
 static long current_continue_cleanup_base = 0;
 
@@ -23658,6 +23700,7 @@ struct switch_case_entry {
 struct switch_context {
 
     struct switch_case_entry cases[MAX_SWITCH_CASES];
+    
     int case_count;
     int default_label;
     int break_label;
@@ -23665,7 +23708,6 @@ struct switch_context {
 };
 
 static struct switch_context *current_switch_context = 0;
-static int statement_ends_control_flow = 0;
 
 static void reset_goto_labels (void) {
 
@@ -31976,6 +32018,12 @@ static void parse_for_statement (void) {
     int cond_known = 0;
     int cond_value = 1;
     
+    int condition_is_infinite = 0;
+    int loop_escape_seen = 0;
+    
+    int *old_loop_escape_seen = current_loop_escape_seen;
+    int old_loop_break_label_for_flow = current_loop_break_label_for_flow;
+    
     FILE *saved_ofp;
     FILE *step_tmp = 0;
     
@@ -31991,13 +32039,18 @@ static void parse_for_statement (void) {
     emit_statement_label (loop_label);
     
     if (tok.kind == TOK_SEMI) {
+    
+        condition_is_infinite = 1;
         get_token ();
+    
     } else {
     
         emit_statement_jump_if_false (break_label);
         
         cond_known = statement_condition_constant_known;
         cond_value = statement_condition_constant_value;
+        
+        condition_is_infinite = cond_known && cond_value;
         
         if (tok.kind != TOK_SEMI) {
             skip_balanced_until (TOK_SEMI, TOK_EOF, TOK_EOF);
@@ -32032,6 +32085,8 @@ static void parse_for_statement (void) {
     
     current_break_label = break_label;
     current_continue_label = continue_label;
+    current_loop_escape_seen = &loop_escape_seen;
+    current_loop_break_label_for_flow = break_label;
     current_break_cleanup_base = current_block_cleanup_bytes;
     current_continue_cleanup_base = current_block_cleanup_bytes;
     
@@ -32066,10 +32121,12 @@ static void parse_for_statement (void) {
     
     current_break_label = old_break_label;
     current_continue_label = old_continue_label;
+    current_loop_escape_seen = old_loop_escape_seen;
+    current_loop_break_label_for_flow = old_loop_break_label_for_flow;
     current_break_cleanup_base = old_break_cleanup_base;
     current_continue_cleanup_base = old_continue_cleanup_base;
     
-    statement_ends_control_flow = 0;
+    statement_ends_control_flow = condition_is_infinite && !loop_escape_seen;
 
 }
 
@@ -32086,6 +32143,11 @@ static void parse_while_statement (void) {
     
     int cond_known;
     int cond_value;
+    
+    int loop_escape_seen = 0;
+    
+    int *old_loop_escape_seen = current_loop_escape_seen;
+    int old_loop_break_label_for_flow = current_loop_break_label_for_flow;
     
     get_token ();
     expect (TOK_LPAREN, "(");
@@ -32104,6 +32166,8 @@ static void parse_while_statement (void) {
     
     current_break_label = break_label;
     current_continue_label = loop_label;
+    current_loop_escape_seen = &loop_escape_seen;
+    current_loop_break_label_for_flow = break_label;
     current_break_cleanup_base = current_block_cleanup_bytes;
     current_continue_cleanup_base = current_block_cleanup_bytes;
     
@@ -32126,10 +32190,12 @@ static void parse_while_statement (void) {
     
     current_break_label = old_break_label;
     current_continue_label = old_continue_label;
+    current_loop_escape_seen = old_loop_escape_seen;
+    current_loop_break_label_for_flow = old_loop_break_label_for_flow;
     current_break_cleanup_base = old_break_cleanup_base;
     current_continue_cleanup_base = old_continue_cleanup_base;
     
-    statement_ends_control_flow = 0;
+    statement_ends_control_flow = cond_known && cond_value && !loop_escape_seen;
 
 }
 
@@ -32147,10 +32213,17 @@ static void parse_do_statement (void) {
     int cond_known = 0;
     int cond_value = 0;
     
+    int loop_escape_seen = 0;
+    
+    int *old_loop_escape_seen = current_loop_escape_seen;
+    int old_loop_break_label_for_flow = current_loop_break_label_for_flow;
+    
     get_token ();
     
     current_break_label = break_label;
     current_continue_label = cond_label;
+    current_loop_escape_seen = &loop_escape_seen;
+    current_loop_break_label_for_flow = break_label;
     current_break_cleanup_base = current_block_cleanup_bytes;
     current_continue_cleanup_base = current_block_cleanup_bytes;
     
@@ -32188,10 +32261,12 @@ static void parse_do_statement (void) {
     
     current_break_label = old_break_label;
     current_continue_label = old_continue_label;
+    current_loop_escape_seen = old_loop_escape_seen;
+    current_loop_break_label_for_flow = old_loop_break_label_for_flow;
     current_break_cleanup_base = old_break_cleanup_base;
     current_continue_cleanup_base = old_continue_cleanup_base;
     
-    statement_ends_control_flow = 0;
+    statement_ends_control_flow = cond_known && cond_value && !loop_escape_seen;
 
 }
 
@@ -34529,6 +34604,14 @@ static void parse_statement (void) {
         
         }
         
+        if (current_function_is_noreturn) {
+        
+            if (state->warn & WARN_NO_RETURN) {
+                report_line_at (get_filename (), ret_line, REPORT_WARNING, ret_start, ret_caret, "return in function declared '__declspec(noreturn)'");
+            }
+        
+        }
+        
         if (current_function_is_void && has_value) {
         
             if (state->warn & WARN_NO_RETURN) {
@@ -34743,8 +34826,12 @@ static void parse_statement (void) {
              */
             
             reference_goto_label (label_name, label_line, label_start, label_caret);
-            statement_ends_control_flow = 1;
             
+            if (current_loop_escape_seen) {
+                *current_loop_escape_seen = 1;
+            }
+            
+            statement_ends_control_flow = 1;
             free (label_name);
         
         } else {
@@ -34774,6 +34861,11 @@ static void parse_statement (void) {
             }
             
             emit_statement_jump (target_label);
+            
+            if (current_loop_escape_seen && target_label == current_loop_break_label_for_flow) {
+                *current_loop_escape_seen = 1;
+            }
+            
             statement_ends_control_flow = 1;
         
         }
@@ -34877,7 +34969,18 @@ static void parse_statement (void) {
         
         }
         
-        emit_load_assignment_rhs_expression_to_reg ("eax");
+        {
+        
+            int expression_ends_control_flow = (tok.kind == TOK_IDENT && tok.ident &&
+                token_identifier_is_function_call_rhs_now () && get_global_symbol_noreturn (tok.ident));
+            
+            emit_load_assignment_rhs_expression_to_reg ("eax");
+            
+            if (expression_ends_control_flow) {
+                statement_ends_control_flow = 1;
+            }
+        
+        }
         
         if (tok.kind == TOK_SEMI) {
         
@@ -34897,12 +35000,14 @@ static void parse_statement (void) {
 
 }
 
-static void parse_function_body (const char *name, int storage_class, int is_inline, int return_is_void, int return_is_floating, int return_is_unsigned, int return_size, unsigned long function_line, const char *function_start, const char *function_caret) {
+static void parse_function_body (const char *name, int storage_class, int is_inline, int is_noreturn, int return_is_void, int return_is_floating, int return_is_unsigned, int return_size, unsigned long function_line, const char *function_start, const char *function_caret) {
 
     int old_return_label = current_return_label;
     int should_emit = 1;
     int emit_body = 1;
     int emit_public = 1;
+    
+    int effective_noreturn = is_noreturn || get_global_symbol_noreturn (name);
     int emit_inline_definition_to_output = 1;
     
     FILE *saved_ofp;
@@ -34920,6 +35025,7 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     int saved_current_section = current_section;
     
     int old_function_is_void;
+    int old_function_is_noreturn;
     int old_function_is_floating;
     int old_function_return_size;
     int old_function_return_is_unsigned;
@@ -34989,6 +35095,7 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
         set_global_symbol_unsigned (name, 0);
         set_global_symbol_floating (name, return_is_floating);
         set_global_symbol_returns_void (name, return_is_void);
+        set_global_symbol_noreturn (name, effective_noreturn);
         set_global_symbol_calling_convention (name, (declarator_calling_convention != TOK_EOF) ? declarator_calling_convention : parsed_calling_convention);
         set_global_symbol_dllimport (name, 0);
         set_global_symbol_param_count (name, saved_declarator_function_param_count, saved_declarator_function_has_prototype || saved_declarator_function_param_count > 0, saved_declarator_function_is_variadic);
@@ -35004,12 +35111,14 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     
     old_function_has_return_statement = current_function_has_return_statement;
     old_function_is_void = current_function_is_void;
+    old_function_is_noreturn = current_function_is_noreturn;
     old_function_is_floating = current_function_is_floating;
     old_function_return_size = current_function_return_size;
     old_function_return_is_unsigned = current_function_return_is_unsigned;
     old_function_returns_aggregate = current_function_returns_aggregate;
     
     current_function_is_void = return_is_void;
+    current_function_is_noreturn = effective_noreturn;
     current_function_is_floating = return_is_floating;
     current_function_return_is_unsigned = return_is_unsigned;
     current_function_return_size = return_size;
@@ -35061,10 +35170,18 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     current_function_frame_enabled = (!is_inline && capture_function_body);
     emit_function_start (name, !emit_public);
     
+    statement_ends_control_flow = 0;
+    
     parse_block ();
     check_goto_labels ();
     
-    if (!current_function_is_void && !current_function_has_return_statement) {
+    if (current_function_is_noreturn && !current_function_has_return_statement && !statement_ends_control_flow) {
+    
+        if (state->warn & WARN_NO_RETURN) {
+            report_line_at (function_filename_copy ? function_filename_copy : get_filename (), function_line, REPORT_WARNING, function_start, function_caret, "function declared '__declspec(noreturn)' may return");
+        }
+    
+    } else if (!current_function_is_void && !current_function_has_return_statement && !statement_ends_control_flow) {
     
         if (state->warn & WARN_NO_RETURN) {
             report_line_at (function_filename_copy ? function_filename_copy : get_filename (), function_line, REPORT_WARNING, function_start, function_caret, "control reaches end of non-void function");
@@ -35132,6 +35249,7 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     
     current_function_has_return_statement = old_function_has_return_statement;
     current_function_is_void = old_function_is_void;
+    current_function_is_noreturn = old_function_is_noreturn;
     current_function_is_floating = old_function_is_floating;
     current_function_return_size = old_function_return_size;
     current_function_return_is_unsigned = old_function_return_is_unsigned;
@@ -35300,7 +35418,7 @@ static int parse_possible_knr_function (void) {
     
     if (is_type_start (tok.kind) || tok.kind == TOK_LBRACE) {
     
-        parse_function_body (name, STORAGE_NONE, 0, 0, 0, 0, DATA_INT & 0x1f, name_line, name_start, name_caret);
+        parse_function_body (name, STORAGE_NONE, 0, 0, 0, 0, 0, DATA_INT & 0x1f, name_line, name_start, name_caret);
         
         if (parsed_dllexport || declarator_dllexport) {
         
@@ -36500,6 +36618,8 @@ static void parse_external_after_type (void) {
         
         int declaration_is_inline;
         int declaration_storage;
+        
+        int declaration_noreturn = 0;
         int declaration_dllimport = 0;
         
         int decl_is_pointer;
@@ -36525,10 +36645,13 @@ static void parse_external_after_type (void) {
         declaration_is_inline = parsed_type_is_inline;
         declaration_storage = parsed_storage_class;
         declaration_dllimport = parsed_dllimport;
+        declaration_noreturn = parsed_noreturn;
         
         parse_declarator (&name);
         
         declaration_dllimport = declaration_dllimport || parsed_dllimport || declarator_dllimport;
+        declaration_noreturn = declaration_noreturn || parsed_noreturn || declarator_noreturn;
+        
         apply_typedef_array_to_declarator ();
         
         decl_is_pointer = declarator_is_pointer;
@@ -36596,7 +36719,7 @@ static void parse_external_after_type (void) {
             
             }
             
-            parse_function_body (name, declaration_storage, declaration_is_inline,
+            parse_function_body (name, declaration_storage, declaration_is_inline, declaration_noreturn,
                 (parsed_type_is_void && !declarator_is_pointer),
                     (declarator_is_pointer ? 0 : parsed_type_is_floating),
                         (declarator_is_pointer ? 0 : parsed_type_is_unsigned),
@@ -36731,8 +36854,12 @@ static void parse_external_after_type (void) {
                     set_global_symbol_unsigned (name, 0);
                     set_global_symbol_floating (name, declarator_is_pointer ? 0 : parsed_type_is_floating);
                     set_global_symbol_returns_void (name, parsed_type_is_void && !declarator_is_pointer && !declarator_function_is_pointer);
-                    set_global_symbol_param_count (name, declarator_function_param_count, declarator_function_has_prototype || declarator_function_param_count > 0, declarator_function_is_variadic);
                     
+                    if (declaration_noreturn) {
+                        set_global_symbol_noreturn (name, 1);
+                    }
+                    
+                    set_global_symbol_param_count (name, declarator_function_param_count, declarator_function_has_prototype || declarator_function_param_count > 0, declarator_function_is_variadic);
                     set_global_symbol_calling_convention (name, (declarator_calling_convention != TOK_EOF) ? declarator_calling_convention : parsed_calling_convention);
                     set_global_symbol_dllimport (name, declaration_dllimport);
                     

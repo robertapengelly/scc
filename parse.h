@@ -19,8 +19,10 @@ extern enum token_kind postfix_member_calling_convention;
 extern enum token_kind parsed_calling_convention;
 
 extern struct vector vec_dllexports;
+
 extern int parsed_dllexport;
 extern int parsed_dllimport;
+extern int parsed_noreturn;
 
 extern int parsed_type_size;
 extern int parsed_type_is_inline;
@@ -59,6 +61,7 @@ extern int declarator_has_array;
 
 extern int declarator_dllexport;
 extern int declarator_dllimport;
+extern int declarator_noreturn;
 
 extern enum token_kind declarator_calling_convention;
 extern int global_initializer_accept_symbol_addresses;
@@ -218,6 +221,7 @@ struct global_symbol_entry {
     int pointed_is_floating;
     int pointed_is_unsigned;
     int returns_void;
+    int is_noreturn;
     
     int param_count;
     int has_prototype;
