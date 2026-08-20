@@ -34,7 +34,7 @@ struct macro *get_macro (struct hashtab_name *key) {
 
 void add_macro (char *start, char **pp, int report_line) {
 
-    char *sname, *caret = *pp, *arg;
+    char *sname, *caret = *pp, *arg, *old_value = 0;
     unsigned int len;
     
     struct hashtab_name *key;
@@ -90,14 +90,10 @@ void add_macro (char *start, char **pp, int report_line) {
     
     if ((key = find_macro (sname))) {
     
-        if (report_line) {
-            report_line_at (get_filename (), get_line_number (), REPORT_WARNING, start, caret, "\"%s\" redefined", sname);
-        } else {
-            report_at (get_filename (), get_line_number (), REPORT_WARNING, "\"%s\" redefined", sname);
-        }
-        
         if ((m = hashtab_get (&hashtab_macros, key))) {
         
+            old_value = xstrdup (m->value);
+            
             while ((arg = vec_pop (&m->args))) {
                 free (arg);
             }
@@ -238,13 +234,27 @@ void add_macro (char *start, char **pp, int report_line) {
     
     }
     
-    *pp = skip_whitespace (*pp);
-    
-    m->value = xstrdup (*pp);
+    m->value = xstrdup (*pp = skip_whitespace (*pp));
     len = strlen (m->value);
     
     if (is_end_of_line[(int) m->value[len - 1]]) {
         m->value[len - 1] = '\0';
+    }
+    
+    if (old_value) {
+        
+        if (strcmp (m->value, old_value) && state->warn & WARN_DUP_DEFINE) {
+        
+            if (report_line) {
+                report_line_at (get_filename (), get_line_number (), REPORT_WARNING, start, caret, "\"%s\" redefined", sname);
+            } else {
+                report_at (get_filename (), get_line_number (), REPORT_WARNING, "\"%s\" redefined", sname);
+            }
+        
+        }
+        
+        free (old_value);
+        
     }
     
     hashtab_put (&hashtab_macros, key, m);

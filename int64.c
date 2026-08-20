@@ -4,6 +4,7 @@
 #include    <ctype.h>
 #include    <string.h>
 
+#include    "cc.h"
 #include    "int64.h"
 #include    "report.h"
 
@@ -284,7 +285,7 @@ void mask64 (int64_s *a, int bits) {
     
     if (bits <= 0) {
     
-        if (a->high != 0 || a->low != 0) {
+        if ((state->warn & WARN_CONVERSION) && (a->high != 0 || a->low != 0)) {
             report_at (get_filename(), get_line_number(), REPORT_WARNING, "implicit truncation of 0x%08lX%08lX to 0x00000000", a->high, a->low);
         }
         
@@ -302,7 +303,7 @@ void mask64 (int64_s *a, int bits) {
         new_low = a->low & low_mask;
         new_high = 0;
         
-        if (a->high != 0 || (a->low & ~low_mask) != 0) {
+        if ((state->warn & WARN_CONVERSION) && (a->high != 0 || (a->low & ~low_mask) != 0)) {
             report_at (get_filename(), get_line_number(), REPORT_WARNING, "implicit truncation of 0x%08lX%08lX to 0x%08lX", a->high, a->low, new_low);
         }
     
@@ -312,7 +313,7 @@ void mask64 (int64_s *a, int bits) {
         new_low = a->low;
         new_high = 0;
         
-        if (a->high != 0) {
+        if ((state->warn & WARN_CONVERSION) && a->high != 0) {
             report_at (get_filename(), get_line_number(), REPORT_WARNING, "implicit truncation of 0x%08lX%08lX to 0x%08lX", a->high, a->low, new_low);
         }
     
@@ -323,7 +324,7 @@ void mask64 (int64_s *a, int bits) {
         new_low = a->low;
         new_high = a->high & high_mask;
         
-        if ((a->high & ~high_mask) != 0) {
+        if ((state->warn & WARN_CONVERSION) && (a->high & ~high_mask) != 0) {
             report_at (get_filename(), get_line_number(), REPORT_WARNING, "implicit truncation of 0x%08lX%08lX to 0x%08lX%08lX", a->high, a->low, new_high, new_low);
         }
     

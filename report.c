@@ -64,6 +64,10 @@ extern void print_include_stack (void);
 
 static void output_message (const char *filename, unsigned long lineno, unsigned long idx, int type, const char *fmt, va_list ap) {
 
+    if (type == REPORT_WARNING && state && (state->warn & WARN_ERROR)) {
+        type = REPORT_ERROR;
+    }
+    
     if (has_include_stack ()) {
         print_include_stack ();
     }

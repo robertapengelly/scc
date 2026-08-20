@@ -49,6 +49,7 @@ struct cc_option {
 #define     CC_OPTION_STD                                   17
 #define     CC_OPTION_TRANDITIONAL_LINEMARKERS              18
 #define     CC_OPTION_UNDEF                                 19
+#define     CC_OPTION_WARN                                  20
 
 static struct cc_option opts[] = {
 
@@ -67,6 +68,7 @@ static struct cc_option opts[] = {
     
     {   "-E",                               CC_OPTION_PREPOCESS,                    CC_OPTION_NO_ARG        },
     {   "-S",                               CC_OPTION_COMPILE,                      CC_OPTION_NO_ARG        },
+    {   "-W",                               CC_OPTION_WARN,                         CC_OPTION_HAS_ARG       },
     
     {   "-fno-leading-underscore",          CC_OPTION_NO_LEADING_UNDERSCORE,        CC_OPTION_NO_ARG        },
     {   "-fleading-underscore",             CC_OPTION_LEADING_UNDERSCORE,           CC_OPTION_NO_ARG        },
@@ -278,6 +280,7 @@ void parse_args (int argc, char **argv, int optind) {
     
     }
     
+    state->warn = WARN_DEFAULT;
     state->bits = 32;
     
     while (optind < argc) {
@@ -539,6 +542,34 @@ void parse_args (int argc, char **argv, int optind) {
                 
                 list_append (&state->pplist, arg);
                 break;
+            
+            }
+            
+            case CC_OPTION_WARN: {
+            
+                if (strcmp (optarg, "all") == 0) {
+                
+                    state->warn |= WARN_ALL;
+                    break;
+                
+                }
+                
+                if (strcmp (optarg, "extra") == 0) {
+                
+                    state->warn |= WARN_EXTRA;
+                    break;
+                
+                }
+                
+                if (strcmp (optarg, "error") == 0) {
+                
+                    state->warn |= WARN_ERROR;
+                    break;
+                
+                }
+                
+                report_at (program_name, 0, REPORT_ERROR, "unrecognised -W argument");
+                exit (EXIT_FAILURE);
             
             }
             

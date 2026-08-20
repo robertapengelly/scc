@@ -10,6 +10,22 @@
 #include    "list.h"
 #include    "vector.h"
 
+#define     WARN_ERROR                  (1U << 0)
+#define     WARN_NO_RETURN              (1U << 1)
+#define     WARN_SIGNEDNESS             (1U << 2)
+#define     WARN_CONVERSION             (1U << 3)
+#define     WARN_DUP_DEFINE             (1U << 4)
+#define     WARN_UNUSED                 (1U << 5)
+#define     WARN_SHADOW                 (1U << 6)
+#define     WARN_UNREACHABLE            (1U << 7)
+#define     WARN_FALLTHROUGH            (1U << 8)
+#define     WARN_OLD_STYLE              (1U << 9)
+#define     WARN_INITIALIZER            (1U << 10)
+
+#define     WARN_DEFAULT                (WARN_DUP_DEFINE | WARN_UNREACHABLE)
+#define     WARN_ALL                    (WARN_DEFAULT | WARN_NO_RETURN | WARN_SIGNEDNESS | WARN_UNUSED | WARN_FALLTHROUGH | WARN_INITIALIZER)
+#define     WARN_EXTRA                  (WARN_ALL | WARN_CONVERSION | WARN_SHADOW | WARN_OLD_STYLE)
+
 struct cc_state {
     
     const char *ifile, *ofile;
@@ -28,6 +44,7 @@ struct cc_state {
     int bits, std;
     int long64;
     int syntax;
+    int warn;
     
     unsigned long max_errors;
     long version;

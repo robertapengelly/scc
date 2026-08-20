@@ -1158,7 +1158,9 @@ static void ensure_global_function_symbol (const char *name, const char *line_st
         return;
     }
     
-    report_line_at (get_filename (), lineno, REPORT_WARNING, line_start, name_caret, "implicit declaration of function '%s'", name);
+    if (state->warn & WARN_OLD_STYLE) {
+        report_line_at (get_filename (), lineno, REPORT_WARNING, line_start, name_caret, "implicit declaration of function '%s'", name);
+    }
     
     if (add_global_symbol (name, GLOBAL_SYMBOL_FUNCTION, 1, line_start, name_caret, lineno)) {
     
@@ -37158,9 +37160,17 @@ static void parse_statement (void) {
         }
         
         if (current_function_is_void && has_value) {
-            report_line_at (get_filename (), ret_line, REPORT_WARNING, ret_start, ret_caret, "return with a value in void function");
+        
+            if (state->warn & WARN_NO_RETURN) {
+                report_line_at (get_filename (), ret_line, REPORT_WARNING, ret_start, ret_caret, "return with a value in void function");
+            }
+        
         } else if (!current_function_is_void && !has_value) {
-            report_line_at (get_filename (), ret_line, REPORT_WARNING, ret_start, ret_caret, "return with no value in non-void function");
+        
+            if (state->warn & WARN_NO_RETURN) {
+                report_line_at (get_filename (), ret_line, REPORT_WARNING, ret_start, ret_caret, "return with no value in non-void function");
+            }
+        
         }
         
         if (state->ofp) {
@@ -37696,7 +37706,11 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     check_goto_labels ();
     
     if (!current_function_is_void && !current_function_has_return_statement) {
-        report_line_at (function_filename_copy ? function_filename_copy : get_filename (), function_line, REPORT_WARNING, function_start, function_caret, "control reaches end of non-void function");
+    
+        if (state->warn & WARN_NO_RETURN) {
+            report_line_at (function_filename_copy ? function_filename_copy : get_filename (), function_line, REPORT_WARNING, function_start, function_caret, "control reaches end of non-void function");
+        }
+    
     }
     
     pending_return_jump = 0;
