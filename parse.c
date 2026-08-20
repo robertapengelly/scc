@@ -429,65 +429,80 @@ static void parse_decl_modifier (void) {
         
         }
         
-        if (tok.kind != TOK_IDENT || !tok.ident) {
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected attribute in '__declspec'");
-        } else if (strcmp (tok.ident, "dllexport") == 0) {
+        for (;;) {
         
-            if (parsed_dllexport) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '__declspec(dllexport)'");
-            } else if (parsed_dllimport) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "'__declspec(dllexport)' and '__declspec(dllimport)' cannot both be specified");
+            if (tok.kind != TOK_IDENT || !tok.ident) {
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected attribute in '__declspec'");
+            } else if (strcmp (tok.ident, "dllexport") == 0) {
+            
+                if (parsed_dllexport) {
+                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '__declspec(dllexport)'");
+                } else if (parsed_dllimport) {
+                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "'__declspec(dllexport)' and '__declspec(dllimport)' cannot both be specified");
+                } else {
+                
+                    declarator_dllexport = 1;
+                    parsed_dllexport = 1;
+                
+                }
+                
+                get_token ();
+            
+            } else if (strcmp (tok.ident, "dllimport") == 0) {
+            
+                if (parsed_dllimport) {
+                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '__declspec(dllimport)'");
+                } else if (parsed_dllexport) {
+                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "'__declspec(dllexport)' and '__declspec(dllimport)' cannot both be specified");
+                } else {
+                
+                    declarator_dllimport = 1;
+                    parsed_dllimport = 1;
+                
+                }
+                
+                get_token ();
+             
+            } else if (strcmp (tok.ident, "packed") == 0) {
+            
+                if (parsed_type_is_packed) {
+                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '__declspec(packed)'");
+                } else {
+                    parsed_type_is_packed = 1;
+                }
+                
+                get_token ();
+            
+            } else if (strcmp (tok.ident, "noreturn") == 0) {
+            
+                if (parsed_noreturn || declarator_noreturn) {
+                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '__declspec(noreturn)'");
+                } else {
+                
+                    declarator_noreturn = 1;
+                    parsed_noreturn = 1;
+                
+                }
+                
+                get_token ();
+            
             } else {
             
-                declarator_dllexport = 1;
-                parsed_dllexport = 1;
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "unsupported '__declspec' attribute '%s'", tok.ident);
+                get_token ();
             
             }
             
-            get_token ();
-        
-        } else if (strcmp (tok.ident, "dllimport") == 0) {
-        
-            if (parsed_dllimport) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '__declspec(dllimport)'");
-            } else if (parsed_dllexport) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "'__declspec(dllexport)' and '__declspec(dllimport)' cannot both be specified");
-            } else {
-            
-                declarator_dllimport = 1;
-                parsed_dllimport = 1;
-            
+            if (!_accept (TOK_COMMA)) {
+                break;
             }
             
-            get_token ();
-         
-        } else if (strcmp (tok.ident, "packed") == 0) {
-        
-            if (parsed_type_is_packed) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '__declspec(packed)'");
-            } else {
-                parsed_type_is_packed = 1;
-            }
+            if (tok.kind == TOK_RPAREN) {
             
-            get_token ();
-        
-        } else if (strcmp (tok.ident, "noreturn") == 0) {
-        
-            if (parsed_noreturn || declarator_noreturn) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '__declspec(noreturn)'");
-            } else {
-            
-                declarator_noreturn = 1;
-                parsed_noreturn = 1;
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected attribute after ',' in '__declspec'");
+                break;
             
             }
-            
-            get_token ();
-        
-        } else {
-        
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "unsupported '__declspec' attribute '%s'", tok.ident);
-            get_token ();
         
         }
         
