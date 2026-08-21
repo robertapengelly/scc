@@ -499,7 +499,7 @@ static void apply_decl_attribute (const char *spelling, int is_gnu) {
         
         }
     
-    } else if (is_gnu && (attribute_name_is (spelling, "cdecl") || attribute_name_is (spelling, "unused") || attribute_name_is (spelling, "used"))) {
+    } else if (is_gnu && (attribute_name_is (spelling, "ms_abi") || attribute_name_is (spelling, "cdecl") || attribute_name_is (spelling, "unused") || attribute_name_is (spelling, "used"))) {
         /* Accepted compatibility attributes.  They require no code generation. */
     } else {
         report_line_at (get_filename (), get_line_number (), REPORT_WARNING, tok.report_start, tok.report_caret, "unsupported '%s' attribute '%s' ignored", is_gnu ? "__attribute__" : "__declspec", spelling);
