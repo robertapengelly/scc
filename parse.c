@@ -402,15 +402,187 @@ static void parse_enum_body (void) {
 
 }
 
+static int attribute_name_is (const char *name, const char *wanted) {
+
+    size_t len;
+    
+    if (!name || !wanted) {
+        return 0;
+    }
+    
+    if (strcmp (name, wanted) == 0) {
+        return 1;
+    }
+    
+    len = strlen (wanted);
+    return strlen (name) == len + 4 && name[0] == '_' && name[1] == '_' && strncmp (name + 2, wanted, len) == 0 && name[len + 2] == '_' && name[len + 3] == '_';
+
+}
+
+static void skip_attribute_arguments (void) {
+
+    int depth;
+    
+    if (tok.kind != TOK_LPAREN) {
+        return;
+    }
+    
+    depth = 0;
+    
+    do {
+    
+        if (tok.kind == TOK_LPAREN) {
+            depth++;
+        } else if (tok.kind == TOK_RPAREN) {
+            depth--;
+        }
+        
+        get_token ();
+    
+    } while (tok.kind != TOK_EOF && depth > 0);
+
+}
+
+static void apply_decl_attribute (const char *spelling, int is_gnu) {
+
+    if (attribute_name_is (spelling, "dllexport")) {
+    
+        if (parsed_dllexport) {
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '%s(dllexport)'", is_gnu ? "__attribute__" : "__declspec");
+        } else if (parsed_dllimport) {
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "'dllexport' and 'dllimport' cannot both be specified");
+        } else {
+        
+            declarator_dllexport = 1;
+            parsed_dllexport = 1;
+        
+        }
+    
+    } else if (attribute_name_is (spelling, "dllimport")) {
+    
+        if (parsed_dllimport) {
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '%s(dllimport)'", is_gnu ? "__attribute__" : "__declspec");
+        } else if (parsed_dllexport) {
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "'dllexport' and 'dllimport' cannot both be specified");
+        } else {
+        
+            declarator_dllimport = 1;
+            parsed_dllimport = 1;
+        
+        }
+    
+    } else if (attribute_name_is (spelling, "packed")) {
+    
+        if (parsed_type_is_packed) {
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '%s(packed)'", is_gnu ? "__attribute__" : "__declspec");
+        } else {
+            parsed_type_is_packed = 1;
+        }
+    
+    } else if (attribute_name_is (spelling, "noreturn")) {
+    
+        if (parsed_noreturn || declarator_noreturn) {
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '%s(noreturn)'", is_gnu ? "__attribute__" : "__declspec");
+        } else {
+        
+            declarator_noreturn = 1;
+            parsed_noreturn = 1;
+        
+        }
+    
+    } else if (is_gnu && attribute_name_is (spelling, "stdcall")) {
+    
+        if (parsed_calling_convention == TOK_EOF && declarator_calling_convention == TOK_EOF) {
+        
+            parsed_calling_convention = TOK_STDCALL;
+            declarator_calling_convention = TOK_STDCALL;
+        
+        }
+    
+    } else if (is_gnu && (attribute_name_is (spelling, "cdecl") || attribute_name_is (spelling, "unused") || attribute_name_is (spelling, "used"))) {
+        /* Accepted compatibility attributes.  They require no code generation. */
+    } else {
+        report_line_at (get_filename (), get_line_number (), REPORT_WARNING, tok.report_start, tok.report_caret, "unsupported '%s' attribute '%s' ignored", is_gnu ? "__attribute__" : "__declspec", spelling);
+    }
+
+}
+
 static void parse_decl_modifier (void) {
 
     if (tok.kind == TOK_STDCALL) {
-    
+
         if (parsed_calling_convention == TOK_EOF && declarator_calling_convention == TOK_EOF) {
             parsed_calling_convention = TOK_STDCALL;
         }
         
         get_token ();
+        return;
+    
+    }
+    
+    if (tok.kind == TOK_ATTRIBUTE) {
+    
+        const char *attribute_start = tok.report_start;
+        const char *attribute_caret = tok.report_caret;
+        
+        get_token ();
+        
+        if (!_accept (TOK_LPAREN)) {
+        
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, attribute_start, attribute_caret, "expected '((' after '__attribute__'");
+            return;
+        
+        }
+        
+        if (!_accept (TOK_LPAREN)) {
+        
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, attribute_start, attribute_caret, "expected '((' after '__attribute__'");
+            
+            expect (TOK_RPAREN, ")");
+            return;
+        
+        }
+        
+        while (tok.kind != TOK_EOF && tok.kind != TOK_RPAREN) {
+        
+            char *name;
+            
+            if (tok.kind != TOK_IDENT || !tok.ident) {
+            
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected attribute in '__attribute__'");
+                get_token ();
+            
+            } else {
+            
+                name = xstrdup (tok.ident);
+                
+                apply_decl_attribute (name, 1);
+                get_token ();
+                
+                if (tok.kind == TOK_LPAREN) {
+                    skip_attribute_arguments ();
+                }
+                
+                free (name);
+            
+            }
+            
+            if (!_accept (TOK_COMMA)) {
+                break;
+            }
+            
+            if (tok.kind == TOK_RPAREN) {
+            
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected attribute after ',' in '__attribute__'");
+                break;
+            
+            }
+        
+        }
+        
+        expect (TOK_RPAREN, ")");
+        expect (TOK_RPAREN, ")");
+        
         return;
     
     }
@@ -431,66 +603,22 @@ static void parse_decl_modifier (void) {
         
         for (;;) {
         
+            char *name;
+            
             if (tok.kind != TOK_IDENT || !tok.ident) {
+            
                 report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected attribute in '__declspec'");
-            } else if (strcmp (tok.ident, "dllexport") == 0) {
-            
-                if (parsed_dllexport) {
-                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '__declspec(dllexport)'");
-                } else if (parsed_dllimport) {
-                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "'__declspec(dllexport)' and '__declspec(dllimport)' cannot both be specified");
-                } else {
-                
-                    declarator_dllexport = 1;
-                    parsed_dllexport = 1;
-                
-                }
-                
-                get_token ();
-            
-            } else if (strcmp (tok.ident, "dllimport") == 0) {
-            
-                if (parsed_dllimport) {
-                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '__declspec(dllimport)'");
-                } else if (parsed_dllexport) {
-                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "'__declspec(dllexport)' and '__declspec(dllimport)' cannot both be specified");
-                } else {
-                
-                    declarator_dllimport = 1;
-                    parsed_dllimport = 1;
-                
-                }
-                
-                get_token ();
-             
-            } else if (strcmp (tok.ident, "packed") == 0) {
-            
-                if (parsed_type_is_packed) {
-                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '__declspec(packed)'");
-                } else {
-                    parsed_type_is_packed = 1;
-                }
-                
-                get_token ();
-            
-            } else if (strcmp (tok.ident, "noreturn") == 0) {
-            
-                if (parsed_noreturn || declarator_noreturn) {
-                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '__declspec(noreturn)'");
-                } else {
-                
-                    declarator_noreturn = 1;
-                    parsed_noreturn = 1;
-                
-                }
-                
                 get_token ();
             
             } else {
-            
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "unsupported '__declspec' attribute '%s'", tok.ident);
+
+                name = xstrdup (tok.ident);
+                
+                apply_decl_attribute (name, 0);
                 get_token ();
-            
+                
+                free (name);
+             
             }
             
             if (!_accept (TOK_COMMA)) {
@@ -515,7 +643,7 @@ static void parse_decl_modifier (void) {
 
 void parse_declarator_inner (char **out_name) {
 
-    while (tok.kind == TOK_STDCALL || tok.kind == TOK_DECLSPEC) {
+    while (tok.kind == TOK_STDCALL || tok.kind == TOK_DECLSPEC || tok.kind == TOK_ATTRIBUTE) {
     
         if (tok.kind == TOK_STDCALL) {
         
@@ -538,7 +666,7 @@ void parse_declarator_inner (char **out_name) {
         
         get_token ();
         
-        while (tok.kind == TOK_CONST || tok.kind == TOK_VOLATILE || tok.kind == TOK_RESTRICT || tok.kind == TOK_STDCALL || tok.kind == TOK_DECLSPEC) {
+        while (tok.kind == TOK_CONST || tok.kind == TOK_VOLATILE || tok.kind == TOK_RESTRICT || tok.kind == TOK_STDCALL || tok.kind == TOK_DECLSPEC || tok.kind == TOK_ATTRIBUTE) {
         
             if (tok.kind == TOK_STDCALL) {
             
@@ -548,7 +676,7 @@ void parse_declarator_inner (char **out_name) {
                 
                 get_token ();
             
-            } else if (tok.kind == TOK_DECLSPEC) {
+            } else if (tok.kind == TOK_DECLSPEC || tok.kind == TOK_ATTRIBUTE) {
                 parse_decl_modifier ();
             } else {
                 get_token ();
@@ -559,6 +687,10 @@ void parse_declarator_inner (char **out_name) {
     }
     
     parse_direct_declarator (out_name);
+    
+    while (tok.kind == TOK_DECLSPEC || tok.kind == TOK_ATTRIBUTE) {
+        parse_decl_modifier ();
+    }
 
 }
 
@@ -1860,7 +1992,7 @@ int is_type_start (enum token_kind k) {
             return 0;
         
         case TOK_AUTO:          case TOK_REGISTER:      case TOK_STATIC:
-        case TOK_DECLSPEC:      case TOK_STDCALL:
+        case TOK_ATTRIBUTE:     case TOK_DECLSPEC:      case TOK_STDCALL:
         case TOK_EXTERN:        case TOK_TYPEDEF:       case TOK_INLINE:
         case TOK_CONST:         case TOK_VOLATILE:      case TOK_RESTRICT:
         case TOK_SIGNED:        case TOK_UNSIGNED:
@@ -2531,7 +2663,7 @@ void parse_type_spec (void) {
            tok.kind == TOK_SHORT || tok.kind == TOK_LONG || tok.kind == TOK_CHAR ||
            tok.kind == TOK_INT || tok.kind == TOK_VOID || tok.kind == TOK_FLOAT ||
            tok.kind == TOK_DOUBLE || tok.kind == TOK_INLINE || tok.kind == TOK_RESTRICT ||
-           tok.kind == TOK_DECLSPEC || tok.kind == TOK_STDCALL || token_is_ms_int_type_name ()) {
+           tok.kind == TOK_DECLSPEC || tok.kind == TOK_ATTRIBUTE || tok.kind == TOK_STDCALL || token_is_ms_int_type_name ()) {
         
         saw = 1;
         
@@ -2542,7 +2674,7 @@ void parse_type_spec (void) {
             saw_real_type = 1;
         }
         
-        if (tok.kind == TOK_STDCALL || tok.kind == TOK_DECLSPEC) {
+        if (tok.kind == TOK_STDCALL || tok.kind == TOK_DECLSPEC || tok.kind == TOK_ATTRIBUTE) {
         
             parse_decl_modifier ();
             continue;
@@ -2800,7 +2932,7 @@ void parse_type_spec (void) {
         clear_parsed_fields ();
         get_token ();
         
-        while (tok.kind == TOK_DECLSPEC) {
+        while (tok.kind == TOK_DECLSPEC || tok.kind == TOK_ATTRIBUTE) {
         
             parse_decl_modifier ();
             
@@ -2822,7 +2954,7 @@ void parse_type_spec (void) {
         
         }
         
-        while (tok.kind == TOK_DECLSPEC) {
+        while (tok.kind == TOK_DECLSPEC || tok.kind == TOK_ATTRIBUTE) {
         
             parse_decl_modifier ();
             
@@ -3042,6 +3174,65 @@ void parse_type_spec (void) {
             }
             
             expect (TOK_RBRACE, "}");
+            
+            /*
+             * GNU permits type attributes after the closing brace, e.g.
+             *
+             *     struct S { char c; int i; } __attribute__((packed));
+             *
+             * Member offsets have already been accumulated by this point, so
+             * if a trailing packed attribute changes the type to packed we
+             * must compact the direct members before publishing the layout.
+             */
+            {
+            
+                int was_packed = aggregate_is_packed;
+                
+                while (tok.kind == TOK_ATTRIBUTE || tok.kind == TOK_DECLSPEC) {
+                
+                    parse_decl_modifier ();
+                    
+                    if (parsed_type_is_packed) {
+                        aggregate_is_packed = 1;
+                    }
+                
+                }
+                
+                if (!was_packed && aggregate_is_packed && !is_union) {
+                
+                    int packed_size = 0;
+                    int mi;
+                    int dst = 0;
+                    
+                    for (mi = member_info_start; mi < member_info_count; mi++) {
+                    
+                        if (member_infos[mi].owner_size == 0) {
+                        
+                            member_infos[mi].offset = packed_size;
+                            packed_size += member_infos[mi].size;
+                            
+                            member_infos[mi].is_packed = 1;
+                        
+                        }
+                    
+                    }
+                    
+                    aggregate_size = packed_size;
+                    
+                    /* Padding entries are negative; packed layout has none. */
+                    for (mi = 0; mi < aggregate_field_count; mi++) {
+                    
+                        if (aggregate_fields[mi] > 0) {
+                            aggregate_fields[dst++] = aggregate_fields[mi];
+                        }
+                    
+                    }
+                    
+                    aggregate_field_count = dst;
+                
+                }
+            
+            }
             
             if (aggregate_size <= 0) {
                 aggregate_size = DATA_CHAR & 0x1f;

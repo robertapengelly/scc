@@ -67,6 +67,7 @@ enum token_kind {
     
     /* Start of keywords. */
     TOK_ASM = 256,
+    TOK_ATTRIBUTE,
     TOK_AUTO,
     TOK_BREAK,
     TOK_CASE,

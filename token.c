@@ -1067,6 +1067,8 @@ static int find_kind (const char *start, const char *caret, const char *p) {
         /* Compiler Specific keywords */
         {   "__scc_builtin_va_arg",     -1,     VERSION,    TOK_SCC_BUILTIN_VA_ARG  },
         
+        {   "__attribute__",            -1,     VERSION,    TOK_ATTRIBUTE           },
+        {   "__attribute",              -1,     VERSION,    TOK_ATTRIBUTE           },
         {   "__declspec",               -1,     VERSION,    TOK_DECLSPEC            },
         {   "__stdcall",                -1,     VERSION,    TOK_STDCALL             },
         

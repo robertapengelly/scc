@@ -34607,7 +34607,7 @@ static void parse_statement (void) {
         if (current_function_is_noreturn) {
         
             if (state->warn & WARN_NO_RETURN) {
-                report_line_at (get_filename (), ret_line, REPORT_WARNING, ret_start, ret_caret, "return in function declared '__declspec(noreturn)'");
+                report_line_at (get_filename (), ret_line, REPORT_WARNING, ret_start, ret_caret, "return in function declared 'noreturn'");
             }
         
         }
@@ -35178,7 +35178,7 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     if (current_function_is_noreturn && !current_function_has_return_statement && !statement_ends_control_flow) {
     
         if (state->warn & WARN_NO_RETURN) {
-            report_line_at (function_filename_copy ? function_filename_copy : get_filename (), function_line, REPORT_WARNING, function_start, function_caret, "function declared '__declspec(noreturn)' may return");
+            report_line_at (function_filename_copy ? function_filename_copy : get_filename (), function_line, REPORT_WARNING, function_start, function_caret, "function declared 'noreturn' may return");
         }
     
     } else if (!current_function_is_void && !current_function_has_return_statement && !statement_ends_control_flow) {
