@@ -93,6 +93,9 @@ static int pending_struct_return_stack_top = 0;
 static int suppress_next_struct_return_scalar_store = 0;
 static int token_identifier_is_function_call_rhs_now (void);
 
+static struct token *clone_current_token_now (void);
+static int token_identifier_is_label_now (void);
+
 static int assignment32_stop_before_condition_operator = 0;
 static int assignment64_stop_before_condition_operator = 0;
 
@@ -7245,6 +7248,7 @@ static void make_declarator_fields (int *out_fields, int *out_count, const int *
 
 }
 
+static void parse_statement_suppressed (void);
 static void parse_statement (void);
 
 static void emit_load_assignment_rhs_expression_to_pair (const char *lo, const char *hi, int is_unsigned);
@@ -7833,12 +7837,32 @@ static void emit_store_reg_to_local (long offset, int size, const char *reg);
 static void emit_load_local_address_to_reg_now (const char *reg, long offset);
 static int emit_aggregate_copy_from_current_rhs_to_addr_reg_now (const char *addr_reg, int offset, int size);
 
+static int token_identifier_is_label_now (void) {
+
+    struct token *saved_tok;
+    int is_label;
+    
+    if (tok.kind != TOK_IDENT || !tok.ident) {
+        return 0;
+    }
+    
+    saved_tok = clone_current_token_now ();
+    get_token ();
+    
+    is_label = (tok.kind == TOK_COLON);
+    unget_token (saved_tok);
+    
+    return is_label;
+
+}
+
 static void parse_block (void) {
 
     int declaration_phase = 1, is_function_body = (current_parse_block_depth == 0);
-    
     int block_local_start = local_symbol_count;
+    
     int block_stack_emitted = 0;
+    int block_ends_control_flow = 0;
     
     long block_stack_start = current_local_stack_size;
     long block_stack_bytes = 0;
@@ -8493,7 +8517,28 @@ static void parse_block (void) {
         
         }
         
+        if (block_ends_control_flow) {
+        
+            if (tok.kind == TOK_CASE || tok.kind == TOK_DEFAULT || token_identifier_is_label_now ()) {
+                block_ends_control_flow = 0;
+            } else {
+            
+                if (state->warn & WARN_UNREACHABLE) {
+                    report_line_at (get_filename (), get_line_number (), REPORT_WARNING, tok.report_start, tok.report_caret, "statement is unreachable");
+                }
+                
+                parse_statement_suppressed ();
+                continue;
+            
+            }
+        
+        }
+        
         parse_statement ();
+        
+        if (statement_ends_control_flow) {
+            block_ends_control_flow = 1;
+        }
     
     }
     
@@ -8554,7 +8599,9 @@ static void parse_block (void) {
     
     }
     
+    statement_ends_control_flow = block_ends_control_flow;
     current_parse_block_depth--;
+    
     truncate_local_symbols (block_local_start, block_stack_start);
 
 }
@@ -9543,7 +9590,6 @@ static void emit_apply_postfix_member_incdec_now (const char *reg, enum token_ki
 static void emit_load_member_from_addr_reg_now (const char *dst_reg, const char *addr_reg, int offset, int size);
 static void emit_load_member_from_addr_reg_ex_now (const char *dst_reg, const char *addr_reg, int offset, int size, int is_unsigned);
 
-static struct token *clone_current_token_now (void);
 static void emit_store_reg_to_deref_reg_now (const char *addr_reg, const char *value_reg, int size);
 
 static int source_starts_prefix_incdec_parenthesized_deref_at (const char *p) {
@@ -19459,6 +19505,39 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         default:
         
             break;
+    
+    }
+    
+    if (tok.kind == TOK_BUILTIN_UNREACHABLE) {
+    
+        const char *builtin_start = tok.start;
+        const char *builtin_caret = tok.caret;
+        
+        unsigned long builtin_line = get_line_number ();
+        get_token ();
+        
+        if (tok.kind != TOK_LPAREN) {
+        
+            report_line_at (get_filename (), builtin_line, REPORT_ERROR, builtin_start, builtin_caret, "expected ( after __builtin_unreachable");
+            return;
+        
+        }
+        
+        get_token ();
+        
+        if (tok.kind != TOK_RPAREN) {
+        
+            report_line_at (get_filename (), builtin_line, REPORT_ERROR, builtin_start, builtin_caret, "__builtin_unreachable takes no arguments");
+            skip_balanced_until (TOK_RPAREN, TOK_SEMI, TOK_EOF);
+        
+        }
+        
+        if (tok.kind == TOK_RPAREN) {
+            get_token ();
+        }
+        
+        statement_ends_control_flow = 1;
+        return;
     
     }
     
@@ -31709,9 +31788,8 @@ static void emit_statement_test_pair_jump_if_true (const char *lo, const char *h
 static int statement_condition_constant_known = 0;
 static int statement_condition_constant_value = 0;
 
-static void parse_statement (void);
-static void parse_statement_suppressed (void);
 static void emit_statement_jump_if_false (int label);
+static void parse_statement (void);
 
 static void replay_tmp_file_to_output (FILE *tmp, FILE *out) {
 

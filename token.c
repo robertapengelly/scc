@@ -1065,6 +1065,7 @@ static int find_kind (const char *start, const char *caret, const char *p) {
     static struct keyword kws[] = {
     
         /* Compiler Specific keywords */
+        {   "__builtin_unreachable",    -1,     VERSION,    TOK_BUILTIN_UNREACHABLE },
         {   "__scc_builtin_va_arg",     -1,     VERSION,    TOK_SCC_BUILTIN_VA_ARG  },
         
         {   "__attribute__",            -1,     VERSION,    TOK_ATTRIBUTE           },

@@ -70,6 +70,7 @@ enum token_kind {
     TOK_ATTRIBUTE,
     TOK_AUTO,
     TOK_BREAK,
+    TOK_BUILTIN_UNREACHABLE,
     TOK_CASE,
     TOK_CHAR,
     TOK_CONST,
