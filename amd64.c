@@ -22756,6 +22756,15 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
             
             if (is_type_start (tok.kind) && parse_deref_cast_type_name (&deref_size)) {
             
+                /*
+                 * parse_deref_cast_type_name() consumes only the cast in
+                 * *(type *)expr.  The following expression still has to be
+                 * evaluated to obtain the address before loading through it.
+                 * This is especially important for va_arg(), whose expansion
+                 * uses a parenthesized comma expression here.
+                 */
+                emit_load_assignment_rhs_to_reg ("rax");
+                
                 emit_load_any_deref_as_floating_now ("rax", deref_size, last_deref_cast_type_is_floating);
                 return;
             
