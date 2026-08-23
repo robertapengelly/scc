@@ -572,6 +572,13 @@ void parse_args (int argc, char **argv, int optind) {
                 
                 }
                 
+                if (strcmp (optarg, "shadow") == 0) {
+                
+                    state->warn |= WARN_SHADOW;
+                    break;
+                
+                }
+                
                 report_at (program_name, 0, REPORT_ERROR, "unrecognised -W argument");
                 exit (EXIT_FAILURE);
             

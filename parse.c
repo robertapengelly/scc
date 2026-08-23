@@ -2305,6 +2305,57 @@ struct local_symbol *find_local_symbol (const char *name) {
 
 }
 
+void warn_shadow_symbol (const char *name, int scope_start_count, int line, const char *start, const char *caret, int is_parameter) {
+
+    const char *what = 0;
+    int i;
+    
+    if (!state || !(state->warn & WARN_SHADOW) || !name) {
+        return;
+    }
+    
+    if (!is_parameter) {
+    
+        if (scope_start_count < 0) {
+            scope_start_count = 0;
+        }
+        
+        if (scope_start_count > local_symbol_count) {
+            scope_start_count = local_symbol_count;
+        }
+        
+        for (i = scope_start_count - 1; i >= 0; i--) {
+        
+            if (local_symbols[i].name && strcmp (local_symbols[i].name, name) == 0) {
+            
+                what = local_symbols[i].offset > 0 ? "parameter" : "local variable";
+                break;
+            
+            }
+        
+        }
+    
+    }
+    
+    if (!what && find_global_symbol (name) >= 0) {
+        what = "global declaration";
+    }
+    
+    if (!what) {
+        return;
+    }
+    
+    if (start && caret) {
+    
+        report_line_at (get_filename (), line, REPORT_WARNING, start, caret,
+            "declaration of '%s' shadows a %s", name, what);
+    
+    } else {
+        report_at (get_filename (), line, REPORT_WARNING, "declaration of '%s' shadows a %s", name, what);
+    }
+
+}
+
 void warn_unused_local_symbols (int start, const char *filename) {
 
     int i;

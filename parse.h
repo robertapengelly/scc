@@ -215,6 +215,7 @@ extern int local_symbol_count;
 struct local_symbol *find_local_symbol (const char *name);
 struct local_symbol *peek_local_symbol (const char *name);
 
+void warn_shadow_symbol (const char *name, int scope_start_count, int line, const char *start, const char *caret, int is_parameter);
 void warn_unused_local_symbols (int start, const char *filename);
 void warn_unused_static_functions (const char *filename);
 

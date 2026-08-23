@@ -24,7 +24,7 @@
 
 #define     WARN_DEFAULT                (WARN_DUP_DEFINE | WARN_UNREACHABLE)
 #define     WARN_ALL                    (WARN_DEFAULT | WARN_NO_RETURN | WARN_SIGNEDNESS | WARN_UNUSED | WARN_FALLTHROUGH | WARN_INITIALIZER)
-#define     WARN_EXTRA                  (WARN_ALL | WARN_CONVERSION | WARN_SHADOW | WARN_OLD_STYLE)
+#define     WARN_EXTRA                  (WARN_ALL | WARN_CONVERSION | WARN_OLD_STYLE)
 
 struct cc_state {
     

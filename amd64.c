@@ -5835,6 +5835,7 @@ static long add_local_symbol (const char *name, int size, int align, int is_unsi
     
     }
     
+    warn_shadow_symbol (name, scope_start_count, line, start, caret, 0);
     new_size = align_up_long (current_local_stack_size + size, align);
     
     /*
@@ -5914,6 +5915,8 @@ static void add_static_local_symbol (const char *name, const char *label, int si
         return;
     
     }
+    
+    warn_shadow_symbol (name, scope_start_count, line, start, caret, 0);
     
     local_symbols[local_symbol_count].name = xstrdup (name);
     local_symbols[local_symbol_count].static_label = xstrdup (label);
@@ -6202,6 +6205,9 @@ static void install_pending_params_as_locals (void) {
         if (local_symbol_exists_in_current_scope (pending_params[i].name, 0)) {
             report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate parameter '%s'", pending_params[i].name);
         }
+        
+        warn_shadow_symbol (pending_params[i].name, 0, pending_params[i].decl_line,
+            pending_params[i].decl_start, pending_params[i].decl_start ? pending_params[i].decl_start + pending_params[i].decl_caret_offset : 0, 1);
         
         local_symbols[local_symbol_count].name = xstrdup (pending_params[i].name);
         local_symbols[local_symbol_count].size = pending_params[i].size;
