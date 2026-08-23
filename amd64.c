@@ -37498,10 +37498,26 @@ static int parse_parenthesized_member_function_pointer_call_statement (void) {
 static void parse_statement_suppressed (void) {
 
     FILE *save_ofp = state->ofp;
+    FILE *discard_ofp = 0;
     
-    state->ofp = 0;
+    /*
+     * Suppressed statements still need to go through the normal expression
+     * parser.  Several expression paths use state->ofp == 0 as a special
+     * parsing mode, so simply clearing the output stream can make otherwise
+     * valid dead code fail to parse (for example `return (rc);` after an
+     * infinite loop).  Emit into a temporary stream instead and discard it.
+     */
+    if (save_ofp) {
+        discard_ofp = scc_tmpfile ();
+    }
+    
+    state->ofp = discard_ofp;
     parse_statement ();
     state->ofp = save_ofp;
+    
+    if (discard_ofp) {
+        scc_close (discard_ofp);
+    }
 
 }
 

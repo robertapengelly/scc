@@ -145,6 +145,7 @@ static void print_usage (void) {
         fprintf (stderr, "    -Werror                           Treat all warnings as errors.\n");
         fprintf (stderr, "    -Wextra                           Print extra (possibly unwanted) warnings.\n");
         fprintf (stderr, "    -Wshadow                          Warn when one variable shadows another.\n");
+        fprintf (stderr, "    -Wunreachable-code                Warn about code that will never be executed.\n");
         
         fprintf (stderr, "\n");
         fprintf (stderr, "    --traditional-linemarker-format   Use #line instead of short form.\n");
@@ -576,6 +577,13 @@ void parse_args (int argc, char **argv, int optind) {
                 if (strcmp (optarg, "shadow") == 0) {
                 
                     state->warn |= WARN_SHADOW;
+                    break;
+                
+                }
+                
+                if (strcmp (optarg, "unreachable-code") == 0) {
+                
+                    state->warn |= WARN_UNREACHABLE;
                     break;
                 
                 }
