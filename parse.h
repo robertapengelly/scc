@@ -179,7 +179,16 @@ struct local_symbol {
     int pointed_is_unsigned;
     
     char *pointed_tag_name;
+    
     char *tag_name;
+    int used;
+    
+    unsigned long decl_line;
+    
+    char *decl_filename;
+    char *decl_start;
+    
+    long decl_caret_offset;
 
 };
 
@@ -204,6 +213,10 @@ extern struct local_symbol local_symbols[MAX_LOCAL_SYMBOLS];
 extern int local_symbol_count;
 
 struct local_symbol *find_local_symbol (const char *name);
+struct local_symbol *peek_local_symbol (const char *name);
+
+void warn_unused_local_symbols (int start, const char *filename);
+void warn_unused_static_functions (const char *filename);
 
 #define     MAX_GLOBAL_SYMBOLS          4096
 int find_global_symbol (const char *name);
@@ -245,6 +258,16 @@ struct global_symbol_entry {
     int import_call_stack_bytes;
     int is_implicit;
     int extern_emitted;
+    
+    int is_static;
+    int used;
+    
+    unsigned long decl_line;
+    
+    char *decl_filename;
+    char *decl_start;
+    
+    long decl_caret_offset;
     
     enum token_kind calling_convention;
     char *tag_name;
@@ -323,6 +346,13 @@ struct pending_param {
     
     char *pointed_tag_name;
     int knr_declared;
+    
+    unsigned long decl_line;
+    
+    char *decl_filename;
+    char *decl_start;
+    
+    long decl_caret_offset;
 
 };
 

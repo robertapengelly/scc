@@ -284,6 +284,25 @@ static void clear_global_symbols (void) {
         global_symbols[i].is_variadic = 0;
         global_symbols[i].is_implicit = 0;
         global_symbols[i].extern_emitted = 0;
+        global_symbols[i].is_static = 0;
+        global_symbols[i].used = 0;
+        global_symbols[i].decl_line = 0;
+        
+        if (global_symbols[i].decl_filename) {
+        
+            free (global_symbols[i].decl_filename);
+            global_symbols[i].decl_filename = 0;
+        
+        }
+        
+        if (global_symbols[i].decl_start) {
+        
+            free (global_symbols[i].decl_start);
+            global_symbols[i].decl_start = 0;
+        
+        }
+        
+        global_symbols[i].decl_caret_offset = 0;
         
         if (global_symbols[i].tag_name) {
         
@@ -981,6 +1000,12 @@ static int add_global_symbol (const char *name, int kind, int is_extern, const c
     global_symbols[global_symbol_count].is_variadic = 0;
     global_symbols[global_symbol_count].is_implicit = 0;
     global_symbols[global_symbol_count].extern_emitted = 0;
+    global_symbols[global_symbol_count].is_static = 0;
+    global_symbols[global_symbol_count].used = 0;
+    global_symbols[global_symbol_count].decl_line = lineno;
+    global_symbols[global_symbol_count].decl_filename = get_filename () ? xstrdup (get_filename ()) : 0;
+    global_symbols[global_symbol_count].decl_start = line_start ? xstrdup (line_start) : 0;
+    global_symbols[global_symbol_count].decl_caret_offset = (line_start && name_caret) ? (long) (name_caret - line_start) : 0;
     global_symbols[global_symbol_count].tag_name = 0;
     
     global_symbol_count++;
@@ -5341,6 +5366,20 @@ static void reset_local_symbols (void) {
         
         }
         
+        if (local_symbols[i].decl_filename) {
+        
+            free (local_symbols[i].decl_filename);
+            local_symbols[i].decl_filename = 0;
+        
+        }
+        
+        if (local_symbols[i].decl_start) {
+        
+            free (local_symbols[i].decl_start);
+            local_symbols[i].decl_start = 0;
+        
+        }
+        
         if (local_symbols[i].pointed_tag_name) {
         
             free (local_symbols[i].pointed_tag_name);
@@ -5388,6 +5427,20 @@ static void truncate_local_symbols (int count, long stack_size) {
         
             free (local_symbols[i].static_label);
             local_symbols[i].static_label = 0;
+        
+        }
+        
+        if (local_symbols[i].decl_filename) {
+        
+            free (local_symbols[i].decl_filename);
+            local_symbols[i].decl_filename = 0;
+        
+        }
+        
+        if (local_symbols[i].decl_start) {
+        
+            free (local_symbols[i].decl_start);
+            local_symbols[i].decl_start = 0;
         
         }
         
@@ -5497,6 +5550,11 @@ static long add_local_symbol (const char *name, int size, int align, int is_unsi
     local_symbols[local_symbol_count].pointed_is_unsigned = 0;
     local_symbols[local_symbol_count].pointed_tag_name = 0;
     local_symbols[local_symbol_count].tag_name = 0;
+    local_symbols[local_symbol_count].used = 0;
+    local_symbols[local_symbol_count].decl_line = line;
+    local_symbols[local_symbol_count].decl_filename = get_filename () ? xstrdup (get_filename ()) : 0;
+    local_symbols[local_symbol_count].decl_start = start ? xstrdup (start) : 0;
+    local_symbols[local_symbol_count].decl_caret_offset = (start && caret && caret >= start) ? (long) (caret - start) : 0;
     
     local_symbol_count++;
     current_local_stack_size = new_size;
@@ -5554,6 +5612,11 @@ static void add_static_local_symbol (const char *name, const char *label, int si
     local_symbols[local_symbol_count].pointed_is_unsigned = 0;
     local_symbols[local_symbol_count].pointed_tag_name = 0;
     local_symbols[local_symbol_count].tag_name = 0;
+    local_symbols[local_symbol_count].used = 0;
+    local_symbols[local_symbol_count].decl_line = line;
+    local_symbols[local_symbol_count].decl_filename = get_filename () ? xstrdup (get_filename ()) : 0;
+    local_symbols[local_symbol_count].decl_start = start ? xstrdup (start) : 0;
+    local_symbols[local_symbol_count].decl_caret_offset = (start && caret && caret >= start) ? (long) (caret - start) : 0;
        
     local_symbol_count++;
 
@@ -5561,7 +5624,7 @@ static void add_static_local_symbol (const char *name, const char *label, int si
 
 static void set_local_symbol_array (const char *name, int is_array) {
 
-    struct local_symbol *sym = find_local_symbol (name);
+    struct local_symbol *sym = peek_local_symbol (name);
     
     if (sym) {
         sym->is_array = is_array ? 1 : 0;
@@ -5571,7 +5634,7 @@ static void set_local_symbol_array (const char *name, int is_array) {
 
 static void set_local_symbol_array_element_size (const char *name, int elem_size) {
 
-    struct local_symbol *sym = find_local_symbol (name);
+    struct local_symbol *sym = peek_local_symbol (name);
     
     if (sym) {
         sym->array_element_size = elem_size > 0 ? elem_size : 0;
@@ -5581,7 +5644,7 @@ static void set_local_symbol_array_element_size (const char *name, int elem_size
 
 static void set_local_symbol_array_dimensions (const char *name, int dims) {
 
-    struct local_symbol *sym = find_local_symbol (name);
+    struct local_symbol *sym = peek_local_symbol (name);
     
     if (sym) {
         sym->array_dimensions = dims > 0 ? dims : 0;
@@ -5767,7 +5830,7 @@ static void copy_pending_params_to_global_symbol (const char *name) {
 
 static void set_local_symbol_pointer_info (const char *name, int pointer_depth, int pointed_size) {
 
-    struct local_symbol *sym = find_local_symbol (name);
+    struct local_symbol *sym = peek_local_symbol (name);
     
     if (pointer_depth > 0 && parsed_type_is_aggregate && parsed_type_size > (DATA_PTR & 0x1f) && pointed_size <= (DATA_PTR & 0x1f)) {
         pointed_size = parsed_type_size;
@@ -5837,6 +5900,11 @@ static void install_pending_params_as_locals (void) {
         local_symbols[local_symbol_count].pointed_size = pending_params[i].pointed_size;
         local_symbols[local_symbol_count].pointed_tag_name = pending_params[i].pointed_tag_name ? xstrdup (pending_params[i].pointed_tag_name) : 0;
         local_symbols[local_symbol_count].tag_name = 0;
+        local_symbols[local_symbol_count].used = 0;
+        local_symbols[local_symbol_count].decl_line = pending_params[i].decl_line;
+        local_symbols[local_symbol_count].decl_filename = pending_params[i].decl_filename ? xstrdup (pending_params[i].decl_filename) : 0;
+        local_symbols[local_symbol_count].decl_start = pending_params[i].decl_start ? xstrdup (pending_params[i].decl_start) : 0;
+        local_symbols[local_symbol_count].decl_caret_offset = pending_params[i].decl_caret_offset;
         
         local_symbol_count++;
         slot_size = pending_params[i].size;
@@ -8036,7 +8104,7 @@ static void parse_block (void) {
                     
                     if (!declarator_is_pointer && parsed_type_tag_name[0]) {
                     
-                        struct local_symbol *lsym = find_local_symbol (name);
+                        struct local_symbol *lsym = peek_local_symbol (name);
                         
                         if (lsym) {
                             lsym->tag_name = xstrdup (parsed_type_tag_name);
@@ -8434,7 +8502,7 @@ static void parse_block (void) {
                     
                     if (!declarator_is_pointer && parsed_type_tag_name[0]) {
                     
-                        struct local_symbol *lsym = find_local_symbol (name);
+                        struct local_symbol *lsym = peek_local_symbol (name);
                         
                         if (lsym) {
                             lsym->tag_name = xstrdup (parsed_type_tag_name);
@@ -8605,6 +8673,7 @@ static void parse_block (void) {
     statement_ends_control_flow = block_ends_control_flow;
     current_parse_block_depth--;
     
+    warn_unused_local_symbols (block_local_start, get_filename ());
     truncate_local_symbols (block_local_start, block_stack_start);
 
 }
@@ -19598,6 +19667,16 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
          */
         if (tok.kind != TOK_LPAREN && (name_is_function_designator || (find_global_symbol (name) >= 0 && get_global_symbol_kind (name) == GLOBAL_SYMBOL_FUNCTION))) {
         
+            {
+            
+                int function_symbol_index = find_global_symbol (name);
+                
+                if (function_symbol_index >= 0 && global_symbols[function_symbol_index].kind == GLOBAL_SYMBOL_FUNCTION) {
+                    global_symbols[function_symbol_index].used = 1;
+                }
+            
+            }
+            
             emit_load_address_to_reg_now (reg, name);
             set_rhs_last_pointer_info (1, DATA_NONE);
             
@@ -23218,6 +23297,16 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
     
     if (tok.kind != TOK_LPAREN) {
         return;
+    }
+    
+    {
+    
+        int function_symbol_index = find_global_symbol (name);
+        
+        if (function_symbol_index >= 0 && global_symbols[function_symbol_index].kind == GLOBAL_SYMBOL_FUNCTION) {
+            global_symbols[function_symbol_index].used = 1;
+        }
+    
     }
     
     inline_index = find_inline_function (name);
@@ -32262,7 +32351,7 @@ static void parse_for_init_declaration (int scope_start, long stack_start, long 
         
         if (!declarator_is_pointer && parsed_type_tag_name[0]) {
         
-            struct local_symbol *lsym = find_local_symbol (name);
+            struct local_symbol *lsym = peek_local_symbol (name);
             
             if (lsym) {
                 lsym->tag_name = xstrdup (parsed_type_tag_name);
@@ -32484,6 +32573,8 @@ static void parse_for_statement (void) {
         }
     
     }
+    
+    warn_unused_local_symbols (for_scope_start, get_filename ());
     
     truncate_local_symbols (for_scope_start, for_stack_start);
     statement_ends_control_flow = condition_is_infinite && !loop_escape_seen;
@@ -35508,6 +35599,16 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
         
         should_emit = add_global_symbol (name, GLOBAL_SYMBOL_FUNCTION, 0, last_declarator_name_start, last_declarator_name_caret, last_declarator_name_line);
         
+        if (should_emit) {
+        
+            int function_symbol_index = find_global_symbol (name);
+            
+            if (function_symbol_index >= 0) {
+                global_symbols[function_symbol_index].is_static = (storage_class == STORAGE_STATIC);
+            }
+        
+        }
+        
         set_global_symbol_size (name, return_is_void ? DATA_VOID : return_size);
         set_global_symbol_unsigned (name, 0);
         set_global_symbol_floating (name, return_is_floating);
@@ -35660,6 +35761,8 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
         function_tmp = 0;
     
     }
+    
+    warn_unused_local_symbols (0, function_filename_copy ? function_filename_copy : get_filename ());
     
     reset_local_symbols ();
     reset_goto_labels ();
@@ -37455,6 +37558,7 @@ void compile_translation_unit32 (void) {
         masm_flush_data_line ();
     }
     
+    warn_unused_static_functions (get_filename ());
     emit_pending_extern_symbols ();
     
     if (vec_dllexports.length || vec_dllaliases.length) {

@@ -249,7 +249,7 @@ static int is_current_typedef_name (void) {
         return 0;
     }
     
-    if (find_local_symbol (tok.ident)) {
+    if (peek_local_symbol (tok.ident)) {
         return 0;
     }
     
@@ -799,6 +799,22 @@ void clear_pending_params (void) {
         pending_params[i].pointed_is_floating = 0;
         pending_params[i].pointed_is_unsigned = 0;
         pending_params[i].knr_declared = 0;
+        pending_params[i].decl_line = 0;
+        pending_params[i].decl_caret_offset = 0;
+        
+        if (pending_params[i].decl_filename) {
+        
+            free (pending_params[i].decl_filename);
+            pending_params[i].decl_filename = 0;
+        
+        }
+        
+        if (pending_params[i].decl_start) {
+        
+            free (pending_params[i].decl_start);
+            pending_params[i].decl_start = 0;
+        
+        }
         
         if (pending_params[i].pointed_tag_name) {
         
@@ -2257,7 +2273,7 @@ int resolve_enum_constant (const char *name, int64_s *out) {
 struct local_symbol local_symbols[MAX_LOCAL_SYMBOLS];
 int local_symbol_count = 0;
 
-struct local_symbol *find_local_symbol (const char *name) {
+struct local_symbol *peek_local_symbol (const char *name) {
 
     int i;
     
@@ -2274,6 +2290,84 @@ struct local_symbol *find_local_symbol (const char *name) {
     }
     
     return 0;
+
+}
+
+struct local_symbol *find_local_symbol (const char *name) {
+
+    struct local_symbol *sym = peek_local_symbol (name);
+    
+    if (sym) {
+        sym->used = 1;
+    }
+    
+    return sym;
+
+}
+
+void warn_unused_local_symbols (int start, const char *filename) {
+
+    int i;
+    
+    if (!state || !(state->warn & WARN_UNUSED)) {
+        return;
+    }
+    
+    if (start < 0) {
+        start = 0;
+    }
+    
+    for (i = start; i < local_symbol_count; i++) {
+    
+        struct local_symbol *sym = &local_symbols[i];
+        
+        if (!sym->name || sym->used) {
+            continue;
+        }
+        
+        if (sym->decl_start && sym->decl_line) {
+        
+            report_line_at (sym->decl_filename ? sym->decl_filename : (filename ? filename : get_filename ()), sym->decl_line, REPORT_WARNING,
+                sym->decl_start, sym->decl_start + sym->decl_caret_offset,
+                    "unused %s '%s'", sym->offset > 0 ? "parameter" : "variable", sym->name);
+        
+        } else {
+        
+            report_at (filename ? filename : get_filename (), get_line_number (), REPORT_WARNING,
+                "unused %s '%s'", sym->offset > 0 ? "parameter" : "variable", sym->name);
+        
+        }
+    
+    }
+
+}
+
+void warn_unused_static_functions (const char *filename) {
+
+    int i;
+    
+    if (!state || !(state->warn & WARN_UNUSED)) {
+       return;
+    }
+    
+    for (i = 0; i < global_symbol_count; i++) {
+    
+        struct global_symbol_entry *sym = &global_symbols[i];
+        
+        if (sym->kind != GLOBAL_SYMBOL_FUNCTION || !sym->is_static || sym->used || sym->is_extern) {
+            continue;
+        }
+        
+        if (sym->decl_start && sym->decl_line) {
+        
+            report_line_at (sym->decl_filename ? sym->decl_filename : (filename ? filename : get_filename ()), sym->decl_line, REPORT_WARNING,
+                sym->decl_start, sym->decl_start + sym->decl_caret_offset, "unused function '%s'", sym->name);
+        
+        } else {
+            report_at (filename ? filename : get_filename (), get_line_number (), REPORT_WARNING, "unused function '%s'", sym->name);
+        }
+    
+    }
 
 }
 
@@ -2601,6 +2695,10 @@ void add_pending_param (const char *name, int size, int align, int is_unsigned, 
     pending_params[pending_param_count].pointed_is_floating = pointer_depth > 0 ? (parsed_type_is_floating ? 1 : 0) : 0;
     pending_params[pending_param_count].pointed_is_unsigned = pointer_depth > 0 ? (pointed_is_unsigned ? 1 : 0) : 0;
     pending_params[pending_param_count].pointed_tag_name = (pointer_depth > 0 && parsed_type_tag_name[0]) ? xstrdup (parsed_type_tag_name) : 0;
+    pending_params[pending_param_count].decl_line = last_declarator_name_line;
+    pending_params[pending_param_count].decl_filename = get_filename () ? xstrdup (get_filename ()) : 0;
+    pending_params[pending_param_count].decl_start = last_declarator_name_start ? xstrdup (last_declarator_name_start) : 0;
+    pending_params[pending_param_count].decl_caret_offset = (last_declarator_name_start && last_declarator_name_caret && last_declarator_name_caret >= last_declarator_name_start) ? (long) (last_declarator_name_caret - last_declarator_name_start) : 0;
     
     pending_param_count++;
 
