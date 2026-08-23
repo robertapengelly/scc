@@ -7783,12 +7783,16 @@ static void parse_local_aggregate_initializer_group (struct local_init *inits, i
 
 }
 
-static void parse_local_aggregate_initializer_values (struct local_init *inits, int *init_count, int max_inits, long base_offset, const int *fields, int field_count) {
+static int parse_local_aggregate_initializer_values (struct local_init *inits, int *init_count, int max_inits, long base_offset, const int *fields, int field_count) {
 
+    int initial_init_count = *init_count;
+    int provided_init_count;
+    
     int field_index = 0;
     long field_offset = 0;
     
     parse_local_aggregate_initializer_group (inits, init_count, max_inits, base_offset, fields, field_count, &field_index, &field_offset);
+    provided_init_count = *init_count - initial_init_count;
     
     while (field_index < field_count) {
     
@@ -7806,6 +7810,8 @@ static void parse_local_aggregate_initializer_values (struct local_init *inits, 
         field_index++;
     
     }
+    
+    return provided_init_count;
 
 }
 
@@ -8368,7 +8374,16 @@ static void parse_block (void) {
                         }
                     
                     } else if (object_is_auto && !declarator_is_pointer && (parsed_type_is_aggregate || declarator_has_array) && tok.kind == TOK_LBRACE) {
-                        parse_local_aggregate_initializer_values (inits, &init_count, MAX_LOCAL_INITS, object_offset, object_fields, object_field_count);
+                    
+                        int first_init_index = init_count;
+                        int provided_init_count = parse_local_aggregate_initializer_values (inits, &init_count, MAX_LOCAL_INITS, object_offset, object_fields, object_field_count);
+                        int expected_init_count = aggregate_initializer_value_field_count (parsed_field_sizes, parsed_field_count);
+                        int zero_initializer = provided_init_count == 1 && first_init_index < init_count && inits[first_init_index].kind == LOCAL_INIT_CONST && !inits[first_init_index].symbol && inits[first_init_index].value.low == 0 && inits[first_init_index].value.high == 0;
+                        
+                        if ((state->warn & WARN_INITIALIZER) && parsed_type_is_aggregate && !declarator_has_array && !zero_initializer && provided_init_count > 0 && provided_init_count < expected_init_count) {
+                            report_line_at (get_filename (), name_line, REPORT_WARNING, name_start, name_caret, "missing initializer values for '%s'", name ? name : "");
+                        }
+                    
                     } else if (object_is_auto && auto_initializer_needs_runtime_now ()) {
                     
                         long needed_stack_bytes = align_up_long (current_local_stack_size - block_stack_start, 4);
@@ -37420,6 +37435,17 @@ static void parse_external_after_type (void) {
                 
                 }
             
+            }
+        
+        }
+        
+        if ((state->warn & WARN_INITIALIZER) && parsed_type_is_aggregate && !decl_has_array && init_value_count > 0) {
+        
+            int expected_init_count = aggregate_initializer_value_field_count (parsed_field_sizes, parsed_field_count);
+            int zero_initializer = init_value_count == 1 && !init_symbols[0] && init_values[0].low == 0 && init_values[0].high == 0;
+            
+            if (!zero_initializer && init_value_count < expected_init_count) {
+                report_line_at (get_filename (), name_line, REPORT_WARNING, name_start, name_caret, "missing initializer values for '%s'", name ? name : "");
             }
         
         }

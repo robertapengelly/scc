@@ -141,9 +141,10 @@ static void print_usage (void) {
         fprintf (stderr, "    -P                                Don't print linemarkers.\n");
         fprintf (stderr, "    -o OBJFILE                        Name the object-file output OBJFILE.\n");
         fprintf (stderr, "\n");
-        fprintf (stderr, "    -Wall                            Enable most warning messages.\n");
-        fprintf (stderr, "    -Werror                          Treat all warnings as errors.\n");
-        fprintf (stderr, "    -Wextra                          Print extra (possibly unwanted) warnings.\n");
+        fprintf (stderr, "    -Wall                             Enable most warning messages.\n");
+        fprintf (stderr, "    -Werror                           Treat all warnings as errors.\n");
+        fprintf (stderr, "    -Wextra                           Print extra (possibly unwanted) warnings.\n");
+        fprintf (stderr, "    -Wshadow                          Warn when one variable shadows another.\n");
         
         fprintf (stderr, "\n");
         fprintf (stderr, "    --traditional-linemarker-format   Use #line instead of short form.\n");
