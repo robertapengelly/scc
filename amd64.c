@@ -7965,6 +7965,9 @@ static void emit_incdec_symbol_now (struct local_symbol *sym, const char *name, 
 static int current_expression_mentions_64bit_symbol_now (void);
 static int rhs_current_operand_is_unsigned_now (void);
 
+static int rhs_current_operand_signedness_for_warning_now (void);
+static void warn_signedness_comparison_now (int left_signedness);
+
 static int64_s parse_floating_const_expr_bits_now (int size);
 
 static int initializer_contains_runtime_call_now (void) {
@@ -27461,12 +27464,21 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
     enum token_kind op;
     
     int lhs_pointer_depth;
-    int is_unsigned;
+    int lhs_signedness;
     
     int rhs_is_enum;
+    int is_unsigned;
     
+    lhs_signedness = rhs_current_operand_signedness_for_warning_now ();
     is_unsigned = emit_load_assignment_binary_expression_prec_to_reg (reg, 1);
+    
     lhs_pointer_depth = rhs_last_pointer_depth;
+    
+    if (lhs_pointer_depth > 0) {
+        lhs_signedness = -1;
+    } else if (lhs_signedness < 0) {
+        lhs_signedness = is_unsigned ? 1 : 0;
+    }
     
     if (assignment32_stop_before_condition_operator && is_assignment32_condition_stop_operator (tok.kind)) {
         return;
@@ -27477,6 +27489,7 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
         op = tok.kind;
         get_token ();
         
+        warn_signedness_comparison_now (lhs_signedness);
         rhs_is_enum = 0;
 
         if (tok.kind == TOK_IDENT && tok.ident && !find_local_symbol (tok.ident) && find_global_symbol (tok.ident) < 0 && resolve_enum_constant (tok.ident, &rhs_enum_value)) {
@@ -33129,6 +33142,92 @@ static int statement_compare_const64_true (int64_s left, enum token_kind op, int
 
 }
 
+static int rhs_current_operand_signedness_for_warning_now (void) {
+
+    if (token_is_sizeof_keyword ()) {
+        return 1;
+    }
+    
+    if (token_is_integer_unsigned_constant_now (tok.kind)) {
+        return 1;
+    }
+    
+    if (token_kind_is_integer_constant_now (tok.kind)) {
+    
+        /* A non-negative signed integer constant is safely representable in
+         * the usual unsigned comparison type, so do not warn for cases such
+         * as "unsigned_value < 5". */
+        return 2;
+    
+    }
+    
+    /**
+     * A leading unary minus is a signed expression, not a harmless positive
+     * integer constant.  This makes "unsigned_value < -1" diagnose.
+     */
+    if (tok.kind == TOK_MINUS) {
+        return 0;
+    }
+    
+    if (tok.kind == TOK_IDENT && tok.ident) {
+    
+        struct local_symbol *src = find_local_symbol (tok.ident);
+        
+        if (src) {
+        
+            if (src->pointer_depth > 0 || src->is_array || src->is_floating) {
+                return -1;
+            }
+            
+            return src->is_unsigned ? 1 : 0;
+        
+        }
+        
+        if (find_global_symbol (tok.ident) >= 0) {
+        
+            if (get_global_symbol_pointer_depth (tok.ident) > 0 || get_global_symbol_array (tok.ident) || get_global_symbol_floating (tok.ident)) {
+                return -1;
+            }
+            
+            return get_global_symbol_unsigned (tok.ident) ? 1 : 0;
+        
+        }
+    
+    }
+    
+    return -1;
+
+}
+
+static void warn_signedness_comparison_now (int left_signedness) {
+
+    int right_signedness;
+
+    if (!(state->warn & WARN_SIGNEDNESS)) {
+        return;
+    }
+
+    right_signedness = rhs_current_operand_signedness_for_warning_now ();
+
+    if (left_signedness < 0 || right_signedness < 0) {
+        return;
+    }
+
+    /* Code 2 is a non-negative signed integer constant.  The usual arithmetic
+     * conversions can represent it in the unsigned type without changing its
+     * value, matching the useful -Wsign-compare behaviour. */
+    if (left_signedness == 2 || right_signedness == 2) {
+        return;
+    }
+
+    if (left_signedness != right_signedness) {
+        report_line_at (get_filename (), get_line_number (), REPORT_WARNING,
+                        tok.report_start, tok.report_caret,
+                        "comparison of integer expressions of different signedness");
+    }
+
+}
+
 static int rhs_current_operand_is_unsigned_now (void) {
 
     if (token_is_sizeof_keyword ()) {
@@ -33731,6 +33830,8 @@ static int source_condition_ident_immediate_compare_now (const char *p) {
 static int emit_statement_ident_immediate_compare_jump_if_false_now (int label) {
 
     enum token_kind op;
+    
+    int lhs_signedness;
     int is_unsigned;
     
     if (!source_condition_ident_immediate_compare_now (tok.caret) &&
@@ -33738,7 +33839,9 @@ static int emit_statement_ident_immediate_compare_jump_if_false_now (int label) 
         return 0;
     }
     
+    lhs_signedness = rhs_current_operand_signedness_for_warning_now ();
     is_unsigned = rhs_current_operand_is_unsigned_now ();
+    
     emit_load_assignment_rhs_to_reg ("rax");
     
     while (tok.kind == TOK_ARROW || tok.kind == TOK_DOT) {
@@ -33746,7 +33849,10 @@ static int emit_statement_ident_immediate_compare_jump_if_false_now (int label) 
     }
     
     if (postfix_member_seen) {
+    
         is_unsigned = postfix_member_is_unsigned ? 1 : 0;
+        lhs_signedness = is_unsigned ? 1 : 0;
+    
     }
     
     if (!token_is_statement_compare_operator (tok.kind)) {
@@ -33755,6 +33861,8 @@ static int emit_statement_ident_immediate_compare_jump_if_false_now (int label) 
     
     op = tok.kind;
     get_token ();
+    
+    warn_signedness_comparison_now (lhs_signedness);
     
     if (rhs_current_operand_is_unsigned_now ()) {
         is_unsigned = 1;
