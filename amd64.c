@@ -96,6 +96,14 @@ static void clear_rhs_last_pointer_info (void) {
 
 }
 
+#define     MAX_FALLTHROUGH_SWITCH_DEPTH        32
+
+static int fallthrough_switch_depth = 0;
+static int fallthrough_case_active[MAX_FALLTHROUGH_SWITCH_DEPTH];
+static int fallthrough_case_has_statement[MAX_FALLTHROUGH_SWITCH_DEPTH];
+
+static int fallthrough_case_ends_control_flow[MAX_FALLTHROUGH_SWITCH_DEPTH];
+
 static int current_function_has_return_statement = 0;
 static int statement_ends_control_flow = 0;
 
@@ -9304,6 +9312,13 @@ static void parse_block (void) {
                 ensure_block_stack_allocated (block_stack_start, &block_stack_bytes, &block_stack_emitted);
             }
             
+            if (fallthrough_switch_depth > 0 && fallthrough_case_active[fallthrough_switch_depth - 1]) {
+            
+                fallthrough_case_has_statement[fallthrough_switch_depth - 1] = 1;
+                fallthrough_case_ends_control_flow[fallthrough_switch_depth - 1] = 0;
+            
+            }
+            
             continue;
         
         }
@@ -9370,7 +9385,19 @@ static void parse_block (void) {
         
         }
         
-        parse_statement ();
+        {
+        
+            enum token_kind statement_kind = tok.kind;
+            parse_statement ();
+            
+            if (fallthrough_switch_depth > 0 && statement_kind != TOK_CASE && statement_kind != TOK_DEFAULT && fallthrough_case_active[fallthrough_switch_depth - 1]) {
+            
+                fallthrough_case_has_statement[fallthrough_switch_depth - 1] = 1;
+                fallthrough_case_ends_control_flow[fallthrough_switch_depth - 1] = statement_ends_control_flow;
+            
+            }
+        
+        }
         
         if (statement_ends_control_flow) {
             block_ends_control_flow = 1;
@@ -27096,6 +27123,7 @@ static void parse_switch_statement (void) {
     long old_break_cleanup_base;
     long old_continue_cleanup_base;
     
+    int fallthrough_tracking_pushed = 0;
     int saved_ends_control_flow;
     
     FILE *saved_ofp;
@@ -27141,8 +27169,22 @@ static void parse_switch_statement (void) {
     
     }
     
+    if (fallthrough_switch_depth < MAX_FALLTHROUGH_SWITCH_DEPTH) {
+    
+        fallthrough_case_active[fallthrough_switch_depth] = 0;
+        fallthrough_case_has_statement[fallthrough_switch_depth] = 0;
+        fallthrough_case_ends_control_flow[fallthrough_switch_depth] = 0;
+        fallthrough_switch_depth++;
+        fallthrough_tracking_pushed = 1;
+    
+    }
+    
     parse_statement ();
     saved_ends_control_flow = statement_ends_control_flow;
+    
+    if (fallthrough_tracking_pushed) {
+        fallthrough_switch_depth--;
+    }
     
     if (body_tmp) {
     
@@ -37984,6 +38026,20 @@ static void parse_statement (void) {
         const char *case_start = tok.start;
         const char *case_caret = tok.caret;
         
+        if (fallthrough_switch_depth > 0) {
+        
+            int fall_index = fallthrough_switch_depth - 1;
+            
+            if ((state->warn & WARN_FALLTHROUGH) && fallthrough_case_active[fall_index] && fallthrough_case_has_statement[fall_index] && !fallthrough_case_ends_control_flow[fall_index]) {
+                report_line_at (get_filename (), case_line, REPORT_WARNING, case_start, case_caret, "this case may be reached by fallthrough");
+            }
+            
+            fallthrough_case_active[fall_index] = 1;
+            fallthrough_case_has_statement[fall_index] = 0;
+            fallthrough_case_ends_control_flow[fall_index] = 0;
+        
+        }
+        
         get_token ();
         
         value = const_from_current_case_expr ();
@@ -38006,6 +38062,20 @@ static void parse_statement (void) {
         
         const char *default_start = tok.start;
         const char *default_caret = tok.caret;
+        
+        if (fallthrough_switch_depth > 0) {
+        
+            int fall_index = fallthrough_switch_depth - 1;
+            
+            if ((state->warn & WARN_FALLTHROUGH) && fallthrough_case_active[fall_index] && fallthrough_case_has_statement[fall_index] && !fallthrough_case_ends_control_flow[fall_index]) {
+                report_line_at (get_filename (), default_line, REPORT_WARNING, default_start, default_caret, "this case may be reached by fallthrough");
+            }
+            
+            fallthrough_case_active[fall_index] = 1;
+            fallthrough_case_has_statement[fall_index] = 0;
+            fallthrough_case_ends_control_flow[fall_index] = 0;
+        
+        }
         
         get_token ();
         

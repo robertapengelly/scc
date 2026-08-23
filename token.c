@@ -2087,10 +2087,9 @@ void get_token (void) {
             
             if (!get_line ()) {
             
-                free ((char *) get_filename ());
-                
                 if ((history = vec_pop (&vec_history))) {
                 
+                    free ((char *) get_filename ());
                     state->ifp = history->ifp;
                     
                     new_line_number = history->new_line_number;
