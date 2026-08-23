@@ -34555,6 +34555,63 @@ static void parse_statement (void) {
     statement_ends_control_flow = 0;
     flush_pending_statement_labels ();
     
+    if (tok.kind == TOK_ASSUME) {
+    
+        const char *assume_start = tok.start;
+        const char *assume_caret = tok.caret;
+        
+        unsigned long assume_line = get_line_number ();
+        FILE *saved_ofp;
+        
+        int assumption_known;
+        int assumption_value;
+        
+        get_token ();
+        
+        if (tok.kind != TOK_LPAREN) {
+        
+            report_line_at (get_filename (), assume_line, REPORT_ERROR, assume_start, assume_caret, "expected ( after __assume");
+            return;
+        
+        }
+        
+        get_token ();
+        
+        if (tok.kind == TOK_RPAREN) {
+        
+            report_line_at (get_filename (), assume_line, REPORT_ERROR, assume_start, assume_caret, "__assume requires an expression");
+            
+            get_token ();
+            expect_semi_or_recover ();
+            
+            return;
+        
+        }
+        
+        saved_ofp = state->ofp;
+        state->ofp = 0;
+        
+        emit_statement_jump_if_false (0);
+        state->ofp = saved_ofp;
+        
+        assumption_known = statement_condition_constant_known;
+        assumption_value = statement_condition_constant_value;
+        
+        if (tok.kind != TOK_RPAREN) {
+            skip_balanced_until (TOK_RPAREN, TOK_SEMI, TOK_EOF);
+        }
+        
+        expect (TOK_RPAREN, ")");
+        expect_semi_or_recover ();
+        
+        if (assumption_known && !assumption_value) {
+            statement_ends_control_flow = 1;
+        }
+        
+        return;
+    
+    }
+    
     if (parse_inline_asm_statement ()) {
         return;
     }
