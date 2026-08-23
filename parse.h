@@ -18,6 +18,14 @@ extern enum token_kind last_found_member_calling_convention;
 extern enum token_kind postfix_member_calling_convention;
 extern enum token_kind parsed_calling_convention;
 
+struct dll_alias_entry {
+
+    char *target, *name;
+    int dllexport;
+
+};
+
+extern struct vector vec_dllaliases;
 extern struct vector vec_dllexports;
 
 extern int parsed_dllexport;
@@ -59,6 +67,7 @@ extern int declarator_is_pointer;
 extern int declarator_pointer_depth;
 extern int declarator_has_array;
 
+extern char declarator_alias_target[512];
 extern int declarator_dllexport;
 extern int declarator_dllimport;
 extern int declarator_noreturn;
@@ -102,6 +111,7 @@ int parse_constexpr_address_of_null_member (int64_s *out);
 int parse_cast_type_name (int *out_size, int *out_is_unsigned, int *out_is_pointer);
 
 int resolve_enum_constant (const char *name, int64_s *out);
+void record_dllalias (const char *name, const char *target, int dllexport);
 
 #define     DATA_CHAR                   (1 | (1 << 5))
 #define     DATA_SHORT                  (2 | (1 << 6))

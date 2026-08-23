@@ -36929,6 +36929,7 @@ static void parse_external_after_type (void) {
         
         int declaration_noreturn = 0;
         int declaration_dllimport = 0;
+        int declaration_dllexport = 0;
         
         int decl_is_pointer;
         int decl_pointer_depth;
@@ -36953,11 +36954,13 @@ static void parse_external_after_type (void) {
         declaration_is_inline = parsed_type_is_inline;
         declaration_storage = parsed_storage_class;
         declaration_dllimport = parsed_dllimport;
+        declaration_dllexport = parsed_dllexport;
         declaration_noreturn = parsed_noreturn;
         
         parse_declarator (&name);
         
         declaration_dllimport = declaration_dllimport || parsed_dllimport || declarator_dllimport;
+        declaration_dllexport = declaration_dllexport || parsed_dllexport || declarator_dllexport;
         declaration_noreturn = declaration_noreturn || parsed_noreturn || declarator_noreturn;
         
         apply_typedef_array_to_declarator ();
@@ -37016,13 +37019,31 @@ static void parse_external_after_type (void) {
         
         }
         
+        if (declarator_alias_target[0]) {
+        
+            if (!name) {
+                report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret, "'alias' attribute requires a named declaration");
+            } else if (!declarator_has_function || declarator_function_is_pointer) {
+                report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret, "'alias' attribute is only supported for functions");
+            } else if (tok.kind == TOK_LBRACE || is_type_start (tok.kind)) {
+                report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret, "function '%s' cannot be both defined and declared with 'alias'", name);
+            } else {
+                record_dllalias (name, declarator_alias_target, declaration_dllexport || parsed_dllexport || declarator_dllexport);
+            }
+            
+            declarator_alias_target[0] = '\0';
+        
+        }
+        
         if (name && declarator_has_function && (tok.kind == TOK_LBRACE || is_type_start (tok.kind))) {
         
-            if (parsed_dllexport || declarator_dllexport) {
+            if (declaration_dllexport || parsed_dllexport || declarator_dllexport) {
             
                 vec_push (&vec_dllexports, xstrdup (name));
                 
                 declarator_dllexport = 0;
+                declaration_dllexport = 0;
+                
                 parsed_dllexport = 0;
             
             }
@@ -37252,6 +37273,26 @@ static void parse_external_after_type (void) {
 
 }
 
+static int dll_export_name_is_present (const char *wanted) {
+
+    long i;
+    
+    if (!wanted) {
+        return 0;
+    }
+    
+    for (i = 0; i < vec_dllexports.length; i++) {
+    
+        if (vec_dllexports.data[i] && strcmp (vec_dllexports.data[i], wanted) == 0) {
+            return 1;
+        }
+    
+    }
+    
+    return 0;
+
+}
+
 void compile_translation_unit32 (void) {
 
     if (state->ofp) {
@@ -37307,7 +37348,7 @@ void compile_translation_unit32 (void) {
     
     emit_pending_extern_symbols ();
     
-    if (vec_dllexports.length) {
+    if (vec_dllexports.length || vec_dllaliases.length) {
     
         char *p, *tmp;
         
@@ -37336,6 +37377,26 @@ void compile_translation_unit32 (void) {
             
                 if ((name = asm_global_symbol_name (vec_dllexports.data[i]))) {
                     fprintf (fp, "    %s\n", name);
+                }
+            
+            }
+            
+            for (i = 0; i < vec_dllaliases.length; i++) {
+            
+                struct dll_alias_entry *entry = vec_dllaliases.data[i];
+                
+                const char *alias_name;
+                const char *target_name;
+                
+                if (!entry || !entry->dllexport || !dll_export_name_is_present (entry->target)) {
+                    continue;
+                }
+                
+                alias_name = asm_global_symbol_name (entry->name);
+                target_name = asm_global_symbol_name (entry->target);
+                
+                if (alias_name && target_name) {
+                    fprintf (fp, "    %s=%s\n", alias_name, target_name);
                 }
             
             }

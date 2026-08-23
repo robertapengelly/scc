@@ -23,6 +23,7 @@ enum token_kind postfix_member_calling_convention = TOK_EOF;
 enum token_kind parsed_calling_convention = TOK_EOF;
 
 struct vector vec_dllexports = { 0 };
+struct vector vec_dllaliases = { 0 };
 
 int parsed_dllexport = 0;
 int parsed_dllimport = 0;
@@ -67,6 +68,8 @@ int declarator_noreturn = 0;
 
 int declarator_dllexport = 0;
 int declarator_dllimport = 0;
+
+char declarator_alias_target[512] = { 0 };
 
 enum token_kind declarator_calling_convention = TOK_EOF;
 int global_initializer_accept_symbol_addresses = 0;
@@ -120,6 +123,24 @@ void append_parsed_field (int size) {
 
 int is_string_token (void) {
     return tok.kind == TOK_PPSTR || tok.kind == TOK_LSTR;
+}
+
+void record_dllalias (const char *name, const char *target, int dllexport) {
+
+    struct dll_alias_entry *entry;
+    
+    if (!name || !*name || !target || !*target) {
+        return;
+    }
+    
+    entry = xmalloc (sizeof (*entry));
+    
+    entry->name = xstrdup (name);
+    entry->target = xstrdup (target);
+    
+    entry->dllexport = dllexport;
+    vec_push (&vec_dllaliases, entry);
+
 }
 
 int expect (enum token_kind k, const char *what) {
@@ -443,6 +464,62 @@ static void skip_attribute_arguments (void) {
 
 }
 
+static int parse_alias_attribute_argument (void) {
+
+    const char *s;
+    size_t len;
+    
+    if (!_accept (TOK_LPAREN)) {
+    
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected '(' after 'alias'");
+        return 0;
+    
+    }
+    
+    if (!is_string_token () || !tok.ident || tok.kind == TOK_LSTR) {
+    
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected string literal in 'alias' attribute");
+        
+        skip_attribute_arguments ();
+        return 0;
+    
+    }
+    
+    s = tok.ident;
+    len = strlen (s);
+    
+    if (len < 2 || s[0] != '"' || s[len - 1] != '"') {
+    
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "invalid string literal in 'alias' attribute");
+        
+        get_token ();
+        expect (TOK_RPAREN, ")");
+        
+        return 0;
+    
+    }
+    
+    if (len - 2 >= sizeof (declarator_alias_target)) {
+    
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "alias target name is too long");
+        
+        get_token ();
+        expect (TOK_RPAREN, ")");
+        
+        return 0;
+    
+    }
+    
+    memcpy (declarator_alias_target, s + 1, len - 2);
+    declarator_alias_target[len - 2] = '\0';
+    
+    get_token ();
+    
+    expect (TOK_RPAREN, ")");
+    return 1;
+
+}
+
 static void apply_decl_attribute (const char *spelling, int is_gnu) {
 
     if (attribute_name_is (spelling, "dllexport")) {
@@ -555,12 +632,18 @@ static void parse_decl_modifier (void) {
             } else {
             
                 name = xstrdup (tok.ident);
-                
-                apply_decl_attribute (name, 1);
                 get_token ();
                 
-                if (tok.kind == TOK_LPAREN) {
-                    skip_attribute_arguments ();
+                if (attribute_name_is (name, "alias")) {
+                    parse_alias_attribute_argument ();
+                } else {
+                
+                    apply_decl_attribute (name, 1);
+                    
+                    if (tok.kind == TOK_LPAREN) {
+                        skip_attribute_arguments ();
+                    }                
+                
                 }
                 
                 free (name);
@@ -741,12 +824,14 @@ void parse_declarator (char **out_name) {
     const char *saved_captured_declarator_name_caret = captured_declarator_name_caret;
 
     enum token_kind saved_declarator_calling_convention = declarator_calling_convention;
+    char saved_declarator_alias_target[sizeof declarator_alias_target];
     
     int saved_declarator_dllexport = declarator_dllexport;
     int saved_declarator_dllimport = declarator_dllimport;
     int saved_declarator_noreturn = declarator_noreturn;
     
     unsigned long saved_captured_declarator_name_line = captured_declarator_name_line;
+    memcpy (saved_declarator_alias_target, declarator_alias_target, sizeof (declarator_alias_target));
     
     if (top_level) {
     
@@ -756,6 +841,8 @@ void parse_declarator (char **out_name) {
         
         declarator_calling_convention = TOK_EOF;
         capture_declarator_name_location = 1;
+        
+        memcpy (declarator_alias_target, saved_declarator_alias_target, sizeof (declarator_alias_target));
         
         declarator_dllexport = 0;
         declarator_dllimport = 0;
