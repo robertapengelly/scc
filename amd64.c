@@ -34612,6 +34612,139 @@ static void parse_for_header_expression_until (enum token_kind end_token) {
 
 }
 
+static void parse_for_init_declaration (int scope_start, long stack_start, long *stack_bytes) {
+
+    parse_type_spec ();
+    
+    for (;;) {
+    
+        char *name = 0;
+        long object_offset;
+        
+        int object_size, object_align, init_size;
+        int object_fields[MAX_AGG_FIELDS];
+        int object_field_count = 0;
+        
+        unsigned long name_line;
+        const char *name_start, *name_caret;
+        
+        parse_declarator (&name);
+        apply_typedef_array_to_declarator ();
+        
+        name_line = last_declarator_name_line;
+        name_start = last_declarator_name_start;
+        name_caret = last_declarator_name_caret;
+        
+        make_declarator_fields (object_fields, &object_field_count, parsed_field_sizes, parsed_field_count, parsed_type_size, parsed_type_is_aggregate);
+        
+        if (declarator_is_pointer) {
+        
+            object_field_count = 1;
+            object_fields[0] = DATA_PTR;
+        
+        }
+        
+        if (parsed_storage_class == STORAGE_EXTERN || parsed_storage_class == STORAGE_STATIC || parsed_storage_class == STORAGE_TYPEDEF) {
+        
+            report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret,
+                "declaration in for loop initializer may only have auto or register storage class");
+        
+        }
+        
+        if (parsed_type_is_void && !declarator_is_pointer && !declarator_has_function) {
+        
+            report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret,
+                "variable '%s' declared void", name ? name : "");
+        
+        }
+        
+        object_size = declarator_object_size (parsed_type_size);
+        object_align = declarator_is_pointer ? type_alignment (DATA_PTR) :
+            type_alignment (parsed_type_is_aggregate ? DATA_PTR : parsed_type_size);
+        
+        object_offset = add_local_symbol (name, object_size, object_align,
+            declarator_is_pointer ? 0 : parsed_type_is_unsigned,
+                scope_start, name_line, name_start, name_caret);
+        
+        set_local_symbol_floating (name, declarator_is_pointer ? 0 : parsed_type_is_floating);
+        set_local_symbol_array (name, declarator_has_array);
+        set_local_symbol_array_dimensions (name, declarator_has_array ? declarator_array_dimensions : 0);
+        set_local_symbol_array_element_size (name, declarator_array_element_size_now (parsed_type_size));
+        set_local_symbol_pointer_info (name, declarator_effective_pointer_depth_now (),
+            declarator_effective_pointed_size_now (parsed_type_size, object_fields, object_field_count));
+        
+        if (!declarator_is_pointer && parsed_type_tag_name[0]) {
+        
+            struct local_symbol *lsym = find_local_symbol (name);
+            
+            if (lsym) {
+                lsym->tag_name = xstrdup (parsed_type_tag_name);
+            }
+        
+        }
+        
+        {
+        
+            long needed = align_up_long (current_local_stack_size - stack_start, 4);
+            
+            if (needed > *stack_bytes) {
+            
+                long extra = needed - *stack_bytes;
+                
+                if (!current_function_frame_deferred) {
+                    emit_stack_adjust (extra, 1);
+                }
+                
+                current_block_cleanup_bytes += extra;
+                *stack_bytes = needed;
+            
+            }
+        
+        }
+        
+        if (_accept (TOK_ASSIGN)) {
+        
+            init_size = declarator_is_pointer ? DATA_PTR : (parsed_type_size & 0x1f);
+            
+            if (!declarator_is_pointer && (parsed_type_is_aggregate || declarator_has_array)) {
+            
+                report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret,
+                    "aggregate initializer in for loop declaration is not yet supported");
+                skip_initializer ();
+            
+            } else if (!declarator_is_pointer && parsed_type_is_floating) {
+            
+                emit_load_floating_rhs_expression_now (init_size);
+                emit_store_floating_to_local_now (object_offset, init_size);
+            
+            } else if (init_size == (DATA_LLONG & 0x1f) && !declarator_is_pointer) {
+            
+                emit_load_assignment_rhs_expression_to_pair ("rax", "rdx", parsed_type_is_unsigned);
+                emit_store_pair_to_local64 (object_offset, "rax", "rdx");
+            
+            } else {
+            
+                emit_load_assignment_rhs_expression_to_reg ("rax");
+                emit_store_reg_to_local (object_offset, init_size, "rax");
+            
+            }
+        
+        }
+        
+        if (name) {
+            free (name);
+        }
+        
+        if (!_accept (TOK_COMMA)) {
+            break;
+        }
+    
+    }
+    
+    expect (TOK_SEMI, ";");
+
+}
+
 static void parse_for_statement (void) {
 
     int loop_label = anon_label++;
@@ -34636,11 +34769,27 @@ static void parse_for_statement (void) {
     FILE *saved_ofp;
     FILE *step_tmp = 0;
     
+    int for_scope_start = local_symbol_count;
+    
+    long for_stack_start = current_local_stack_size;
+    long for_stack_bytes = 0;
+    
     get_token ();
     expect (TOK_LPAREN, "(");
     
     if (tok.kind == TOK_SEMI) {
         get_token ();
+    } else if (is_type_start (tok.kind)) {
+    
+        if (state->std == 90) {
+        
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret,
+                "ISO C90 forbids declarations in for loop initializers");
+        
+        }
+        
+        parse_for_init_declaration (for_scope_start, for_stack_start, &for_stack_bytes);
+    
     } else {
         parse_for_header_expression_until (TOK_SEMI);
     }
@@ -34735,6 +34884,21 @@ static void parse_for_statement (void) {
     current_break_cleanup_base = old_break_cleanup_base;
     current_continue_cleanup_base = old_continue_cleanup_base;
     
+    if (for_stack_bytes > 0) {
+    
+        if (!current_function_frame_deferred) {
+            emit_stack_adjust (for_stack_bytes, 0);
+        }
+        
+        if (current_block_cleanup_bytes >= for_stack_bytes) {
+            current_block_cleanup_bytes -= for_stack_bytes;
+        } else {
+            current_block_cleanup_bytes = 0;
+        }
+    
+    }
+    
+    truncate_local_symbols (for_scope_start, for_stack_start);
     statement_ends_control_flow = condition_is_infinite && !loop_escape_seen;
 
 }
