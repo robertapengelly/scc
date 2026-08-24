@@ -107,6 +107,7 @@ static int fallthrough_case_ends_control_flow[MAX_FALLTHROUGH_SWITCH_DEPTH];
 static int current_function_has_return_statement = 0;
 static int statement_ends_control_flow = 0;
 
+static int current_function_is_naked = 0;
 static int current_parse_block_depth = 0;
 static int current_function_is_void = 0;
 static int current_function_is_noreturn = 0;
@@ -6809,6 +6810,11 @@ static void emit_function_start (const char *name, int is_static) {
     if (state->syntax & ASM_SYNTAX_INTEL) {
     
         fprintf (state->ofp, "%s:\n", asm_name);
+        
+        if (current_function_is_naked) {
+            return;
+        }
+        
         fprintf (state->ofp, "    push rbp\n");
         fprintf (state->ofp, "    mov rbp, rsp\n");
         
@@ -6820,6 +6826,11 @@ static void emit_function_start (const char *name, int is_static) {
     } else {
     
         fprintf (state->ofp, "%s:\n", asm_name);
+        
+        if (current_function_is_naked) {
+            return;
+        }
+        
         fprintf (state->ofp, "    pushq %%rbp\n");
         fprintf (state->ofp, "    movq %%rsp, %%rbp\n");
         
@@ -7262,6 +7273,10 @@ static void emit_local_initializers (struct local_init *inits, int init_count) {
 static void emit_function_end (void) {
 
     patch_deferred_function_frame ();
+    
+    if (current_function_is_naked) {
+        return;
+    }
     
     if (!state->ofp) {
         return;
@@ -38167,7 +38182,7 @@ static void parse_statement (void) {
 
 }
 
-static void parse_function_body (const char *name, int storage_class, int is_inline, int is_noreturn, int return_is_void, int return_is_floating, int return_is_unsigned, int return_size, int return_pointer_depth, unsigned long function_line, const char *function_start, const char *function_caret) {
+static void parse_function_body (const char *name, int storage_class, int is_inline, int is_noreturn, int is_naked, int return_is_void, int return_is_floating, int return_is_unsigned, int return_size, int return_pointer_depth, unsigned long function_line, const char *function_start, const char *function_caret) {
 
     int old_return_label = current_return_label;
     int should_emit = 1;
@@ -38191,6 +38206,7 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     int saved_declarator_function_is_variadic;
     int saved_current_section = current_section;
     
+    int old_function_is_naked;
     int old_function_is_void;
     int old_function_is_noreturn;
     int old_function_is_floating;
@@ -38287,6 +38303,7 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     
     }
     
+    old_function_is_naked = current_function_is_naked;
     old_function_has_return_statement = current_function_has_return_statement;
     old_function_is_void = current_function_is_void;
     old_function_is_noreturn = current_function_is_noreturn;
@@ -38296,6 +38313,7 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     old_function_return_pointer_depth = current_function_return_pointer_depth;
     old_function_returns_aggregate = current_function_returns_aggregate;
     
+    current_function_is_naked = is_naked ? 1 : 0;
     current_function_is_void = return_is_void;
     current_function_is_noreturn = effective_noreturn;
     current_function_is_floating = return_is_floating;
@@ -38349,7 +38367,7 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
      * Moving all automatic storage to a synthetic prologue changes that
      * analysis and can corrupt the self-built compiler.
      */
-    current_function_frame_enabled = (!is_inline && capture_function_body);
+    current_function_frame_enabled = (!current_function_is_naked && !is_inline && capture_function_body);
     emit_function_start (name, !emit_public);
     
     statement_ends_control_flow = 0;
@@ -38432,6 +38450,7 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     reset_local_symbols ();
     reset_goto_labels ();
     
+    current_function_is_naked = old_function_is_naked;
     current_function_has_return_statement = old_function_has_return_statement;
     current_function_is_void = old_function_is_void;
     current_function_is_noreturn = old_function_is_noreturn;
@@ -38604,7 +38623,7 @@ static int parse_possible_knr_function (void) {
     
     if (is_type_start (tok.kind) || tok.kind == TOK_LBRACE) {
     
-        parse_function_body (name, STORAGE_NONE, 0, 0, 0, 0, 0, DATA_INT & 0x1f, 0, name_line, name_start, name_caret);
+        parse_function_body (name, STORAGE_NONE, 0, 0, 0, 0, 0, 0, DATA_INT & 0x1f, 0, name_line, name_start, name_caret);
         
         if (parsed_dllexport || declarator_dllexport) {
         
@@ -39912,6 +39931,7 @@ static void parse_external_after_type (void) {
         int declaration_is_inline;
         int declaration_storage;
         
+        int declaration_naked = 0;
         int declaration_noreturn = 0;
         int declaration_dllimport = 0;
         int declaration_dllexport = 0;
@@ -39936,6 +39956,7 @@ static void parse_external_after_type (void) {
         
         object_field_count = saved_field_count;
         
+        declaration_naked = parsed_naked;
         declaration_is_inline = parsed_type_is_inline;
         declaration_storage = parsed_storage_class;
         declaration_noreturn = parsed_noreturn;
@@ -39944,6 +39965,7 @@ static void parse_external_after_type (void) {
         
         parse_declarator (&name);
         
+        declaration_naked = declaration_naked || parsed_naked || declarator_naked;
         declaration_noreturn = declaration_noreturn || parsed_noreturn || declarator_noreturn;
         declaration_dllimport = declaration_dllimport || parsed_dllimport || declarator_dllimport;
         declaration_dllexport = declaration_dllexport || parsed_dllexport || declarator_dllexport;
@@ -40032,7 +40054,7 @@ static void parse_external_after_type (void) {
             
             }
             
-            parse_function_body (name, declaration_storage, declaration_is_inline, declaration_noreturn,
+            parse_function_body (name, declaration_storage, declaration_is_inline, declaration_noreturn, declaration_naked,
                 (parsed_type_is_void && !declarator_is_pointer),
                     (declarator_is_pointer ? 0 : parsed_type_is_floating),
                         (declarator_is_pointer ? 0 : parsed_type_is_unsigned),

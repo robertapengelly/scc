@@ -31,6 +31,7 @@ extern struct vector vec_dllexports;
 extern int parsed_dllexport;
 extern int parsed_dllimport;
 extern int parsed_noreturn;
+extern int parsed_naked;
 
 extern int parsed_type_size;
 extern int parsed_type_is_inline;
@@ -68,9 +69,11 @@ extern int declarator_pointer_depth;
 extern int declarator_has_array;
 
 extern char declarator_alias_target[512];
+
 extern int declarator_dllexport;
 extern int declarator_dllimport;
 extern int declarator_noreturn;
+extern int declarator_naked;
 
 extern enum token_kind declarator_calling_convention;
 extern int global_initializer_accept_symbol_addresses;

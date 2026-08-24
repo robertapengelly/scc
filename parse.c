@@ -28,6 +28,7 @@ struct vector vec_dllaliases = { 0 };
 int parsed_dllexport = 0;
 int parsed_dllimport = 0;
 int parsed_noreturn = 0;
+int parsed_naked = 0;
 
 int parsed_type_size = DATA_NONE;
 int parsed_type_is_inline = 0;
@@ -65,6 +66,7 @@ int declarator_is_pointer = 0;
 
 int declarator_has_array = 0;
 int declarator_noreturn = 0;
+int declarator_naked = 0;
 
 int declarator_dllexport = 0;
 int declarator_dllimport = 0;
@@ -567,6 +569,17 @@ static void apply_decl_attribute (const char *spelling, int is_gnu) {
         
         }
     
+    } else if (attribute_name_is (spelling, "naked")) {
+    
+        if (parsed_naked || declarator_naked) {
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "duplicate '%s(naked)'", is_gnu ? "__attribute__" : "__declspec");
+        } else {
+        
+            declarator_naked = 1;
+            parsed_naked = 1;
+        
+        }
+    
     } else if (is_gnu && attribute_name_is (spelling, "stdcall")) {
     
         if (parsed_calling_convention == TOK_EOF && declarator_calling_convention == TOK_EOF) {
@@ -845,6 +858,7 @@ void parse_declarator (char **out_name) {
     int saved_declarator_dllexport = declarator_dllexport;
     int saved_declarator_dllimport = declarator_dllimport;
     int saved_declarator_noreturn = declarator_noreturn;
+    int saved_declarator_naked = declarator_naked;
     
     unsigned long saved_captured_declarator_name_line = captured_declarator_name_line;
     memcpy (saved_declarator_alias_target, declarator_alias_target, sizeof (declarator_alias_target));
@@ -863,6 +877,7 @@ void parse_declarator (char **out_name) {
         declarator_dllexport = 0;
         declarator_dllimport = 0;
         declarator_noreturn = 0;
+        declarator_naked = 0;
         
         captured_declarator_name_location = 0;
         captured_declarator_name_start = 0;
@@ -928,6 +943,7 @@ void parse_declarator (char **out_name) {
         declarator_dllexport = saved_declarator_dllexport;
         declarator_dllimport = saved_declarator_dllimport;
         declarator_noreturn = saved_declarator_noreturn;
+        declarator_naked = saved_declarator_naked;
     
     }
 
@@ -2890,6 +2906,7 @@ void parse_type_spec (void) {
     parsed_dllexport = 0;
     parsed_dllimport = 0;
     parsed_noreturn = 0;
+    parsed_naked = 0;
     
     clear_parsed_fields ();
     
