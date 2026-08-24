@@ -29397,7 +29397,15 @@ struct inline_asm_input_operand {
 
     char constraint[16];
     char subst[64];
+    char output_name[64];
+    
+    const char *reg_name;
+    
+    int size;
+    int is_output;
+    int output_in_memory;
     int restore_reg;
+    
     const char *restore_name;
 
 };
@@ -29515,6 +29523,46 @@ static void inline_asm_unquote_string_token (char *dst, size_t dst_size) {
 
 }
 
+static void inline_asm_read_string_sequence (char *dst, size_t dst_size) {
+
+    char part[256];
+    
+    size_t used;
+    size_t avail;
+    size_t part_len;
+    
+    if (!dst || dst_size == 0) {
+        return;
+    }
+    
+    dst[0] = 0;
+    
+    while (is_string_token ()) {
+    
+        inline_asm_unquote_string_token (part, sizeof (part));
+        
+        used = strlen (dst);
+        avail = dst_size - used - 1;
+        
+        if (avail) {
+        
+            part_len = strlen (part);
+            
+            if (part_len > avail) {
+                part_len = avail;
+            }
+            
+            memcpy (dst + used, part, part_len);
+            dst[used + part_len] = 0;
+        
+        }
+        
+        get_token ();
+    
+    }
+
+}
+
 static const char *inline_asm_constraint_reg32 (const char *constraint) {
 
     if (!constraint) {
@@ -29545,41 +29593,97 @@ static const char *inline_asm_constraint_reg32 (const char *constraint) {
         return "edi";
     }
     
+    if (strchr (constraint, 'r')) {
+        return "eax";
+    }
+    
     return 0;
 
 }
 
-static const char *inline_asm_reg_for_template (const char *reg32) {
+static const char *inline_asm_reg_for_size (const char *reg, int size) {
 
-    if (!reg32) {
+    if (!reg) {
         return "";
     }
     
-    if (strcmp (reg32, "eax") == 0) {
-        return "al";
+    if (strcmp (reg, "eax") == 0) {
+    
+        if (size == 1) {
+            return "al";
+        }
+        
+        if (size == 2) {
+            return "ax";
+        }
+        
+        return "eax";
+    
     }
     
-    if (strcmp (reg32, "ebx") == 0) {
-        return "bl";
+    if (strcmp (reg, "ebx") == 0) {
+    
+        if (size == 1) {
+            return "bl";
+        }
+        
+        if (size == 2) {
+            return "bx";
+        }
+        
+        return "ebx";
+    
     }
     
-    if (strcmp (reg32, "ecx") == 0) {
-        return "cl";
+    if (strcmp (reg, "ecx") == 0) {
+    
+        if (size == 1) {
+            return "cl";
+        }
+        
+        if (size == 2) {
+            return "cx";
+        }
+        
+        return "ecx";
+    
     }
     
-    if (strcmp (reg32, "edx") == 0) {
-        return "dx";
+    if (strcmp (reg, "edx") == 0) {
+    
+        if (size == 1) {
+            return "dl";
+        }
+        
+        if (size == 2) {
+            return "dx";
+        }
+        
+        return "edx";
+    
     }
     
-    if (strcmp (reg32, "esi") == 0) {
+    if (strcmp (reg, "esi") == 0) {
+    
+        if (size == 2) {
+            return "si";
+        }
+        
         return "esi";
+    
     }
     
-    if (strcmp (reg32, "edi") == 0) {
+    if (strcmp (reg, "edi") == 0) {
+    
+        if (size == 2) {
+            return "di";
+        }
+        
         return "edi";
+    
     }
     
-    return reg32;
+    return reg;
 
 }
 
@@ -29780,6 +29884,56 @@ static int inline_asm_format_identifier_operand (char *dst, size_t dst_size, con
 
 }
 
+static int inline_asm_identifier_size (const char *name) {
+
+    struct local_symbol *sym;
+    
+    if (!name || !*name) {
+        return DATA_INT & 0x1f;
+    }
+    
+    sym = find_local_symbol (name);
+    
+    if (sym) {
+        return sym->size & 0x1f;
+    }
+    
+    if (find_global_symbol (name) >= 0) {
+        return get_global_symbol_size (name) & 0x1f;
+    }
+    
+    return DATA_INT & 0x1f;
+
+}
+
+static void inline_asm_emit_output_store (struct inline_asm_input_operand *operand) {
+
+    struct local_symbol *sym;
+    
+    if (!operand || !operand->is_output || operand->output_in_memory || !operand->reg_name || !operand->output_name[0]) {
+        return;
+    }
+    
+    sym = find_local_symbol (operand->output_name);
+    
+    if (sym) {
+    
+        if (sym->is_static && sym->static_label) {
+            emit_store_reg_to_global (sym->static_label, sym->size, operand->reg_name);
+        } else {
+            emit_store_reg_to_local (sym->offset, sym->size, operand->reg_name);
+        }
+        
+        return;
+    
+    }
+    
+    if (find_global_symbol (operand->output_name) >= 0) {
+        emit_store_reg_to_global (operand->output_name, get_global_symbol_size (operand->output_name), operand->reg_name);
+    }
+
+}
+
 static void inline_asm_emit_input_load (const char *constraint, int input_index, struct inline_asm_input_operand *inputs, const char *templ) {
 
     char expr_text[64];
@@ -29794,8 +29948,10 @@ static void inline_asm_emit_input_load (const char *constraint, int input_index,
     
     inputs[input_index].restore_reg = 0;
     inputs[input_index].restore_name = 0;
+    inputs[input_index].reg_name = 0;
+    inputs[input_index].size = DATA_INT & 0x1f;
     
-    if (strchr (constraint, 'N')) {
+    if (strchr (constraint, 'N') && (token_is_integer_constant_now (tok.kind) || strlen (constraint) == 1)) {
     
         if (token_is_integer_constant_now (tok.kind)) {
         
@@ -29847,7 +30003,13 @@ static void inline_asm_emit_input_load (const char *constraint, int input_index,
     
     if (reg32) {
     
-        subst = inline_asm_reg_for_template (reg32);
+        inputs[input_index].reg_name = reg32;
+        
+        if (tok.kind == TOK_IDENT && tok.ident) {
+            inputs[input_index].size = inline_asm_identifier_size (tok.ident);
+        }
+        
+        subst = inline_asm_reg_for_size (reg32, inputs[input_index].size);
         
         if (inline_asm_reg_needs_restore (reg32) && state->ofp) {
         
@@ -29895,6 +30057,56 @@ static void inline_asm_emit_input_load (const char *constraint, int input_index,
 
 }
 
+static const char *inline_asm_operand_subst (struct inline_asm_input_operand *operand, int modifier) {
+
+    if (!operand) {
+        return "";
+    }
+    
+    if (!modifier || !operand->reg_name) {
+        return operand->subst;
+    }
+    
+    switch (modifier) {
+    
+        case 'b':
+        
+            return inline_asm_reg_for_size (operand->reg_name, 1);
+        
+        case 'w':
+        
+            return inline_asm_reg_for_size (operand->reg_name, 2);
+        
+        case 'k':
+        
+            return inline_asm_reg_for_size (operand->reg_name, 4);
+        
+        default:
+        
+            return operand->subst;
+    
+    }
+
+}
+
+static void inline_asm_finish_operands (struct inline_asm_input_operand *inputs, int input_count) {
+
+    int i;
+    
+    for (i = 0; i < input_count; i++) {
+        inline_asm_emit_output_store (&inputs[i]);
+    }
+    
+    for (i = input_count - 1; i >= 0; i--) {
+    
+        if (inputs[i].restore_reg && inputs[i].restore_name) {
+            fprintf (state->ofp, "    pop %s\n", inputs[i].restore_name);
+        }
+    
+    }
+
+}
+
 static void inline_asm_emit_template (const char *templ, struct inline_asm_input_operand *inputs, int input_count) {
 
     char line[512];
@@ -29919,20 +30131,49 @@ static void inline_asm_emit_template (const char *templ, struct inline_asm_input
             
             }
         
-        } else if (*p == '%' && p[1] >= '0' && p[1] <= '9') {
+        } else if (*p == '%') {
         
-            int index = p[1] - '0';
-            const char *subst = "";
+            const char *q = p + 1;
+            const char *subst;
+            
+            int index = 0;
+            int modifier = 0;
+            int have_index = 0;
+            
+            if (*q == 'b' || *q == 'w' || *q == 'k' || *q == 'q') {
+            
+                modifier = *q;
+                q++;
+            
+            }
+            
+            while (*q >= '0' && *q <= '9') {
+            
+                have_index = 1;
+                
+                index = index * 10 + (*q - '0');
+                q++;
+            
+            }
+            
+            if (!have_index) {
+            
+                line[n++] = *p;
+                continue;
+            
+            }
+            
+            subst = "";
             
             if (index >= 0 && index < input_count) {
-                subst = inputs[index].subst;
+                subst = inline_asm_operand_subst (&inputs[index], modifier);
             }
             
             while (*subst && n + 1 < sizeof (line)) {
                 line[n++] = *subst++;
             }
             
-            p++;
+            p = q - 1;
         
         } else {
             line[n++] = *p;
@@ -29972,14 +30213,7 @@ static void inline_asm_emit_template (const char *templ, struct inline_asm_input
                 }
                 
                 fprintf (state->ofp, "    out %s, %s\n", rhs, lhs);
-                
-                while (input_count-- > 0) {
-                
-                    if (inputs[input_count].restore_reg && inputs[input_count].restore_name) {
-                        fprintf (state->ofp, "    pop %s\n", inputs[input_count].restore_name);
-                    }
-                
-                }
+                inline_asm_finish_operands (inputs, input_count);
                 
                 return;
             
@@ -29996,13 +30230,7 @@ static void inline_asm_emit_template (const char *templ, struct inline_asm_input
     
     }
     
-    while (input_count-- > 0) {
-    
-        if (inputs[input_count].restore_reg && inputs[input_count].restore_name) {
-            fprintf (state->ofp, "    pop %s\n", inputs[input_count].restore_name);
-        }
-    
-    }
+    inline_asm_finish_operands (inputs, input_count);
 
 }
 
@@ -30010,16 +30238,24 @@ static int parse_inline_asm_statement (void) {
 
     char templ[256];
     
-    struct inline_asm_input_operand inputs[MAX_INLINE_ASM_INPUTS];
-    int input_count = 0;
+    struct inline_asm_input_operand operands[MAX_INLINE_ASM_INPUTS];
+    int operand_count = 0;
     
     if (tok.kind != TOK_ASM) {
         return 0;
     }
     
-    memset (inputs, 0, sizeof (inputs));
-    
+    memset (operands, 0, sizeof (operands));
     get_token ();
+    
+    /**
+     * GNU accepts both __asm__ volatile (...) and __asm__ __volatile__ (...).
+     * The lexer currently normalises the standard volatile spelling here.
+     */
+    if (tok.kind == TOK_VOLATILE) {
+        get_token ();
+    }
+    
     expect (TOK_LPAREN, "(");
     
     if (!is_string_token ()) {
@@ -30033,18 +30269,110 @@ static int parse_inline_asm_statement (void) {
     
     }
     
-    inline_asm_unquote_string_token (templ, sizeof (templ));
-    get_token ();
+    inline_asm_read_string_sequence (templ, sizeof (templ));
     
+    /* output operands */
     if (_accept (TOK_COLON)) {
     
-        if (tok.kind != TOK_COLON) {
-            skip_balanced_until (TOK_COLON, TOK_RPAREN, TOK_EOF);
+        while (tok.kind != TOK_COLON && tok.kind != TOK_RPAREN && tok.kind != TOK_EOF) {
+        
+            char constraint[16];
+            char name[64];
+            char memref[64];
+            
+            const char *reg;
+            int read_write;
+            
+            if (!is_string_token ()) {
+            
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected asm output constraint string");
+                
+                skip_balanced_until (TOK_COLON, TOK_RPAREN, TOK_EOF);
+                break;
+            
+            }
+            
+            inline_asm_unquote_string_token (constraint, sizeof (constraint));
+            
+            get_token ();
+            expect (TOK_LPAREN, "(");
+            
+            name[0] = 0;
+            
+            if (tok.kind == TOK_IDENT && tok.ident) {
+                inline_copy_string (name, tok.ident, sizeof (name));
+            } else {
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "asm output operand must be an identifier");
+            }
+            
+            if (operand_count < MAX_INLINE_ASM_INPUTS) {
+            
+                struct inline_asm_input_operand *op = &operands[operand_count];
+                
+                inline_copy_string (op->constraint, constraint, sizeof (op->constraint));
+                inline_copy_string (op->output_name, name, sizeof (op->output_name));
+                
+                op->is_output = 1;
+                op->size = inline_asm_identifier_size (name);
+                
+                read_write = strchr (constraint, '+') != 0;
+                reg = inline_asm_constraint_reg32 (constraint);
+                
+                if (strchr (constraint, 'm')) {
+                
+                    op->output_in_memory = 1;
+                    
+                    if (inline_asm_format_identifier_operand (memref, sizeof (memref), name)) {
+                        inline_copy_string (op->subst, memref, sizeof (op->subst));
+                    }
+                    
+                    skip_balanced_until (TOK_RPAREN, TOK_EOF, TOK_EOF);
+                
+                } else if (reg) {
+                
+                    op->reg_name = reg;
+                    inline_copy_string (op->subst, inline_asm_reg_for_size (reg, op->size), sizeof (op->subst));
+                    
+                    if (inline_asm_reg_needs_restore (reg) && state->ofp) {
+                    
+                        fprintf (state->ofp, "    push %s\n", reg);
+                        
+                        op->restore_reg = 1;
+                        op->restore_name = reg;
+                    
+                    }
+                    
+                    if (read_write) {
+                        emit_load_assignment_rhs_expression_to_reg (reg);
+                    } else {
+                        skip_balanced_until (TOK_RPAREN, TOK_EOF, TOK_EOF);
+                    }
+                
+                } else {
+                
+                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "unsupported asm output constraint '%s'", constraint);
+                    skip_balanced_until (TOK_RPAREN, TOK_EOF, TOK_EOF);
+                
+                }
+                
+                operand_count++;
+            
+            } else {
+                skip_balanced_until (TOK_RPAREN, TOK_EOF, TOK_EOF);
+            }
+            
+            expect (TOK_RPAREN, ")");
+            
+            if (!_accept (TOK_COMMA)) {
+                break;
+            }
+        
         }
         
+        /* input operands */
         if (_accept (TOK_COLON)) {
         
-            while (tok.kind != TOK_RPAREN && tok.kind != TOK_EOF) {
+            while (tok.kind != TOK_COLON && tok.kind != TOK_RPAREN && tok.kind != TOK_EOF) {
             
                 char constraint[16];
                 
@@ -30052,7 +30380,7 @@ static int parse_inline_asm_statement (void) {
                 
                     report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected asm input constraint string");
                     
-                    skip_balanced_until (TOK_RPAREN, TOK_EOF, TOK_EOF);
+                    skip_balanced_until (TOK_COLON, TOK_RPAREN, TOK_EOF);
                     break;
                 
                 }
@@ -30062,12 +30390,12 @@ static int parse_inline_asm_statement (void) {
                 
                 expect (TOK_LPAREN, "(");
                 
-                if (input_count < MAX_INLINE_ASM_INPUTS) {
+                if (operand_count < MAX_INLINE_ASM_INPUTS) {
                 
-                    inline_copy_string (inputs[input_count].constraint, constraint, sizeof (inputs[input_count].constraint));
-                    inline_asm_emit_input_load (constraint, input_count, inputs, templ);
+                    inline_copy_string (operands[operand_count].constraint, constraint, sizeof (operands[operand_count].constraint));
+                    inline_asm_emit_input_load (constraint, operand_count, operands, templ);
                     
-                    input_count++;
+                    operand_count++;
                 
                 } else {
                     skip_balanced_until (TOK_RPAREN, TOK_EOF, TOK_EOF);
@@ -30080,6 +30408,53 @@ static int parse_inline_asm_statement (void) {
                 }
             
             }
+            
+            /* clobbers */
+            if (_accept (TOK_COLON)) {
+            
+                while (tok.kind != TOK_RPAREN && tok.kind != TOK_EOF) {
+                
+                    char clobber[16];
+                    const char *save_reg = 0;
+                    
+                    if (!is_string_token ()) {
+                    
+                        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected asm clobber string");
+                        
+                        skip_balanced_until (TOK_RPAREN, TOK_EOF, TOK_EOF);
+                        break;
+                    
+                    }
+                    
+                    inline_asm_unquote_string_token (clobber, sizeof (clobber));
+                    get_token ();
+                    
+                    if (strcmp (clobber, "ebx") == 0 || strcmp (clobber, "rbx") == 0 || strcmp (clobber, "bx") == 0 || strcmp (clobber, "bl") == 0) {
+                        save_reg = inline_asm_constraint_reg32 ("b");
+                    } else if (strcmp (clobber, "esi") == 0 || strcmp (clobber, "rsi") == 0 || strcmp (clobber, "si") == 0) {
+                        save_reg = inline_asm_constraint_reg32 ("S");
+                    } else if (strcmp (clobber, "edi") == 0 || strcmp (clobber, "rdi") == 0 || strcmp (clobber, "di") == 0) {
+                        save_reg = inline_asm_constraint_reg32 ("D");
+                    }
+                    
+                    if (save_reg && operand_count < MAX_INLINE_ASM_INPUTS && state->ofp) {
+                    
+                        fprintf (state->ofp, "    push %s\n", save_reg);
+                        
+                        operands[operand_count].restore_reg = 1;
+                        operands[operand_count].restore_name = save_reg;
+                        
+                        operand_count++;
+                    
+                    }
+                    
+                    if (!_accept (TOK_COMMA)) {
+                        break;
+                    }
+                
+                }
+            
+            }
         
         }
     
@@ -30088,7 +30463,7 @@ static int parse_inline_asm_statement (void) {
     expect (TOK_RPAREN, ")");
     expect (TOK_SEMI, ";");
     
-    inline_asm_emit_template (templ, inputs, input_count);
+    inline_asm_emit_template (templ, operands, operand_count);
     return 1;
 
 }

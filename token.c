@@ -1077,6 +1077,7 @@ static int find_kind (const char *start, const char *caret, const char *p) {
         {   "__asm__",                  0,      VERSION,    TOK_ASM                 },
         {   "__inline__",               0,      VERSION,    TOK_INLINE              },
         {   "__restrict__",             0,      VERSION,    TOK_RESTRICT            },
+        {   "__volatile__",             0,      VERSION,    TOK_VOLATILE            },
         
         /* C90 keywords */
         {   "auto",                     90,     VERSION,    TOK_AUTO                },

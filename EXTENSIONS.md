@@ -23,9 +23,9 @@ reserved for future compiler-specific features.
 
 ## `__asm__` Inline Assembly Syntax
 
-This directive is a very limited GNU-style inline assembly extension.
-It allows hand-written assembly to be inserted directly into the
-generated assembly output.
+This directive supports GNU-style extended inline assembly, including
+output operands, input operands, read/write operands, register and
+memory constraints, `volatile`, and clobber lists.
 
 As Intel syntax is the primary target, arguments are written
 left-to-right rather than right-to-left.
