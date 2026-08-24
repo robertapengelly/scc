@@ -2409,6 +2409,35 @@ void warn_unused_local_symbols (int start, const char *filename) {
 
 }
 
+void warn_undefined_static_functions (const char *filename) {
+
+    int i;
+    
+    if (!state || !(state->warn & WARN_STATIC_UNDEFINED)) {
+        return;
+    }
+    
+    for (i = 0; i < global_symbol_count; i++) {
+    
+        struct global_symbol_entry *sym = &global_symbols[i];
+        
+        if (sym->kind != GLOBAL_SYMBOL_FUNCTION || !sym->is_static || !sym->used || !sym->is_extern) {
+            continue;
+        }
+        
+        if (sym->decl_start && sym->decl_line) {
+        
+            report_line_at (sym->decl_filename ? sym->decl_filename : (filename ? filename : get_filename ()), sym->decl_line, REPORT_WARNING,
+                sym->decl_start, sym->decl_start + sym->decl_caret_offset, "'%s' used but never defined", sym->name);
+        
+        } else {
+            report_at (filename ? filename : get_filename (), get_line_number (), REPORT_WARNING, "'%s' used but never defined", sym->name);
+        }
+    
+    }
+
+}
+
 void warn_unused_static_functions (const char *filename) {
 
     int i;

@@ -37902,6 +37902,8 @@ static void parse_external_after_type (void) {
                 
                 if (find_global_symbol (name) >= 0) {
                 
+                    global_symbols[find_global_symbol (name)].is_static = (declaration_storage == STORAGE_STATIC);
+                    
                     set_global_symbol_size (name, declarator_is_pointer ? DATA_PTR : (parsed_type_is_void ? DATA_VOID : parsed_type_size));
                     set_global_symbol_pointer_info (name, declarator_effective_pointer_depth_now (),
                         declarator_effective_pointed_size_now (parsed_type_size, object_fields, object_field_count));
@@ -38072,7 +38074,9 @@ void compile_translation_unit32 (void) {
         masm_flush_data_line ();
     }
     
+    warn_undefined_static_functions (get_filename ());
     warn_unused_static_functions (get_filename ());
+    
     emit_pending_extern_symbols ();
     
     if (vec_dllexports.length || vec_dllaliases.length) {

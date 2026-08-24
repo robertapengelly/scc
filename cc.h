@@ -21,8 +21,9 @@
 #define     WARN_FALLTHROUGH            (1U << 8)
 #define     WARN_OLD_STYLE              (1U << 9)
 #define     WARN_INITIALIZER            (1U << 10)
+#define     WARN_STATIC_UNDEFINED       (1U << 11)
 
-#define     WARN_DEFAULT                (WARN_DUP_DEFINE)
+#define     WARN_DEFAULT                (WARN_DUP_DEFINE | WARN_STATIC_UNDEFINED)
 #define     WARN_ALL                    (WARN_DEFAULT | WARN_NO_RETURN | WARN_SIGNEDNESS | WARN_UNUSED | WARN_FALLTHROUGH | WARN_INITIALIZER)
 #define     WARN_EXTRA                  (WARN_ALL | WARN_CONVERSION | WARN_OLD_STYLE)
 
