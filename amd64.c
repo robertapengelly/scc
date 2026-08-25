@@ -40555,7 +40555,7 @@ static void parse_external_after_type (void) {
         
         }
         
-        if ((state->warn & WARN_INITIALIZER) && parsed_type_is_aggregate && !decl_has_array && init_value_count > 0) {
+        if ((state->warn & WARN_INITIALIZER) && !decl_is_pointer && parsed_type_is_aggregate && !decl_has_array && init_value_count > 0) {
         
             int expected_init_count = aggregate_initializer_value_field_count (parsed_field_sizes, parsed_field_count);
             int zero_initializer = init_value_count == 1 && !init_symbols[0] && init_values[0].low == 0 && init_values[0].high == 0;
