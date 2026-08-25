@@ -30,17 +30,43 @@ struct cc_option {
 #define     CC_OPTION_HAS_ARG           1
 #define     CC_OPTION_EQUALS_ARG        3
 
+struct warning_info {
+
+    unsigned int flag;
+    
+    const char *name;
+    const char *description;
+
+};
+
+static struct warning_info warning_table[] = {
+
+    {   WARN_NO_RETURN,         "return-type",                  "Warn when control reaches the end of a non-void function." },
+    {   WARN_SIGNEDNESS,        "sign-compare",                 "Warn when comparing values of different signedness."       },
+    {   WARN_CONVERSION,        "conversion",                   "Warn when an implicit conversion may change a value."      },
+    {   WARN_DUP_DEFINE,        "builtin-macro-redefined",      "Warn when a macro is redefined with a different value."    },
+    {   WARN_UNUSED,            "unused",                       "Warn about unused declarations or values."                 },
+    {   WARN_SHADOW,            "shadow",                       "Warn when a declaration shadows a previous declaration."   },
+    {   WARN_UNREACHABLE,       "unreachable-code",             "Warn about statements that will never be executed."        },
+    {   WARN_FALLTHROUGH,       "implicit-fallthrough",         "Warn when a switch case may fall through."                 },
+    {   WARN_OLD_STYLE,         "old-style-definition",         "Warn about old-style function definitions."                },
+    {   WARN_INITIALIZER,       "missing-field-initializers",   "Warn when an initializer does not initialize all fields."  },
+    {   WARN_STATIC_UNDEFINED,  "undefined-internal",           "Warn when a static function is used but never defined."    }
+
+};
+
 #define     CC_OPTION_NONE                                  0
 #define     CC_OPTION_BITS32                                1
 #define     CC_OPTION_BITS64                                2
 #define     CC_OPTION_COMPILE                               3
 #define     CC_OPTION_DEFINE                                4
 #define     CC_OPTION_HELP                                  5
-#define     CC_OPTION_INCLUDE                               6
-#define     CC_OPTION_LEADING_UNDERSCORE                    7
-#define     CC_OPTION_MASM                                  8
-#define     CC_OPTION_MAX_ERRORS                            9
-#define     CC_OPTION_MLONG64                               10
+#define     CC_OPTION_HELP2                                 6
+#define     CC_OPTION_INCLUDE                               7
+#define     CC_OPTION_LEADING_UNDERSCORE                    8
+#define     CC_OPTION_MASM                                  9
+#define     CC_OPTION_MAX_ERRORS                            10
+#define     CC_OPTION_MLONG64                               11
 #define     CC_OPTION_NO_LEADING_UNDERSCORE                 12
 #define     CC_OPTION_NO_LINEMARKERS                        13
 #define     CC_OPTION_OUTFILE                               14
@@ -79,6 +105,7 @@ static struct cc_option opts[] = {
     {   "--traditional-linemarker-format",  CC_OPTION_TRANDITIONAL_LINEMARKERS,     CC_OPTION_NO_ARG        },
     {   "--help",                           CC_OPTION_HELP,                         CC_OPTION_NO_ARG        },
     
+    {   "--help",                           CC_OPTION_HELP2,                        CC_OPTION_EQUALS_ARG    },
     {   0,                                  0,                                      0                       }
 
 };
@@ -140,18 +167,35 @@ static void print_usage (void) {
         fprintf (stderr, "\n");
         fprintf (stderr, "    -P                                Don't print linemarkers.\n");
         fprintf (stderr, "    -o OBJFILE                        Name the object-file output OBJFILE.\n");
-        fprintf (stderr, "\n");
-        fprintf (stderr, "    -Wall                             Enable most warning messages.\n");
-        fprintf (stderr, "    -Werror                           Treat all warnings as errors.\n");
-        fprintf (stderr, "    -Wextra                           Print extra (possibly unwanted) warnings.\n");
-        fprintf (stderr, "    -Wshadow                          Warn when one variable shadows another.\n");
-        fprintf (stderr, "    -Wunreachable-code                Warn about code that will never be executed.\n");
         
         fprintf (stderr, "\n");
         fprintf (stderr, "    --traditional-linemarker-format   Use #line instead of short form.\n");
         fprintf (stderr, "    --help                            Print this help information.\n");
         
         fprintf (stderr, "\n");
+    
+    }
+
+}
+
+static void print_warnings (void) {
+
+    struct warning_info *info;
+    size_t length, count, i;
+    
+    fprintf (stderr, "The following options control compiler warning messages:\n\n");
+    fprintf (stderr, "    -Wall                             Enable most warning messages.\n");
+    fprintf (stderr, "    -Werror                           Treat all warnings as errors.\n");
+    fprintf (stderr, "    -Wextra                           Print extra (possibly unwanted) warnings.\n");
+    
+    count = (sizeof (warning_table) / sizeof (warning_table[0]));
+    
+    for (i = 0; i < count; i++) {
+    
+        info = &warning_table[i];
+        length = strlen (info->name);
+        
+        fprintf (stderr, "    -W%s%*s%s\n", info->name, (int) (29 - length) + 3, "", info->description);
     
     }
 
@@ -416,6 +460,20 @@ void parse_args (int argc, char **argv, int optind) {
             
             }
             
+            case CC_OPTION_HELP2: {
+            
+                if (*optarg == 'w') {
+                
+                    print_warnings ();
+                    exit (EXIT_SUCCESS);
+                
+                }
+                
+                report_at (program_name, 0, REPORT_ERROR, "unrecognised --help= argument '%s'", optarg);
+                exit (EXIT_SUCCESS);
+            
+            }
+            
             case CC_OPTION_INCLUDE: {
             
                 add_include_path (optarg);
@@ -553,6 +611,9 @@ void parse_args (int argc, char **argv, int optind) {
             
             case CC_OPTION_WARN: {
             
+                struct warning_info *info;
+                size_t count, i;
+                
                 if (strcmp (optarg, "all") == 0) {
                 
                     state->warn |= WARN_ALL;
@@ -574,22 +635,48 @@ void parse_args (int argc, char **argv, int optind) {
                 
                 }
                 
-                if (strcmp (optarg, "shadow") == 0) {
+                count = (sizeof (warning_table) / sizeof (warning_table[0]));
                 
-                    state->warn |= WARN_SHADOW;
-                    break;
+                if (strncmp (optarg, "no-", 3) == 0) {
                 
-                }
+                    optarg += 3;
+                    
+                    for (i = 0; i < count; i++) {
+                    
+                        info = &warning_table[i];
+                        
+                        if (strcmp (info->name, optarg) == 0) {
+                        
+                            state->warn &= ~info->flag;
+                            goto found;
+                        
+                        }
+                    
+                    }
                 
-                if (strcmp (optarg, "unreachable-code") == 0) {
+                } else {
                 
-                    state->warn |= WARN_UNREACHABLE;
-                    break;
+                    for (i = 0; i < count; i++) {
+                    
+                        info = &warning_table[i];
+                        
+                        if (strcmp (info->name, optarg) == 0) {
+                        
+                            state->warn |= info->flag;
+                            goto found;
+                        
+                        }
+                    
+                    }
                 
                 }
                 
                 report_at (program_name, 0, REPORT_ERROR, "unrecognised -W argument");
                 exit (EXIT_FAILURE);
+                
+            found:
+                
+                break;
             
             }
             
