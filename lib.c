@@ -111,6 +111,27 @@ static struct cc_option opts[] = {
 };
 
 
+static int find_warning (const char *name) {
+
+    struct warning_info *info;
+    size_t count, i;
+    
+    count = (sizeof (warning_table) / sizeof (warning_table[0]));
+    
+    for (i = 0; i < count; i++) {
+    
+        info = &warning_table[i];
+        
+        if (strcmp (info->name, name) == 0) {
+            return info->flag;
+        }
+    
+    }
+    
+    return 0;
+
+}
+
 static int strstart (const char *val, const char **str) {
 
     const char *p = *str;
@@ -611,8 +632,7 @@ void parse_args (int argc, char **argv, int optind) {
             
             case CC_OPTION_WARN: {
             
-                struct warning_info *info;
-                size_t count, i;
+                int flag;
                 
                 if (strcmp (optarg, "all") == 0) {
                 
@@ -635,48 +655,28 @@ void parse_args (int argc, char **argv, int optind) {
                 
                 }
                 
-                count = (sizeof (warning_table) / sizeof (warning_table[0]));
-                
                 if (strncmp (optarg, "no-", 3) == 0) {
                 
-                    optarg += 3;
+                    if ((flag = find_warning (optarg + 3))) {
                     
-                    for (i = 0; i < count; i++) {
-                    
-                        info = &warning_table[i];
-                        
-                        if (strcmp (info->name, optarg) == 0) {
-                        
-                            state->warn &= ~info->flag;
-                            goto found;
-                        
-                        }
+                        state->warn &= ~flag;
+                        break;
                     
                     }
                 
                 } else {
                 
-                    for (i = 0; i < count; i++) {
+                    if ((flag = find_warning (optarg))) {
                     
-                        info = &warning_table[i];
-                        
-                        if (strcmp (info->name, optarg) == 0) {
-                        
-                            state->warn |= info->flag;
-                            goto found;
-                        
-                        }
+                        state->warn |= flag;
+                        break;
                     
                     }
                 
                 }
                 
-                report_at (program_name, 0, REPORT_ERROR, "unrecognised -W argument");
+                report_at (program_name, 0, REPORT_ERROR, "unrecognised -W argument '%s'", optarg);
                 exit (EXIT_FAILURE);
-                
-            found:
-                
-                break;
             
             }
             
