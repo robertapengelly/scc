@@ -1034,124 +1034,121 @@ static int parse_sizeof_member_expr_size (int leading_stars, int *out_size) {
     
     get_token ();
     
-    while (tok.kind == TOK_ARROW || tok.kind == TOK_DOT) {
+    while (tok.kind == TOK_ARROW || tok.kind == TOK_DOT || tok.kind == TOK_LBRACK) {
     
-        int member_pointer_depth = 0;
-        int member_pointed_size = 0;
-        int member_offset = 0;
-        int member_size = 0;
-        int member_is_array = 0;
+        if (tok.kind == TOK_LBRACK) {
         
-        const char *member_tag_name = 0;
-        enum token_kind member_op = tok.kind;
-        
-        get_token ();
-        
-        if (tok.kind != TOK_IDENT) {
-        
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret,
-                            "expected member name after %s", member_op == TOK_ARROW ? "->" : ".");
-            break;
-        
-        }
-        
-        if (find_member_info_ex (tok.ident, &member_offset, &member_size,
-                                 &member_pointed_size, &member_pointer_depth,
-                                 &member_is_array, 0)) {
-        
-            member_tag_name = last_found_member_tag_name ? last_found_member_tag_name : find_member_tag_name (tok.ident);
-            size = member_size;
+            int depth = 1;
+            get_token ();
             
-            final_pointer_depth = member_pointer_depth;
-            final_pointed_size = member_pointed_size;
+            while (tok.kind != TOK_EOF && depth > 0) {
             
-            final_is_array = member_is_array;
-            final_array_element_size = member_is_array ? member_size : 0;
-        
-            if (final_pointer_depth > 0 && member_tag_name) {
-            
-                struct aggregate_tag_entry *entry = find_aggregate_tag (member_tag_name, 0);
+                if (tok.kind == TOK_LBRACK) {
+                    depth++;
+                } else if (tok.kind == TOK_RBRACK) {
                 
-                if (entry) {
-                    final_pointed_size = entry->size;
-                }
-            
-            }
-        
-        } else {
-        
-            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret,
-                            "unknown member '%s'", tok.ident ? tok.ident : "");
-        
-        }
-        
-        get_token ();
-    
-    }
-    
-    while (tok.kind == TOK_LBRACK) {
-    
-        int depth = 1;
-        get_token ();
-        
-        while (tok.kind != TOK_EOF && depth > 0) {
-        
-            if (tok.kind == TOK_LBRACK) {
-                depth++;
-            } else if (tok.kind == TOK_RBRACK) {
-            
-                depth--;
+                    depth--;
+                    
+                    if (depth == 0) {
+                        break;
+                    }
                 
-                if (depth == 0) {
-                    break;
                 }
+                
+                get_token ();
             
             }
             
-            get_token ();
-        
-        }
-        
-        if (tok.kind == TOK_RBRACK) {
-            get_token ();
-        }
-        
-        if (final_is_array && leading_stars > 0) {
-        
-            int remaining_stars = leading_stars - 1;
-            int elem_size = final_array_element_size > 0 ? final_array_element_size :
-                (final_pointer_depth > 0 ? DATA_PTR : final_pointed_size);
+            if (tok.kind == TOK_RBRACK) {
+                get_token ();
+            }
             
-            /*
-             * In expressions, an array object decays to a pointer to its first
-             * element before the leading '*' operators are applied.  For an
-             * array of pointers, sizeof(*array) is therefore pointer-sized,
-             * not the size of the pointed-to base type.
-             */
-            size = elem_size > 0 ? elem_size : size;
+            if (final_is_array && leading_stars > 0) {
             
-            if (remaining_stars > 0 && final_pointer_depth >= remaining_stars) {
+                int remaining_stars = leading_stars - 1;
+                int elem_size = final_array_element_size > 0 ? final_array_element_size :
+                    (final_pointer_depth > 0 ? DATA_PTR : final_pointed_size);
+                
+                /*
+                 * In expressions, an array object decays to a pointer to its first
+                 * element before the leading '*' operators are applied.  For an
+                 * array of pointers, sizeof(*array) is therefore pointer-sized,
+                 * not the size of the pointed-to base type.
+                 */
+                size = elem_size > 0 ? elem_size : size;
+                
+                if (remaining_stars > 0 && final_pointer_depth >= remaining_stars) {
+                
+                    int remaining_depth = final_pointer_depth - remaining_stars;
+                    size = remaining_depth > 0 ? DATA_PTR : final_pointed_size;
+                
+                }
+                
+                final_is_array = 0;
+                final_pointer_depth = 0;
             
-                int remaining_depth = final_pointer_depth - remaining_stars;
-                size = remaining_depth > 0 ? DATA_PTR : final_pointed_size;
+            } else if (final_pointer_depth > 0) {
             
+                size = final_pointer_depth > 1 ? DATA_PTR : final_pointed_size;
+                final_pointer_depth--;
+            
+            } else if (final_is_array && final_array_element_size > 0) {
+                size = final_array_element_size;
+            } else if (final_is_array && final_pointed_size > 0) {
+                size = final_pointed_size;
             }
             
             final_is_array = 0;
-            final_pointer_depth = 0;
+            continue;
         
-        } else if (final_pointer_depth > 0) {
-         
-            size = final_pointer_depth > 1 ? DATA_PTR : final_pointed_size;
-            final_pointer_depth--;
+        } else {
         
-        } else if (final_is_array && final_array_element_size > 0) {
-            size = final_array_element_size;
-        } else if (final_is_array && final_pointed_size > 0) {
-            size = final_pointed_size;
+            int member_pointer_depth = 0;
+            int member_pointed_size = 0;
+            int member_offset = 0;
+            int member_size = 0;
+            int member_is_array = 0;
+            
+            const char *member_tag_name = 0;
+            enum token_kind member_op = tok.kind;
+            
+            get_token ();
+            
+            if (tok.kind != TOK_IDENT) {
+            
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected member name after %s", member_op == TOK_ARROW ? "->" : ".");
+                break;
+            
+            }
+            
+            if (find_member_info_ex (tok.ident, &member_offset, &member_size, &member_pointed_size, &member_pointer_depth, &member_is_array, 0)) {
+                
+                member_tag_name = last_found_member_tag_name ? last_found_member_tag_name : find_member_tag_name (tok.ident);
+                size = member_size;
+                
+                final_pointer_depth = member_pointer_depth;
+                final_pointed_size = member_pointed_size;
+                
+                final_is_array = member_is_array;
+                final_array_element_size = member_is_array ? member_size : 0;
+                
+                if (final_pointer_depth > 0 && member_tag_name) {
+                
+                    struct aggregate_tag_entry *entry = find_aggregate_tag (member_tag_name, 0);
+                
+                    if (entry) {
+                        final_pointed_size = entry->size;
+                    }
+                
+                }
+            
+            } else {
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "unknown member '%s'", tok.ident ? tok.ident : "");
+            }
+            
+            get_token ();
+        
         }
-        
-        final_is_array = 0;
     
     }
     
