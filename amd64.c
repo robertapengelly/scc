@@ -8843,7 +8843,7 @@ static void parse_block (void) {
                         set_global_symbol_pointer_info (name, declarator_effective_pointer_depth_now (),
                             declarator_effective_pointed_size_now (parsed_type_size, object_fields, object_field_count));
                         set_global_symbol_tag_name (name, parsed_type_tag_name);
-                        set_global_symbol_unsigned (name, (declarator_is_pointer || declarator_has_function) ? 0 : parsed_type_is_unsigned);
+                        set_global_symbol_unsigned (name, declarator_is_pointer ? 0 : parsed_type_is_unsigned);
                         set_global_symbol_floating (name, (declarator_is_pointer || (declarator_has_function && declarator_function_is_pointer)) ? 0 : parsed_type_is_floating);
                         set_global_symbol_returns_void (name, declarator_has_function && parsed_type_is_void && !declarator_is_pointer && !declarator_function_is_pointer);
                         
@@ -38697,7 +38697,7 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
         }
         
         set_global_symbol_size (name, return_is_void ? DATA_VOID : return_size);
-        set_global_symbol_unsigned (name, 0);
+        set_global_symbol_unsigned (name, return_pointer_depth > 0 ? 0 : return_is_unsigned);
         set_global_symbol_floating (name, return_is_floating);
         set_global_symbol_returns_void (name, return_is_void);
         set_global_symbol_noreturn (name, effective_noreturn);
@@ -40611,7 +40611,7 @@ static void parse_external_after_type (void) {
                     set_global_symbol_pointer_info (name, declarator_effective_pointer_depth_now (),
                         declarator_effective_pointed_size_now (parsed_type_size, object_fields, object_field_count));
                     set_global_symbol_tag_name (name, parsed_type_tag_name);
-                    set_global_symbol_unsigned (name, 0);
+                    set_global_symbol_unsigned (name, declarator_is_pointer ? 0 : parsed_type_is_unsigned);
                     set_global_symbol_floating (name, declarator_is_pointer ? 0 : parsed_type_is_floating);
                     set_global_symbol_returns_void (name, parsed_type_is_void && !declarator_is_pointer && !declarator_function_is_pointer);
                     
