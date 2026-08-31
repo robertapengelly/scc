@@ -1978,11 +1978,11 @@ static int emit_inline_parameter_reference_if_any (const char **pp, int argc, in
         return 0;
     }
     
-    if (offset < 8 || ((offset - 8) % 8) != 0) {
+    if (offset < 16 || ((offset - 16) % 8) != 0) {
         return 0;
     }
     
-    param_index = (offset - 8) / 8;
+    param_index = (offset - 16) / 8;
     
     if (param_index < 0 || param_index >= argc) {
         return 0;
@@ -1991,8 +1991,10 @@ static int emit_inline_parameter_reference_if_any (const char **pp, int argc, in
     /*
      * Inline arguments are copied into a compiler-owned temporary stack
      * area before the inline body is emitted.  Parameter 0 lives at the
-     * lowest address in that area, so [rbp + 8] maps to [rsp],
-     * [rbp + 16] maps to [rsp + 8], [rbp + 24] maps to [rsp + 16], etc.
+     * lowest address in that area.  After the normal AMD64 prologue has
+     * pushed RBP, parameter 0 lives at [rbp + 16], so [rbp + 16] maps
+     * to [rsp], [rbp + 24] maps to [rsp + 8], [rbp + 32] maps to
+     * [rsp + 16], etc.
      * If the inlined body changes RSP temporarily, stack_bytes keeps all
      * parameter references pointed at the same argument copies.
      */
@@ -2011,10 +2013,99 @@ static int emit_inline_parameter_reference_if_any (const char **pp, int argc, in
 
 }
 
+static int inline_line_is_parameter_home (const char *line, size_t len, int argc) {
+
+    const char *p = line;
+    
+    char text[160];
+    char reg[16];
+    
+    int offset = 0;
+    int param_index;
+    int n = 0;
+    
+    if (!line || argc <= 0) {
+        return 0;
+    }
+    
+    while (len > 0 && (*p == ' ' || *p == '\t')) {
+    
+        p++;
+        len--;
+    
+    }
+    
+    while (len > 0 && (p[len - 1] == '\r' || p[len - 1] == '\n' || p[len - 1] == ' ' || p[len - 1] == '\t')) {
+        len--;
+    }
+    
+    if (len == 0 || len >= sizeof (text)) {
+        return 0;
+    }
+    
+    memcpy (text, p, len);
+    text[len] = '\0';
+    
+    if (state->syntax & ASM_SYNTAX_INTEL) {
+    
+        if (sscanf (text, "mov qword ptr [rbp + %d], %15s%n", &offset, reg, &n) != 2 && sscanf (text, "mov qword [rbp + %d], %15s%n", &offset, reg, &n) != 2) {
+            return 0;
+        }
+    
+    } else {
+    
+        if (sscanf (text, "movq %%%15[^,], %d(%%rbp)%n", reg, &offset, &n) != 2) {
+            return 0;
+        }
+    
+    }
+    
+    while (text[n] == ' ' || text[n] == '\t') {
+        n++;
+    }
+    
+    if (text[n] != '\0' || offset < 16 || ((offset - 16) % 8) != 0) {
+        return 0;
+    }
+    
+    param_index = (offset - 16) / 8;
+    
+    if (param_index < 0 || param_index >= argc || param_index >= 4) {
+        return 0;
+    }
+    
+    if (param_index == 0) {
+        return strcmp (reg, "rcx") == 0;
+    }
+    
+    if (param_index == 1) {
+        return strcmp (reg, "rdx") == 0;
+    }
+    
+    if (param_index == 2) {
+        return strcmp (reg, "r8") == 0;
+    }
+    
+    return strcmp (reg, "r9") == 0;
+
+}
+
 static void emit_inline_line_substituted (const char *line, size_t len, int return_label, int call_id, int argc, int stack_bytes) {
 
     const char *p = line;
     const char *end = line + len;
+    
+    /*
+     * An out-of-line function homes RCX/RDX/R8/R9 into its [rbp+N]
+     * parameter slots on entry.  Inline expansion has already copied the
+     * arguments into compiler-owned [rsp+N] slots.  If those homing stores
+     * are substituted as ordinary parameter references, they become stores
+     * into the inline argument slots and overwrite the saved arguments with
+     * stale ABI argument-register values.
+     */
+    if (inline_line_is_parameter_home (line, len, argc)) {
+        return;
+    }
     
     while (p < end) {
     
