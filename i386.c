@@ -13617,7 +13617,25 @@ static void emit_apply_postfix_member_incdec_now (const char *reg, enum token_ki
         
         }
         
-        if (state->syntax & ASM_SYNTAX_INTEL) {
+        if (postfix_member_size == (DATA_LLONG & 0x1f)) {
+        
+            if (state->syntax & ASM_SYNTAX_INTEL) {
+            
+                const char *ptr = (state->syntax & ASM_SYNTAX_NASM) ? "" : "ptr ";
+                const char *arith = op == TOK_INCR ? "add" : "sub";
+                const char *carry = op == TOK_INCR ? "adc" : "sbb";
+                
+                fprintf (state->ofp, "    %s dword %s[edx + %d], 1\n", arith, ptr, postfix_member_offset);
+                fprintf (state->ofp, "    %s dword %s[edx + %d], 0\n", carry, ptr, postfix_member_offset + 4);
+            
+            } else {
+            
+                fprintf (state->ofp, "    %sl $1, %d(%%edx)\n", op == TOK_INCR ? "add" : "sub", postfix_member_offset);
+                fprintf (state->ofp, "    %sl $0, %d(%%edx)\n", op == TOK_INCR ? "adc" : "sbb", postfix_member_offset + 4);
+            
+            }
+        
+        } else if (state->syntax & ASM_SYNTAX_INTEL) {
         
             const char *opsize = "dword";
             
@@ -19240,7 +19258,24 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                         
                         if (postfix_op == TOK_INCR || postfix_op == TOK_DECR) {
                         
-                            if (state->syntax & ASM_SYNTAX_NASM) {
+                            if ((member_size & 0x1f) == (DATA_LLONG & 0x1f) && member_pointer_depth == 0) {
+                            
+                                const char *arith = postfix_op == TOK_INCR ? "add" : "sub";
+                                const char *carry = postfix_op == TOK_INCR ? "adc" : "sbb";
+                                
+                                if (state->syntax & ASM_SYNTAX_NASM) {
+                                
+                                    fprintf (state->ofp, "    %s dword [%s + %d], 1\n", arith, reg, offset);
+                                    fprintf (state->ofp, "    %s dword [%s + %d], 0\n", carry, reg, offset + 4);
+                                
+                                } else {
+                                
+                                    fprintf (state->ofp, "    %s dword ptr [%s + %d], 1\n", arith, reg, offset);
+                                    fprintf (state->ofp, "    %s dword ptr [%s + %d], 0\n", carry, reg, offset + 4);
+                                
+                                }
+                            
+                            } else if (state->syntax & ASM_SYNTAX_NASM) {
                                 fprintf (state->ofp, "    %s dword [%s + %d]\n", postfix_op == TOK_INCR ? "inc" : "dec", reg, offset);
                             } else {
                                 fprintf (state->ofp, "    %s dword ptr [%s + %d]\n", postfix_op == TOK_INCR ? "inc" : "dec", reg, offset);
@@ -28517,7 +28552,25 @@ static int parse_identifier_assignment_statement (void) {
                     
                     }
                     
-                    if (state->syntax & ASM_SYNTAX_INTEL) {
+                    if ((member_size & 0x1f) == (DATA_LLONG & 0x1f) && member_pointer_depth == 0) {
+                    
+                        if (state->syntax & ASM_SYNTAX_INTEL) {
+                        
+                            const char *ptr = (state->syntax & ASM_SYNTAX_NASM) ? "" : "ptr ";
+                            const char *arith = postfix_op == TOK_INCR ? "add" : "sub";
+                            const char *carry = postfix_op == TOK_INCR ? "adc" : "sbb";
+                            
+                            fprintf (state->ofp, "    %s dword %s[edx + %d], 1\n", arith, ptr, member_offset);
+                            fprintf (state->ofp, "    %s dword %s[edx + %d], 0\n", carry, ptr, member_offset + 4);
+                        
+                        } else {
+                        
+                            fprintf (state->ofp, "    %sl $1, %d(%%edx)\n", postfix_op == TOK_INCR ? "add" : "sub", member_offset);
+                            fprintf (state->ofp, "    %sl $0, %d(%%edx)\n", postfix_op == TOK_INCR ? "adc" : "sbb", member_offset + 4);
+                        
+                        }
+                    
+                    } else if (state->syntax & ASM_SYNTAX_INTEL) {
                     
                         const char *opname = postfix_op == TOK_INCR ? "add" : "sub";
                         const char *opsize = member_size == 1 ? "byte" : (member_size == 2 ? "word" : "dword");
@@ -31684,6 +31737,56 @@ static int emit_statement_ident_immediate_compare_jump_if_false_now (int label) 
     
         is_unsigned = postfix_member_is_unsigned ? 1 : 0;
         lhs_signedness = is_unsigned ? 1 : 0;
+    
+    }
+    
+    if (postfix_member_seen && postfix_member_pointer_depth == 0 && postfix_member_size == (DATA_LLONG & 0x1f) && !postfix_member_is_floating) {
+    
+        const char *addr_reg = "ecx";
+        
+        if (!token_is_statement_compare_operator (tok.kind)) {
+            return 0;
+        }
+        
+        emit_copy_reg_now (addr_reg, "eax");
+        emit_load_pair_from_deref_reg_now ("eax", "edx", addr_reg);
+        
+        op = tok.kind;
+        get_token ();
+        
+        warn_signedness_comparison_now (lhs_signedness);
+        
+        if (rhs_current_operand_is_unsigned_now ()) {
+            is_unsigned = 1;
+        }
+        
+        emit_push_reg_now ("eax");
+        emit_push_reg_now ("edx");
+        emit_load_assignment_rhs_expression_to_pair ("eax", "edx", is_unsigned);
+        
+        if (state->ofp) {
+        
+            if (state->syntax & ASM_SYNTAX_INTEL) {
+            
+                fprintf (state->ofp, "    mov ebx, eax\n");
+                fprintf (state->ofp, "    mov ecx, edx\n");
+            
+            } else {
+            
+                fprintf (state->ofp, "    movl %%eax, %%ebx\n");
+                fprintf (state->ofp, "    movl %%edx, %%ecx\n");
+            
+            }
+        
+        }
+        
+        emit_pop_reg_now ("edx");
+        emit_pop_reg_now ("eax");
+        
+        emit_statement_cmp64_to_eax (op, is_unsigned);
+        emit_test_reg_jump_zero_now ("eax", label);
+        
+        return 1;
     
     }
     
