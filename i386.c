@@ -106,6 +106,7 @@ static int token_identifier_is_label_now (void);
 
 static int assignment32_stop_before_condition_operator = 0;
 static int assignment64_stop_before_condition_operator = 0;
+static int call_argument_preserve_wide_member_address = 0;
 
 static void masm_flush_data_line (void);
 
@@ -23057,7 +23058,13 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
                     emit_load_assignment_rhs_expression_to_pair ("eax", "edx", rhs_current_operand_is_unsigned_now ());
                 
                 } else {
+                
+                    int saved_preserve_wide_member_address = call_argument_preserve_wide_member_address;
+                    call_argument_preserve_wide_member_address = 1;
+                    
                     emit_load_assignment_rhs_expression_to_reg ("eax");
+                    call_argument_preserve_wide_member_address = saved_preserve_wide_member_address;
+                
                 }
                 
                 if (state->ofp) {
@@ -23602,7 +23609,13 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                 } else if (arg_is_floating) {
                     emit_load_floating_rhs_expression_now (DATA_DOUBLE & 0x1f);
                 } else {
+                
+                    int saved_preserve_wide_member_address = call_argument_preserve_wide_member_address;
+                    call_argument_preserve_wide_member_address = 1;
+                    
                     emit_load_assignment_rhs_expression_to_reg ("eax");
+                    call_argument_preserve_wide_member_address = saved_preserve_wide_member_address;
+                
                 }
                 
                 if (state->ofp) {
@@ -24621,8 +24634,18 @@ static int emit_load_assignment_binary_expression_prec_to_reg (const char *reg, 
      */
     if (postfix_member_seen && postfix_member_pointer_depth == 0 && postfix_member_size == (DATA_LLONG & 0x1f) && !postfix_member_is_floating) {
     
-        emit_load_deref_reg_now (reg, DATA_INT & 0x1f);
-        postfix_member_size = DATA_INT & 0x1f;
+        /*
+         * A bare 64-bit member used as a call argument still needs its address
+         * here so the argument emitter can push both 32-bit halves.  Outside
+         * that narrow case this 32-bit expression path continues to load the
+         * low word as before.
+         */
+        if (!(call_argument_preserve_wide_member_address && (tok.kind == TOK_COMMA || tok.kind == TOK_RPAREN))) {
+        
+            emit_load_deref_reg_now (reg, DATA_INT & 0x1f);
+            postfix_member_size = DATA_INT & 0x1f;
+        
+        }
     
     }
     
