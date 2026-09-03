@@ -39582,13 +39582,20 @@ static void parse_global_initializer_values (int64_s *values, char **symbols, in
                 report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected identifier after '&'");
             } else {
             
-                char addr_symbol[256];
                 char *base_name = xstrdup (tok.ident);
+                char addr_symbol[256];
+                
                 long addr_offset = 0;
+                
                 int sym_index = find_global_symbol (base_name);
                 long array_count = get_global_symbol_array_count (base_name);
+                
                 long base_size = sym_index >= 0 ? global_symbols[sym_index].size : 0;
                 long elem_size = 0;
+                
+                if (sym_index >= 0) {
+                    global_symbols[sym_index].used = 1;
+                }
                 
                 if (array_count > 0 && base_size > 0) {
                     elem_size = base_size / array_count;
