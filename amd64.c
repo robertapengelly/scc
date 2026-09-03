@@ -21043,10 +21043,15 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         const char *name_start = tok.start, *name_caret = tok.caret;
         unsigned long name_line = get_line_number ();
         
+        struct local_symbol *visible_local;
         struct local_symbol *src;
+        
+        int name_is_function_designator;
         int postfix_incdec = 0;
         
-        int name_is_function_designator = token_identifier_is_function_call_rhs_now ();
+        visible_local = peek_local_symbol (name);
+        name_is_function_designator = token_identifier_is_function_call_rhs_now ();
+        
         get_token ();
         
         /*
@@ -21058,7 +21063,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
          *
          * store the first bytes of msdos_probe instead of its address.
          */
-        if (tok.kind != TOK_LPAREN && (name_is_function_designator || (find_global_symbol (name) >= 0 && get_global_symbol_kind (name) == GLOBAL_SYMBOL_FUNCTION))) {
+        if (!visible_local && tok.kind != TOK_LPAREN && (name_is_function_designator || (find_global_symbol (name) >= 0 && get_global_symbol_kind (name) == GLOBAL_SYMBOL_FUNCTION))) {
         
             {
             
