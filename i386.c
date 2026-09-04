@@ -23372,6 +23372,122 @@ static int call_argument_expects_by_value_aggregate_now (const char *name, int a
 
 }
 
+static int source_argument_mentions_long_long_constant_now (const char *p) {
+
+    int depth = 0;
+    
+    if (!p) {
+        return 0;
+    }
+    
+    for (;;) {
+    
+        int lcount;
+        
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+        
+        if (!*p) {
+            return 0;
+        }
+        
+        if (depth == 0) {
+        
+            if (*p == ',' || *p == ')') {
+                return 0;
+            }
+            
+            /*
+             * Comparisons, logical operators and ?: produce a non-wide
+             * result even when one of their operands is long long.  Do not
+             * use a later LL/ULL token to classify the complete argument as
+             * 64-bit in those cases.
+             */
+            if (*p == '?' || *p == '<' || *p == '>' || (*p == '=' && p[1] == '=') || (*p == '!' && p[1] == '=') || (*p == '&' && p[1] == '&') || (*p == '|' && p[1] == '|')) {
+                return 0;
+            }
+        
+        }
+        
+        if (*p == '\'' || *p == '"') {
+        
+            int quote = (unsigned char) *p++;
+            
+            while (*p && *p != quote) {
+            
+                if (*p == '\\' && p[1]) {
+                    p += 2;
+                } else {
+                    p++;
+                }
+            
+            }
+            
+            if (*p == quote) {
+                p++;
+            }
+            
+            continue;
+        
+        }
+        
+        if (*p == '(') {
+        
+            depth++;
+            
+            p++;
+            continue;
+        
+        }
+        
+        if (*p == ')') {
+        
+            if (depth == 0) {
+                return 0;
+            }
+            
+            depth--;
+            
+            p++;
+            continue;
+        
+        }
+        
+        if (*p >= '0' && *p <= '9') {
+        
+            p++;
+            
+            while ((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f') || (*p >= 'A' && *p <= 'F') || *p == 'x' || *p == 'X') {
+                p++;
+            }
+            
+            lcount = 0;
+            
+            while (*p == 'u' || *p == 'U' || *p == 'l' || *p == 'L') {
+            
+                if (*p == 'l' || *p == 'L') {
+                    lcount++;
+                }
+                
+                p++;
+            
+            }
+            
+            if (lcount >= 2) {
+                return 1;
+            }
+            
+            continue;
+        
+        }
+        
+        p++;
+    
+    }
+
+}
+
 static int current_argument_starts_64bit_integer_now (void) {
 
     if (tok.kind == TOK_CLLONG || tok.kind == TOK_CULLONG) {
@@ -23387,7 +23503,7 @@ static int current_argument_starts_64bit_integer_now (void) {
         return 1;
     }
     
-    return source_starts_64bit_integer_cast_now (tok.start) || source_starts_64bit_integer_cast_now (tok.caret);
+    return source_starts_64bit_integer_cast_now (tok.start) || source_starts_64bit_integer_cast_now (tok.caret) || source_argument_mentions_long_long_constant_now (tok.start) || source_argument_mentions_long_long_constant_now (tok.caret);
 
 }
 
