@@ -10487,12 +10487,33 @@ static int current_token_is_64bit_integer_value_now (void) {
 
 static int current_expression_mentions_64bit_symbol_now (void) {
 
+    struct token *saved_tok;
+    int result;
+    
     /*
      * Keep this deliberately token based.  The old source-text scan was too
      * broad and could send ordinary runtime expressions through expr_const64(),
      * which rejects valid code with "integer constant expression expected".
+     *
+     * Unary operators do not change the width of the operand that must be
+     * evaluated.  In particular, !uint64_value still has to load and test the
+     * complete 64-bit operand before producing its int boolean result.
      */
-    return current_token_is_64bit_integer_value_now ();
+    if (current_token_is_64bit_integer_value_now ()) {
+        return 1;
+    }
+    
+    if (tok.kind != TOK_PLUS && tok.kind != TOK_MINUS && tok.kind != TOK_TILDE && tok.kind != TOK_XMARK) {
+        return 0;
+    }
+    
+    saved_tok = clone_current_token_now ();
+    get_token ();
+    
+    result = current_token_is_64bit_integer_value_now ();
+    unget_token (saved_tok);
+    
+    return result;
 
 }
 
