@@ -28180,15 +28180,6 @@ static int is_assignment64_condition_stop_operator (enum token_kind k) {
 
 }
 
-static int is_assignment64_binary_operator (enum token_kind k) {
-
-    return  is_arithmetic_binary_operator (k) ||
-                k == TOK_LESS || k == TOK_LTEQ || k == TOK_GREATER ||
-                    k == TOK_GTEQ || k == TOK_EQEQ || k == TOK_NOTEQ ||
-                        k == TOK_LOGAND || k == TOK_LOGOR;
-
-}
-
 static void emit_assignment64_bool_result_to_pair_now (const char *lo, const char *hi) {
 
     if (!state->ofp) {
@@ -28310,6 +28301,37 @@ static void emit_assignment64_compare_op_to_pair_now (enum token_kind op, const 
 
 }
 
+static void emit_load_assignment64_binary_expression_prec_to_pair (const char *lo, const char *hi, int is_unsigned, int min_prec) {
+
+    emit_load_assignment_rhs_to_pair (lo, hi);
+    
+    while (is_arithmetic_binary_operator (tok.kind) && arithmetic_operator_precedence_now (tok.kind) >= min_prec) {
+    
+        enum token_kind op = tok.kind;
+        int prec = arithmetic_operator_precedence_now (op);
+        
+        get_token ();
+        
+        if (strcmp (lo, "rax") != 0) {
+            emit_mov_reg_to_reg_now ("rax", lo);
+        }
+        
+        emit_push_reg_now ("rax");
+        emit_load_assignment64_binary_expression_prec_to_pair ("rbx", "rcx", is_unsigned, prec + 1);
+        emit_pop_reg_now ("rax");
+        
+        emit_preserve_assignment64_regs (op);
+        emit_assignment_binary_op64 (op, is_unsigned);
+        emit_restore_assignment64_regs (op);
+        
+        if (strcmp (lo, "rax") != 0) {
+            emit_mov_reg_to_reg_now (lo, "rax");
+        }
+    
+    }
+
+}
+
 static void emit_load_assignment_rhs_expression_to_pair (const char *lo, const char *hi, int is_unsigned) {
 
     enum token_kind op;
@@ -28326,9 +28348,9 @@ static void emit_load_assignment_rhs_expression_to_pair (const char *lo, const c
     
     }
     
-    emit_load_assignment_rhs_to_pair (lo, hi);
+    emit_load_assignment64_binary_expression_prec_to_pair (lo, hi, is_unsigned, 1);
     
-    while (is_assignment64_binary_operator (tok.kind) && !(assignment64_stop_before_condition_operator && is_assignment64_condition_stop_operator (tok.kind))) {
+    while (is_assignment64_condition_stop_operator (tok.kind) && !(assignment64_stop_before_condition_operator && is_assignment64_condition_stop_operator (tok.kind))) {
     
         op = tok.kind;
         get_token ();
