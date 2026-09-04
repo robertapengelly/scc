@@ -51,6 +51,8 @@ static int index_step_size (int size) {
 
 static int rhs_last_pointer_depth = 0;
 static int rhs_last_pointed_size = 0;
+
+static int rhs_last_expression_is_wide = 0;
 static int rhs_last_scalar_is_unsigned = -1;
 
 static int pending_cast_subscript_is_unsigned = -1;
@@ -23327,28 +23329,6 @@ static void emit_push_pending_struct_return_address_now (int stack_arg_bytes) {
 
 }
 
-static int current_argument_is_bare_64bit_identifier_now (void) {
-
-    struct local_symbol *sym;
-    
-    if (tok.kind != TOK_IDENT || !tok.ident || !current_argument_is_bare_identifier_now ()) {
-        return 0;
-    }
-    
-    sym = find_local_symbol (tok.ident);
-    
-    if (sym) {
-        return sym->size == (DATA_LLONG & 0x1f) && !sym->is_floating;
-    }
-    
-    if (find_global_symbol (tok.ident) >= 0) {
-        return get_global_symbol_size (tok.ident) == (DATA_LLONG & 0x1f) && !get_global_symbol_floating (tok.ident);
-    }
-    
-    return 0;
-
-}
-
 static int call_argument_expects_by_value_aggregate_now (const char *name, int argument_index) {
 
     int symbol_index;
@@ -23377,7 +23357,12 @@ static int current_argument_starts_64bit_integer_now (void) {
         return 1;
     }
     
-    if (current_argument_is_bare_64bit_identifier_now ()) {
+    /*
+     * A 64-bit identifier does not have to be a bare argument.  It may be
+     * the condition or left operand of a larger expression.  Let the 64-bit
+     * expression parser determine the final width (notably for ?:).
+     */
+    if (current_token_is_64bit_integer_value_now ()) {
         return 1;
     }
     
@@ -23615,6 +23600,10 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                     arg_bytes = DATA_LLONG & 0x1f;
                         
                     emit_load_assignment_rhs_expression_to_pair ("eax", "edx", rhs_current_operand_is_unsigned_now ());
+                    
+                    if (!rhs_last_expression_is_wide) {
+                        arg_bytes = DATA_PTR;
+                    }
                 
                 } else if (!use_inline && current_argument_starts_64bit_integer_now ()) {
                 
@@ -23627,6 +23616,10 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                     arg_bytes = DATA_LLONG & 0x1f;
                     
                     emit_load_assignment_rhs_expression_to_pair ("eax", "edx", rhs_current_operand_is_unsigned_now ());
+                    
+                    if (!rhs_last_expression_is_wide) {
+                        arg_bytes = DATA_PTR;
+                    }
                 
                 } else if (arg_is_floating) {
                     emit_load_floating_rhs_expression_now (DATA_DOUBLE & 0x1f);
@@ -25558,6 +25551,9 @@ static void emit_load_assignment_rhs_expression_to_pair (const char *lo, const c
         int false_label = anon_label++;
         int end_label = anon_label++;
         
+        int true_is_wide;
+        int false_is_wide;
+        
         get_token ();
         
         if (state->ofp) {
@@ -25584,14 +25580,54 @@ static void emit_load_assignment_rhs_expression_to_pair (const char *lo, const c
         
         anon_label++;
         
-        emit_load_assignment_rhs_expression_to_pair (lo, hi, is_unsigned);
+        /*
+         * The condition being 64-bit does not make the result operands
+         * 64-bit.  Parse each arm according to its own type.  This matters
+         * for expressions such as:
+         *
+         *     value64 == 1 ? "second" : "seconds"
+         *
+         * where the condition needs the pair evaluator but the result is a
+         * 32-bit pointer on i386.
+         */
+        true_is_wide = current_expression_mentions_64bit_symbol_now () ||
+            tok.kind == TOK_CLLONG || tok.kind == TOK_CULLONG ||
+                source_starts_64bit_integer_cast_now (tok.start) ||
+                    source_starts_64bit_integer_cast_now (tok.caret);
+        
+        if (true_is_wide) {
+            emit_load_assignment_rhs_expression_to_pair (lo, hi, is_unsigned);
+        } else {
+        
+            emit_load_assignment_rhs_expression_to_reg (lo);
+            emit_extend_pair_high_from_low (lo, hi, DATA_INT & 0x1f, rhs_last_pointer_depth > 0 ? 1 : (rhs_last_scalar_is_unsigned >= 0 ? rhs_last_scalar_is_unsigned : 0));
+        
+        }
+        
         expect (TOK_COLON, ":");
         
         emit_statement_jump (end_label);
         emit_statement_label (false_label);
-        emit_load_assignment_rhs_expression_to_pair (lo, hi, is_unsigned);
+
+        false_is_wide = current_expression_mentions_64bit_symbol_now () ||
+            tok.kind == TOK_CLLONG || tok.kind == TOK_CULLONG ||
+                source_starts_64bit_integer_cast_now (tok.start) ||
+                    source_starts_64bit_integer_cast_now (tok.caret);
+        
+        if (false_is_wide) {
+            emit_load_assignment_rhs_expression_to_pair (lo, hi, is_unsigned);
+        } else {
+        
+            emit_load_assignment_rhs_expression_to_reg (lo);
+            emit_extend_pair_high_from_low (lo, hi, DATA_INT & 0x1f, rhs_last_pointer_depth > 0 ? 1 : (rhs_last_scalar_is_unsigned >= 0 ? rhs_last_scalar_is_unsigned : 0));
+        
+        }
+        
         emit_statement_label (end_label);
+        rhs_last_expression_is_wide = true_is_wide || false_is_wide;
     
+    } else {
+        rhs_last_expression_is_wide = 1;
     }
 
 }
