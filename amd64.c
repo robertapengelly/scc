@@ -12764,6 +12764,7 @@ static void emit_store_floating_member_to_addr_reg_now (const char *addr_reg, in
 static void emit_load_floating_rhs_expression_now (int result_size);
 static void emit_load_assignment_rhs_to_reg (const char *reg);
 
+static int source_starts_double_deref_at_now (const char *p);
 static int emit_load_deref_assignment_expression_to_reg_now (const char *reg);
 static int emit_statement_rhs_const32_to_rdx_if_possible (void);
 
@@ -13088,6 +13089,22 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
         }
         
         set_rhs_last_pointer_info (1, DATA_INT & 0x1f);
+        return;
+    
+    }
+    
+    /*
+     * Repeated unary dereference belongs to the normal scalar operand parser.
+     * Let it consume the complete chain (*p, **pp, ***ppp, ...), then widen
+     * the resulting scalar value for the pair expression.  The old pair path
+     * consumed one '*' itself and therefore required the following token to be
+     * an identifier, rejecting every repeated-dereference expression.
+     */
+    if (tok.kind == TOK_STAR && source_starts_double_deref_at_now (tok.caret)) {
+    
+        emit_load_assignment_rhs_to_reg (lo);
+        
+        emit_extend_pair_high_from_low (lo, hi, DATA_INT & 0x1f, 1);
         return;
     
     }
