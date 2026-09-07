@@ -7359,6 +7359,8 @@ static int current_expression_mentions_64bit_symbol_now (void);
 static int rhs_current_operand_is_unsigned_now (void);
 
 static int rhs_current_operand_signedness_for_warning_now (void);
+
+static void warn_signedness_comparison_values_now (int left_signedness, int right_signedness, const char *report_start, const char *report_caret);
 static void warn_signedness_comparison_now (int left_signedness);
 
 static int64_s parse_floating_const_expr_bits_now (int size);
@@ -24060,6 +24062,12 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
     
     set_rhs_last_pointer_info (get_global_symbol_pointer_depth (name), get_global_symbol_pointed_size (name));
     
+    if (get_global_symbol_pointer_depth (name) == 0) {
+        rhs_last_scalar_is_unsigned = get_global_symbol_unsigned (name) ? 1 : 0;
+    } else {
+        rhs_last_scalar_is_unsigned = -1;
+    }
+    
     pending_struct_return_lhs = 0;
     pending_struct_return_global_name = 0;
     pending_struct_return_stack_address = 0;
@@ -24972,8 +24980,13 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
     int lhs_pointer_depth;
     int lhs_signedness;
     
+    int rhs_signedness;
     int rhs_is_enum;
+    
     int is_unsigned;
+    
+    const char *rhs_report_start;
+    const char *rhs_report_caret;
     
     lhs_signedness = rhs_current_operand_signedness_for_warning_now ();
     is_unsigned = emit_load_assignment_binary_expression_prec_to_reg (reg, 1);
@@ -24982,6 +24995,8 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
     
     if (lhs_pointer_depth > 0) {
         lhs_signedness = -1;
+    } else if (postfix_member_seen) {
+        lhs_signedness = postfix_member_is_unsigned ? 1 : 0;
     } else if (lhs_signedness < 0) {
         lhs_signedness = is_unsigned ? 1 : 0;
     }
@@ -24995,7 +25010,11 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
         op = tok.kind;
         get_token ();
         
-        warn_signedness_comparison_now (lhs_signedness);
+        rhs_signedness = rhs_current_operand_signedness_for_warning_now ();
+        
+        rhs_report_start = tok.report_start;
+        rhs_report_caret = tok.report_caret;
+        
         rhs_is_enum = 0;
 
         if (tok.kind == TOK_IDENT && tok.ident && !find_local_symbol (tok.ident) && find_global_symbol (tok.ident) < 0 && resolve_enum_constant (tok.ident, &rhs_enum_value)) {
@@ -25034,6 +25053,7 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
          */
         if (rhs_is_enum) {
         
+            warn_signedness_comparison_values_now (lhs_signedness, rhs_signedness, rhs_report_start, rhs_report_caret);
             emit_statement_const32_to_edx (rhs_enum_value);
             
             if (lhs_pointer_depth > 0) {
@@ -25052,8 +25072,18 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
         }
         
         if (!emit_statement_rhs_const32_to_edx_if_possible ()) {
+        
             emit_load_assignment_binary_expression_to_reg ("edx");
+            
+            if (rhs_last_pointer_depth > 0) {
+                rhs_signedness = -1;
+            } else if (postfix_member_seen) {
+                rhs_signedness = postfix_member_is_unsigned ? 1 : 0;
+            }
+        
         }
+        
+        warn_signedness_comparison_values_now (lhs_signedness, rhs_signedness, rhs_report_start, rhs_report_caret);
         
         if (lhs_pointer_depth > 0 || rhs_last_pointer_depth > 0) {
             is_unsigned = 1;
@@ -31301,23 +31331,21 @@ static int rhs_current_operand_signedness_for_warning_now (void) {
 
 }
 
-static void warn_signedness_comparison_now (int left_signedness) {
+static void warn_signedness_comparison_values_now (int left_signedness, int right_signedness, const char *report_start, const char *report_caret) {
 
-    int right_signedness;
-    
     if (!(state->warn & WARN_SIGNEDNESS)) {
         return;
     }
-    
-    right_signedness = rhs_current_operand_signedness_for_warning_now ();
     
     if (left_signedness < 0 || right_signedness < 0) {
         return;
     }
     
-    /* Code 2 is a non-negative signed integer constant.  The usual arithmetic
+    /**
+     * Code 2 is a non-negative signed integer constant.  The usual arithmetic
      * conversions can represent it in the unsigned type without changing its
-     * value, matching the useful -Wsign-compare behaviour. */
+     * value, matching the useful -Wsign-compare behaviour.
+     */
     if (left_signedness == 2 || right_signedness == 2) {
         return;
     }
@@ -31325,9 +31353,17 @@ static void warn_signedness_comparison_now (int left_signedness) {
     if (left_signedness != right_signedness) {
     
         report_line_at (get_filename (), get_line_number (), REPORT_WARNING,
-            tok.report_start, tok.report_caret, "comparison of integer expressions of different signedness");
+            report_start, report_caret, "comparison of integer expressions of different signedness");
     
     }
+
+}
+
+static void warn_signedness_comparison_now (int left_signedness) {
+
+    warn_signedness_comparison_values_now (left_signedness,
+        rhs_current_operand_signedness_for_warning_now (),
+            tok.report_start, tok.report_caret);
 
 }
 
@@ -31935,7 +31971,12 @@ static int emit_statement_ident_immediate_compare_jump_if_false_now (int label) 
     enum token_kind op;
     
     int lhs_signedness;
+    int rhs_signedness;
+    
     int is_unsigned;
+    
+    const char *rhs_report_start;
+    const char *rhs_report_caret;
     
     if (!source_condition_ident_immediate_compare_now (tok.caret) &&
         !source_condition_ident_immediate_compare_now (tok.start)) {
@@ -32015,7 +32056,9 @@ static int emit_statement_ident_immediate_compare_jump_if_false_now (int label) 
     op = tok.kind;
     get_token ();
     
-    warn_signedness_comparison_now (lhs_signedness);
+    rhs_signedness = rhs_current_operand_signedness_for_warning_now ();
+    rhs_report_start = tok.report_start;
+    rhs_report_caret = tok.report_caret;
     
     if (rhs_current_operand_is_unsigned_now ()) {
         is_unsigned = 1;
@@ -32028,6 +32071,14 @@ static int emit_statement_ident_immediate_compare_jump_if_false_now (int label) 
         emit_pop_reg_now ("eax");
     
     }
+    
+    if (rhs_last_pointer_depth > 0) {
+        rhs_signedness = -1;
+    } else if (postfix_member_seen) {
+        rhs_signedness = postfix_member_is_unsigned ? 1 : 0;
+    }
+    
+    warn_signedness_comparison_values_now (lhs_signedness, rhs_signedness, rhs_report_start, rhs_report_caret);
     
     emit_statement_cmp_eax_edx_jump_if_false_and_tail (op, is_unsigned, label);
     return 1;
