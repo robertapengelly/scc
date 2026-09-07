@@ -3577,6 +3577,18 @@ void parse_type_spec (void) {
             parsed_type_has_tag = has_tag;
             parsed_type_is_packed = aggregate_is_packed;
             
+            /*
+             * Parsing member declarations may replace parsed_type_tag_name
+             * with the type of the last member.  Restore the enclosing
+             * aggregate tag before its typedef/declarator is recorded.
+             */
+            if (has_tag && tag_name) {
+            
+                strncpy (parsed_type_tag_name, tag_name, sizeof (parsed_type_tag_name) - 1);
+                parsed_type_tag_name[sizeof (parsed_type_tag_name) - 1] = '\0';
+            
+            }
+            
             clear_parsed_fields ();
 
             if (is_union) {
