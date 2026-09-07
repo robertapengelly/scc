@@ -8646,11 +8646,11 @@ static void make_local_static_label (char *buf, size_t bufsz, const char *name) 
 
 }
 
-static void emit_global_object (const char *name, int size, int is_array, long array_count, const int *field_sizes, int field_count, const int64_s *values, char **symbols, int value_count, int is_aggregate, int is_static);
+static void emit_global_object (const char *name, int size, int is_array, long array_count, const int *field_sizes, int field_count, const int64_s *values, char **symbols, int value_count, int is_aggregate, int is_static, int explicit_align);
 static void emit_extern_symbol (const char *name, int size, int is_function);
 static void emit_extern_reference_symbol (const char *name, int size);
 
-static void emit_block_static_object (const char *label, int size, int is_array, long array_count, const int *field_sizes, int field_count, const int64_s *values, char **symbols, int value_count, int is_aggregate) {
+static void emit_block_static_object (const char *label, int size, int is_array, long array_count, const int *field_sizes, int field_count, const int64_s *values, char **symbols, int value_count, int is_aggregate, int explicit_align) {
 
     int skip_label = anon_label++;
     int need_code_skip = current_parse_block_depth > 0;
@@ -8679,7 +8679,7 @@ static void emit_block_static_object (const char *label, int size, int is_array,
     
     }
     
-    emit_global_object (label, size, is_array, array_count, field_sizes, field_count, values, symbols, value_count, is_aggregate, 1);
+    emit_global_object (label, size, is_array, array_count, field_sizes, field_count, values, symbols, value_count, is_aggregate, 1, explicit_align);
     
     /*
      * We may have switched to .data/.data? to emit the static object while
@@ -8854,6 +8854,7 @@ static void parse_block (void) {
                 
                 int declaration_dllimport = parsed_dllimport;
                 int declaration_noreturn = parsed_noreturn;
+                int declaration_alignment = parsed_alignment;
                 
                 int declared_pointer_depth;
                 int declared_pointed_size;
@@ -8868,6 +8869,10 @@ static void parse_block (void) {
                 
                 declaration_dllimport = declaration_dllimport || parsed_dllimport || declarator_dllimport;
                 declaration_noreturn = declaration_noreturn || parsed_noreturn || declarator_noreturn;
+                
+                if (declarator_alignment > declaration_alignment) {
+                    declaration_alignment = declarator_alignment;
+                }
                 
                 apply_typedef_array_to_declarator ();
                 
@@ -8962,6 +8967,10 @@ static void parse_block (void) {
                 
                     object_size = declarator_object_size (parsed_type_size);
                     object_align = declarator_is_pointer ? type_alignment (DATA_PTR) : type_alignment (parsed_type_is_aggregate ? DATA_PTR : parsed_type_size);
+                    
+                    if (declaration_alignment > object_align) {
+                        object_align = declaration_alignment;
+                    }
                     
                     object_offset = add_local_symbol (name, object_size, object_align,
                         (declarator_is_pointer ? 0 : parsed_type_is_unsigned),
@@ -9378,7 +9387,7 @@ static void parse_block (void) {
                                 declarator_has_array, declarator_array_count,
                                     object_fields, object_field_count,
                                         init_values, init_symbols, init_value_count,
-                                            (!declarator_is_pointer && parsed_type_is_aggregate));
+                                            (!declarator_is_pointer && parsed_type_is_aggregate), declaration_alignment);
                     
                     }
                     
@@ -40158,7 +40167,7 @@ static void emit_global_data_label (const char *name, int is_static) {
 
 }
 
-static void emit_global_object (const char *name, int size, int is_array, long array_count, const int *field_sizes, int field_count, const int64_s *values, char **symbols, int value_count, int is_aggregate, int is_static) {
+static void emit_global_object (const char *name, int size, int is_array, long array_count, const int *field_sizes, int field_count, const int64_s *values, char **symbols, int value_count, int is_aggregate, int is_static, int explicit_align) {
 
     int64_s zero;
     
@@ -40187,7 +40196,7 @@ static void emit_global_object (const char *name, int size, int is_array, long a
     
         switch_section (SECTION_BSS);
         
-        emit_global_alignment (global_object_alignment (size, is_array, field_sizes, field_count, is_aggregate));
+        emit_global_alignment (explicit_align > global_object_alignment (size, is_array, field_sizes, field_count, is_aggregate) ? explicit_align : global_object_alignment (size, is_array, field_sizes, field_count, is_aggregate));
         emit_global_data_label (name, is_static);
         emit_global_space (total);
         
@@ -40197,7 +40206,7 @@ static void emit_global_object (const char *name, int size, int is_array, long a
     
     switch_section (SECTION_DATA);
     
-    emit_global_alignment (global_object_alignment (size, is_array, field_sizes, field_count, is_aggregate));
+    emit_global_alignment (explicit_align > global_object_alignment (size, is_array, field_sizes, field_count, is_aggregate) ? explicit_align : global_object_alignment (size, is_array, field_sizes, field_count, is_aggregate));
     emit_global_data_label (name, is_static);
     
     value_index = 0;
@@ -40523,6 +40532,8 @@ static void parse_external_after_type (void) {
         int declaration_dllimport = 0;
         int declaration_dllexport = 0;
         
+        int declaration_alignment = parsed_alignment;
+        
         int decl_is_pointer;
         int decl_pointer_depth;
         int decl_has_array;
@@ -40547,6 +40558,11 @@ static void parse_external_after_type (void) {
         declaration_is_inline = parsed_type_is_inline;
         declaration_storage = parsed_storage_class;
         declaration_noreturn = parsed_noreturn;
+        
+        if (declarator_alignment > declaration_alignment) {
+            declaration_alignment = declarator_alignment;
+        }
+        
         declaration_dllimport = parsed_dllimport;
         declaration_dllexport = parsed_dllexport;
         
@@ -40840,7 +40856,7 @@ static void parse_external_after_type (void) {
                     emit_global_object (name, declarator_is_pointer ? DATA_PTR : (declarator_has_array ? parsed_type_size : (parsed_type_is_aggregate ? parsed_type_size : (parsed_type_size & 0x1f))),
                         declarator_has_array, declarator_array_count, object_fields, object_field_count,
                             init_values, init_symbols, init_value_count, (!declarator_is_pointer && parsed_type_is_aggregate),
-                                declaration_storage == STORAGE_STATIC);
+                                declaration_storage == STORAGE_STATIC, declaration_alignment);
                 
                 }
             

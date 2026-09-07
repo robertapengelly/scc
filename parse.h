@@ -32,6 +32,7 @@ extern int parsed_dllexport;
 extern int parsed_dllimport;
 extern int parsed_noreturn;
 extern int parsed_naked;
+extern int parsed_alignment;
 
 extern int parsed_type_size;
 extern int parsed_type_is_inline;
@@ -74,6 +75,7 @@ extern int declarator_dllexport;
 extern int declarator_dllimport;
 extern int declarator_noreturn;
 extern int declarator_naked;
+extern int declarator_alignment;
 
 extern enum token_kind declarator_calling_convention;
 extern int global_initializer_accept_symbol_addresses;

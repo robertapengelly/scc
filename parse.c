@@ -29,6 +29,7 @@ int parsed_dllexport = 0;
 int parsed_dllimport = 0;
 int parsed_noreturn = 0;
 int parsed_naked = 0;
+int parsed_alignment = 0;
 
 int parsed_type_size = DATA_NONE;
 int parsed_type_is_inline = 0;
@@ -67,6 +68,7 @@ int declarator_is_pointer = 0;
 int declarator_has_array = 0;
 int declarator_noreturn = 0;
 int declarator_naked = 0;
+int declarator_alignment = 0;
 
 int declarator_dllexport = 0;
 int declarator_dllimport = 0;
@@ -522,6 +524,46 @@ static int parse_alias_attribute_argument (void) {
 
 }
 
+static int parse_aligned_attribute_argument (void) {
+
+    enum token_kind kill[2];
+    
+    int64_s value;
+    unsigned long align;
+    
+    if (!_accept (TOK_LPAREN)) {
+    
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected '(' after 'aligned'");
+        return 0;
+    
+    }
+    
+    kill[0] = TOK_RPAREN;
+    kill[1] = 0;
+    
+    value = expr_const64 (kill);
+    expect (TOK_RPAREN, ")");
+    
+    if (value.high != 0 || value.low == 0) {
+    
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "alignment must be a positive power of two");
+        return 0;
+    
+    }
+    
+    align = value.low;
+    
+    if ((align & (align - 1)) != 0) {
+    
+        report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "alignment must be a positive power of two");
+        return 0;
+    
+    }
+    
+    return (int) align;
+
+}
+
 static void apply_decl_attribute (const char *spelling, int is_gnu) {
 
     if (attribute_name_is (spelling, "dllexport")) {
@@ -580,6 +622,22 @@ static void apply_decl_attribute (const char *spelling, int is_gnu) {
         
         }
     
+    } else if (is_gnu && attribute_name_is (spelling, "aligned")) {
+    
+        int align = parse_aligned_attribute_argument ();
+        
+        if (align > 0) {
+        
+            int *slot = declarator_depth == 0 ? &parsed_alignment : &declarator_alignment;
+            
+            if (*slot > 0 && *slot != align) {
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "conflicting 'aligned' attributes");
+            } else {
+                *slot = align;
+            }
+        
+        }
+
     } else if (is_gnu && attribute_name_is (spelling, "stdcall")) {
     
         if (parsed_calling_convention == TOK_EOF && declarator_calling_convention == TOK_EOF) {
@@ -649,6 +707,8 @@ static void parse_decl_modifier (void) {
                 
                 if (attribute_name_is (name, "alias")) {
                     parse_alias_attribute_argument ();
+                } else if (attribute_name_is (name, "aligned")) {
+                    apply_decl_attribute (name, 1);
                 } else {
                 
                     apply_decl_attribute (name, 1);
@@ -859,6 +919,7 @@ void parse_declarator (char **out_name) {
     int saved_declarator_dllimport = declarator_dllimport;
     int saved_declarator_noreturn = declarator_noreturn;
     int saved_declarator_naked = declarator_naked;
+    int saved_declarator_alignment = declarator_alignment;
     
     unsigned long saved_captured_declarator_name_line = captured_declarator_name_line;
     memcpy (saved_declarator_alias_target, declarator_alias_target, sizeof (declarator_alias_target));
@@ -878,6 +939,7 @@ void parse_declarator (char **out_name) {
         declarator_dllimport = 0;
         declarator_noreturn = 0;
         declarator_naked = 0;
+        declarator_alignment = 0;
         
         captured_declarator_name_location = 0;
         captured_declarator_name_start = 0;
@@ -944,6 +1006,7 @@ void parse_declarator (char **out_name) {
         declarator_dllimport = saved_declarator_dllimport;
         declarator_noreturn = saved_declarator_noreturn;
         declarator_naked = saved_declarator_naked;
+        declarator_alignment = saved_declarator_alignment;
     
     }
 
@@ -2933,6 +2996,7 @@ void parse_type_spec (void) {
     parsed_dllimport = 0;
     parsed_noreturn = 0;
     parsed_naked = 0;
+    parsed_alignment = 0;
     
     clear_parsed_fields ();
     
