@@ -33626,7 +33626,26 @@ static int emit_statement_rhs_const32_to_rdx_if_possible (void) {
         if (current_integer_expr_is_foldable_now ()) {
             v = const64_from_current_foldable_expr ();
         } else {
+        
+            struct token *saved_tok = clone_current_token_now ();
+            enum token_kind next_kind;
+            
+            get_token ();
+            
+            next_kind = tok.kind;
+            unget_token (saved_tok);
+            
+            /*
+             * A leading constant may only be the first operand of the RHS.
+             * Leave expressions such as LIMIT - 1 to the normal expression
+             * parser instead of consuming LIMIT as the complete operand.
+             */
+            if (token_kind_is_binary_expression_operator_now (next_kind)) {
+                return 0;
+            }
+            
             v = const64_from_current_operand ();
+        
         }
         
         emit_statement_const32_to_rdx (v);
