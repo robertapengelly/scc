@@ -8763,6 +8763,7 @@ static void ensure_block_stack_allocated (long block_stack_start, long *block_st
 
 }
 
+static int global_initializer_cast_before_address_now (void);
 static void parse_global_initializer_values (int64_s *values, char **symbols, int max_values, int *count);
 
 static int aggregate_initializer_value_field_count (const int *field_sizes, int field_count);
@@ -9086,7 +9087,7 @@ static void parse_block (void) {
                             {
                             
                                 int saved_accept_symbol_addresses = global_initializer_accept_symbol_addresses;
-                                global_initializer_accept_symbol_addresses = declarator_is_pointer || parsed_type_is_aggregate || declarator_has_array;
+                                global_initializer_accept_symbol_addresses = declarator_is_pointer || parsed_type_is_aggregate || declarator_has_array || global_initializer_cast_before_address_now ();
                                 
                                 if (declarator_has_array && !declarator_is_pointer && parsed_type_is_aggregate && parsed_field_count > 0 && tok.kind == TOK_LBRACE) {
                                     parse_global_initializer_values_padded_elements (init_values, init_symbols, MAX_AGG_FIELDS, &init_value_count, aggregate_initializer_value_field_count (parsed_field_sizes, parsed_field_count));
@@ -39514,7 +39515,53 @@ static int global_initializer_cast_before_symbol_now (void) {
         p++;
     }
     
+    if (*p == '&') {
+    
+        p++;
+        
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+    
+    }
+    
     return ident_start_now ((unsigned char) *p);
+
+}
+
+static int global_initializer_cast_before_address_now (void) {
+
+    const char *p = tok.caret;
+    int depth;
+    
+    if (!p || *p != '(') {
+        return 0;
+    }
+    
+    p++;
+    depth = 1;
+    
+    while (*p && depth > 0) {
+    
+        if (*p == '(') {
+            depth++;
+        } else if (*p == ')') {
+            depth--;
+        }
+        
+        p++;
+    
+    }
+    
+    if (depth != 0) {
+        return 0;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    return *p == '&';
 
 }
 
@@ -39690,23 +39737,31 @@ static void parse_global_initializer_values (int64_s *values, char **symbols, in
             
             if (!token_starts_type_name () || !parse_cast_type_name (&cast_size, &cast_is_unsigned, &cast_is_pointer)) {
                 report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "invalid cast in global initializer");
-            } else if (tok.kind != TOK_IDENT || find_global_symbol (tok.ident) < 0) {
-                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "global symbol expected after cast");
             } else {
             
-                if (*count < max_values) {
-                
-                    values[*count].low = 0;
-                    values[*count].high = 0;
-                    
-                    if (symbols) {
-                        symbols[*count] = xstrdup (tok.ident);
-                    }
-                
+                if (tok.kind == TOK_AMPER) {
+                    get_token ();
                 }
                 
-                (*count)++;
-                get_token ();
+                if (tok.kind != TOK_IDENT || find_global_symbol (tok.ident) < 0) {
+                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "global symbol expected after cast");
+                } else {
+                
+                    if (*count < max_values) {
+                    
+                        values[*count].low = 0;
+                        values[*count].high = 0;
+                        
+                        if (symbols) {
+                            symbols[*count] = xstrdup (tok.ident);
+                        }
+                    
+                    }
+                    
+                    (*count)++;
+                    get_token ();
+                
+                }
             
             }
         
@@ -40813,7 +40868,7 @@ static void parse_external_after_type (void) {
                 {
                 
                     int saved_accept_symbol_addresses = global_initializer_accept_symbol_addresses;
-                    global_initializer_accept_symbol_addresses = declarator_is_pointer || declarator_has_function || parsed_type_is_aggregate || declarator_has_array;
+                    global_initializer_accept_symbol_addresses = declarator_is_pointer || declarator_has_function || parsed_type_is_aggregate || declarator_has_array || global_initializer_cast_before_address_now ();
                     
                     if (declarator_has_array && !declarator_is_pointer && parsed_type_is_aggregate && parsed_field_count > 0 && tok.kind == TOK_LBRACE) {
                         parse_global_initializer_values_padded_elements (init_values, init_symbols, MAX_GLOBAL_INIT_FIELDS, &init_value_count, aggregate_initializer_value_field_count (parsed_field_sizes, parsed_field_count));
