@@ -39162,8 +39162,11 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
     emit_function_start (name, !emit_public);
     
     statement_ends_control_flow = 0;
+    set_current_function_name (name);
     
     parse_block ();
+    
+    set_current_function_name (0);
     check_goto_labels ();
     
     if (current_function_is_noreturn && !current_function_has_return_statement && !statement_ends_control_flow) {

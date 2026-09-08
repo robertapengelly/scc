@@ -174,4 +174,6 @@ struct punct {
 struct punct *find_punct (char *p);
 int init_tokenizer (const char *ifile);
 
+void set_current_function_name (const char *name);
+
 #endif      /* _TOKEN_H */

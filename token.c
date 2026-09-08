@@ -2050,6 +2050,23 @@ static char *token_collect_macro_continuation (char *line_start, char **line_end
 
 }
 
+static char *current_function_name = 0;
+
+void set_current_function_name (const char *name) {
+
+    if (current_function_name) {
+    
+        free (current_function_name);
+        current_function_name = 0;
+    
+    }
+    
+    if (name) {
+        current_function_name = xstrdup (name);
+    }
+
+}
+
 void get_token (void) {
 
     struct history *history;
@@ -2180,6 +2197,20 @@ void get_token (void) {
         
         if (tok.kind == TOK_IDENT) {
         
+            if (current_function_name && strcmp (tok.ident, "__FUNCTION__") == 0) {
+            
+                char *value = xmalloc (strlen (current_function_name) + 3);
+                sprintf (value, "\"%s\"", current_function_name);
+                
+                free (tok.ident);
+                
+                tok.ident = value;
+                tok.kind = TOK_PPSTR;
+                
+                return;
+            
+            }
+            
             tok.kind = find_kind (tok.start, tok.caret, tok.ident);;
             return;
         
