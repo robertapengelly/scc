@@ -80,6 +80,46 @@ static int index_step_size (int size) {
 
 static int rhs_last_pointer_depth = 0;
 static int rhs_last_pointed_size = 0;
+
+static int rhs_last_expression_is_void = 0;
+static int rhs_allow_void_function_value = 0;
+
+static int source_starts_void_cast_now (const char *p) {
+
+    if (!p) {
+        return 0;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    if (*p++ != '(') {
+        return 0;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    if (p[0] != 'v' || p[1] != 'o' || p[2] != 'i' || p[3] != 'd') {
+        return 0;
+    }
+    
+    p += 4;
+    
+    if ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_') {
+        return 0;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    return *p == ')';
+
+}
+
 static int pending_cast_subscript_is_unsigned = -1;
 
 static void set_rhs_last_pointer_info (int depth, int size) {
@@ -13229,11 +13269,20 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
             get_global_symbol_kind (name) == GLOBAL_SYMBOL_FUNCTION) {
         
             const char *addr_reg = (strcmp (lo, "rcx") != 0 && strcmp (hi, "rcx") != 0) ? "rcx" : "rsi";
+            
             int fptr_depth = get_global_symbol_pointer_depth (name);
             int fpointed_size = get_global_symbol_pointed_size (name);
             
             if (get_global_symbol_returns_void (name)) {
-                report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret, "void function '%s' used as a value", name);
+            
+                if (!rhs_allow_void_function_value) {
+                    report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret, "void function '%s' used as a value", name);
+                }
+                
+                rhs_last_expression_is_void = 1;
+            
+            } else {
+                rhs_last_expression_is_void = 0;
             }
             
             emit_call_identifier_to_reg_now (name, lo, name_start, name_caret, name_line);
@@ -13494,7 +13543,15 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
             }
             
             if (get_global_symbol_kind (name) == GLOBAL_SYMBOL_FUNCTION && get_global_symbol_returns_void (name)) {
-                report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret, "void function '%s' used as a value", name);
+            
+                if (!rhs_allow_void_function_value) {
+                    report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret, "void function '%s' used as a value", name);
+                }
+                
+                rhs_last_expression_is_void = 1;
+            
+            } else {
+                rhs_last_expression_is_void = 0;
             }
             
             emit_call_identifier_to_reg_now (name, "rax", name_start, name_caret, name_line);
@@ -21390,7 +21447,15 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             }
             
             if (get_global_symbol_kind (name) == GLOBAL_SYMBOL_FUNCTION && get_global_symbol_returns_void (name)) {
-                report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret, "void function '%s' used as a value", name);
+            
+                if (!rhs_allow_void_function_value) {
+                    report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret, "void function '%s' used as a value", name);
+                }
+                
+                rhs_last_expression_is_void = 1;
+            
+            } else {
+                rhs_last_expression_is_void = 0;
             }
             
             emit_call_identifier_to_reg_now (name, reg, name_start, name_caret, name_line);
@@ -23430,7 +23495,15 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
             }
             
             if (get_global_symbol_kind (name) == GLOBAL_SYMBOL_FUNCTION && get_global_symbol_returns_void (name)) {
-                report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret, "void function '%s' used as a value", name);
+            
+                if (!rhs_allow_void_function_value) {
+                    report_line_at (get_filename (), name_line, REPORT_ERROR, name_start, name_caret, "void function '%s' used as a value", name);
+                }
+                
+                rhs_last_expression_is_void = 1;
+            
+            } else {
+                rhs_last_expression_is_void = 0;
             }
             
             emit_call_identifier_to_reg_now (name, "rax", name_start, name_caret, name_line);
@@ -28247,6 +28320,17 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
     
     if (tok.kind == TOK_QMARK) {
     
+        int true_is_void;
+        int false_is_void;
+        
+        int true_starts_void_cast;
+        int false_starts_void_cast;
+        
+        unsigned long conditional_line = get_line_number ();
+        
+        const char *conditional_start = tok.start;
+        const char *conditional_caret = tok.caret;
+        
         false_label = anon_label++;
         end_label = anon_label++;
         
@@ -28283,11 +28367,36 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
         
         }
         
+        true_starts_void_cast = source_starts_void_cast_now (tok.caret);
+        
+        rhs_last_expression_is_void = 0;
+        rhs_allow_void_function_value++;
+        
         emit_load_assignment_rhs_expression_to_reg (reg);
+        
+        rhs_allow_void_function_value--;
+        true_is_void = true_starts_void_cast || rhs_last_expression_is_void;
+        
         expect (TOK_COLON, ":");
+        
         emit_statement_jump (end_label);
         emit_statement_label (false_label);
+        
+        false_starts_void_cast = source_starts_void_cast_now (tok.caret);
+        
+        rhs_last_expression_is_void = 0;
+        rhs_allow_void_function_value++;
+        
         emit_load_assignment_rhs_expression_to_reg (reg);
+        
+        rhs_allow_void_function_value--;
+        false_is_void = false_starts_void_cast || rhs_last_expression_is_void;
+        
+        if (true_is_void != false_is_void) {
+            report_line_at (get_filename (), conditional_line, REPORT_ERROR, conditional_start, conditional_caret, "conditional operator has one void operand");
+        }
+        
+        rhs_last_expression_is_void = true_is_void && false_is_void;
         emit_statement_label (end_label);
     
     }
