@@ -32130,6 +32130,91 @@ static int emit_statement_ident_immediate_compare_jump_if_false_now (int label) 
     lhs_signedness = rhs_current_operand_signedness_for_warning_now ();
     is_unsigned = rhs_current_operand_is_unsigned_now ();
     
+    /*
+     * A plain long long identifier is a 64-bit value, not an address-sized
+     * scalar.  The immediate-comparison fast path used to feed it through
+     * emit_load_assignment_rhs_to_reg(), which leaves the address of a global
+     * object in EAX.  Compare the complete value as a register pair instead.
+     */
+    if (current_token_is_64bit_integer_value_now ()) {
+    
+        enum token_kind op64;
+        
+        {
+        
+            struct local_symbol *sym64 = find_local_symbol (tok.ident);
+            
+            if (sym64) {
+            
+                if (sym64->is_static && sym64->static_label) {
+                    emit_load_global64_to_pair ("eax", "edx", sym64->static_label);
+                } else {
+                    emit_load_local64_to_pair (sym64->offset, "eax", "edx");
+                }
+            
+            } else if (find_global_symbol (tok.ident) >= 0) {
+                emit_load_global64_to_pair ("eax", "edx", tok.ident);
+            } else {
+                return 0;
+            }
+        
+        }
+        
+        get_token ();
+        
+        if (!token_is_statement_compare_operator (tok.kind)) {
+            return 0;
+        }
+        
+        op64 = tok.kind;
+        get_token ();
+        
+        rhs_signedness = rhs_current_operand_signedness_for_warning_now ();
+        rhs_report_start = tok.report_start;
+        rhs_report_caret = tok.report_caret;
+        
+        if (rhs_current_operand_is_unsigned_now ()) {
+            is_unsigned = 1;
+        }
+        
+        emit_push_reg_now ("eax");
+        emit_push_reg_now ("edx");
+        
+        emit_load_assignment_rhs_expression_to_pair ("eax", "edx", is_unsigned);
+        
+        if (rhs_last_pointer_depth > 0) {
+            rhs_signedness = -1;
+        } else if (postfix_member_seen) {
+            rhs_signedness = postfix_member_is_unsigned ? 1 : 0;
+        }
+        
+        warn_signedness_comparison_values_now (lhs_signedness, rhs_signedness, rhs_report_start, rhs_report_caret);
+        
+        if (state->ofp) {
+        
+            if (state->syntax & ASM_SYNTAX_INTEL) {
+            
+                fprintf (state->ofp, "    mov ebx, eax\n");
+                fprintf (state->ofp, "    mov ecx, edx\n");
+            
+            } else {
+            
+                fprintf (state->ofp, "    movl %%eax, %%ebx\n");
+                fprintf (state->ofp, "    movl %%edx, %%ecx\n");
+            
+            }
+        
+        }
+        
+        emit_pop_reg_now ("edx");
+        emit_pop_reg_now ("eax");
+        
+        emit_statement_cmp64_to_eax (op64, is_unsigned);
+        emit_test_reg_jump_zero_now ("eax", label);
+        
+        return 1;
+    }
+    
     emit_load_assignment_rhs_to_reg ("eax");
     
     while (tok.kind == TOK_ARROW || tok.kind == TOK_DOT) {
