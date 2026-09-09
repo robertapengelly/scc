@@ -9661,7 +9661,7 @@ static int emit_parse_postfix_subscripts_to_reg_now (const char *reg, int elem_s
 
 }
 
-static int emit_parse_postfix_subscripts_to_reg_dims_now (const char *reg, int elem_size, int pointer_depth, int pointed_size, int array_dimensions, int is_unsigned) {
+static int emit_parse_postfix_subscripts_to_reg_dims_now (const char *reg, int elem_size, int pointer_depth, int pointed_size, int array_dimensions, int is_unsigned, int *final_elem_size) {
 
     const char *index_reg;
     int saw_subscript = 0;
@@ -9740,6 +9740,10 @@ static int emit_parse_postfix_subscripts_to_reg_dims_now (const char *reg, int e
         
         }
     
+    }
+    
+    if (final_elem_size) {
+        *final_elem_size = elem_size;
     }
 
     return saw_subscript;
@@ -19944,6 +19948,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             
             if (src) {
             
+                int final_subscript_elem_size;
                 int saw_subscript;
                 int elem_size;
                 
@@ -19976,9 +19981,9 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                         emit_load_local_to_reg (reg, src->offset, DATA_PTR);
                     }
                     
-                    saw_subscript = emit_parse_postfix_subscripts_to_reg_dims_now (reg, elem_size, src->pointer_depth, src->pointed_size, src->array_dimensions, src->pointer_depth > 0 ? src->pointed_is_unsigned : src->is_unsigned);
+                    saw_subscript = emit_parse_postfix_subscripts_to_reg_dims_now (reg, elem_size, src->pointer_depth, src->pointed_size, src->array_dimensions, src->pointer_depth > 0 ? src->pointed_is_unsigned : src->is_unsigned, &final_subscript_elem_size);
                     
-                    postfix_copy_lvalue_size = index_step_size (elem_size);
+                    postfix_copy_lvalue_size = index_step_size (final_subscript_elem_size);
                     postfix_copy_lvalue_tag_name = src->is_array ? (src->tag_name ? src->tag_name : src->pointed_tag_name) : src->pointed_tag_name;
                 
                 }
@@ -20012,12 +20017,12 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                 
                 }
                 
-                if (!postfix_member_seen && saw_subscript && elem_size > (DATA_PTR & 0x1f)) {
+                if (!postfix_member_seen && saw_subscript && final_subscript_elem_size > (DATA_PTR & 0x1f)) {
                 
                     postfix_member_seen = 1;
                     postfix_member_pointer_depth = 0;
-                    postfix_member_pointed_size = elem_size;
-                    postfix_member_size = elem_size;
+                    postfix_member_pointed_size = final_subscript_elem_size;
+                    postfix_member_size = final_subscript_elem_size;
                     postfix_member_is_floating = src->is_floating;
                     postfix_member_is_unsigned = src->is_unsigned;
                 
@@ -20036,6 +20041,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             
             if (find_global_symbol (name) >= 0) {
             
+                int final_subscript_elem_size;
                 int saw_subscript;
                 int elem_size;
                 
@@ -20062,9 +20068,9 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                         emit_load_global_to_reg (reg, name, DATA_PTR);
                     }
                     
-                    saw_subscript = emit_parse_postfix_subscripts_to_reg_dims_now (reg, elem_size, get_global_symbol_pointer_depth (name), get_global_symbol_pointed_size (name), get_global_symbol_array_dimensions (name), get_global_symbol_pointer_depth (name) > 0 ? get_global_symbol_pointed_is_unsigned (name) : get_global_symbol_unsigned (name));
+                    saw_subscript = emit_parse_postfix_subscripts_to_reg_dims_now (reg, elem_size, get_global_symbol_pointer_depth (name), get_global_symbol_pointed_size (name), get_global_symbol_array_dimensions (name), get_global_symbol_pointer_depth (name) > 0 ? get_global_symbol_pointed_is_unsigned (name) : get_global_symbol_unsigned (name), &final_subscript_elem_size);
                     
-                    postfix_copy_lvalue_size = index_step_size (elem_size);
+                    postfix_copy_lvalue_size = index_step_size (final_subscript_elem_size);
                     postfix_copy_lvalue_tag_name = get_global_symbol_array (name) ? get_global_symbol_tag_name (name) : 0;
                 
                 }
@@ -20098,12 +20104,12 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                 
                 }
                 
-                if (!postfix_member_seen && saw_subscript && elem_size > (DATA_PTR & 0x1f)) {
+                if (!postfix_member_seen && saw_subscript && final_subscript_elem_size > (DATA_PTR & 0x1f)) {
                 
                     postfix_member_seen = 1;
                     postfix_member_pointer_depth = 0;
-                    postfix_member_pointed_size = elem_size;
-                    postfix_member_size = elem_size;
+                    postfix_member_pointed_size = final_subscript_elem_size;
+                    postfix_member_size = final_subscript_elem_size;
                     postfix_member_is_floating = get_global_symbol_floating (name);
                     postfix_member_is_unsigned = get_global_symbol_unsigned (name);
                 
