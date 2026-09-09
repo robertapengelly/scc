@@ -2801,6 +2801,52 @@ static void remember_member_info_ex (const char *name, int offset, int size, int
 
 }
 
+static void promote_anonymous_aggregate_members (const char *owner_tag_name, int base_offset, int is_packed) {
+
+    int end;
+    int i;
+    
+    if (!owner_tag_name || !owner_tag_name[0]) {
+        return;
+    }
+    
+    end = member_info_count;
+    
+    for (i = 0; i < end; i++) {
+    
+        struct member_info_entry *src;
+        struct member_info_entry *dst;
+        
+        src = &member_infos[i];
+        
+        if (!src->owner_tag_name || strcmp (src->owner_tag_name, owner_tag_name) != 0) {
+            continue;
+        }
+        
+        if (member_info_count >= MAX_MEMBER_INFOS) {
+            return;
+        }
+        
+        dst = &member_infos[member_info_count++];
+        
+        dst->name = src->name ? xstrdup (src->name) : 0;
+        dst->offset = base_offset + src->offset;
+        dst->size = src->size;
+        dst->elem_size = src->elem_size;
+        dst->pointer_depth = src->pointer_depth;
+        dst->is_array = src->is_array;
+        dst->is_floating = src->is_floating;
+        dst->is_unsigned = src->is_unsigned;
+        dst->is_packed = is_packed ? 1 : src->is_packed;
+        dst->tag_name = src->tag_name ? xstrdup (src->tag_name) : 0;
+        dst->owner_tag_name = 0;
+        dst->calling_convention = src->calling_convention;
+        dst->owner_size = 0;
+    
+    }
+
+}
+
 static int fields_storage_size (const int *sizes, int count) {
 
     int total = 0, i;
@@ -3352,8 +3398,17 @@ void parse_type_spec (void) {
 
                         int member_init_size = fields_storage_size (member_fields, member_field_count);
                         
+                        int member_align = aggregate_is_packed ? 1 : type_alignment (member_type_size);
+                        int member_offset = 0;
+                        
+                        if (!aggregate_is_packed && member_align > aggregate_align) {
+                            aggregate_align = member_align;
+                        }
+                        
                         if (is_union) {
                         
+                            promote_anonymous_aggregate_members (parsed_type_tag_name, 0, aggregate_is_packed);
+                            
                             if (member_type_size > aggregate_size) {
                                 aggregate_size = member_type_size;
                             }
@@ -3372,6 +3427,18 @@ void parse_type_spec (void) {
                         
                         } else {
                         
+                            int padding;
+                            
+                            member_offset = (int) align_up_long (aggregate_size, member_align);
+                            padding = member_offset - aggregate_size;
+                            
+                            if (padding > 0 && aggregate_field_count < MAX_AGG_FIELDS) {
+                                aggregate_fields[aggregate_field_count++] = -padding;
+                            }
+                            
+                            aggregate_size = member_offset;
+                            promote_anonymous_aggregate_members (parsed_type_tag_name, member_offset, aggregate_is_packed);
+                            
                             aggregate_size += member_type_size;
                             
                             for (i = 0; i < member_field_count && aggregate_field_count < MAX_AGG_FIELDS; i++) {
