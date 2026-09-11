@@ -26159,6 +26159,17 @@ static int amd64_emit_bare_64bit_identifier_to_rax_now (void) {
     
     }
     
+    if (!sym && find_global_symbol (name) >= 0 && get_global_symbol_kind (name) == GLOBAL_SYMBOL_FUNCTION) {
+    
+        emit_load_address_to_reg_now ("rax", name);
+        
+        get_token ();
+        free (name);
+        
+        return 1;
+    
+    }
+    
     if (!sym && find_global_symbol (name) >= 0 && get_global_symbol_size (name) == (DATA_LLONG & 0x1f) && !get_global_symbol_floating (name)) {
     
         emit_load_global64_to_rax (name);
