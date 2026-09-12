@@ -7913,6 +7913,24 @@ static int declarator_effective_pointed_size_now (int base_size, const int *fiel
         return entry->size;
     }
     
+    /*
+     * For an array object, pointed_size describes the scalar element reached
+     * after all array dimensions have been consumed.  The field list used for
+     * initializers may contain one entry for every flattened array element, so
+     * summing it here turns e.g. uint8_t a[16][3] into a pointed size of 48.
+     * That makes a[i][j] look like pointer traversal instead of row/element
+     * indexing.
+     */
+    if (declarator_has_array) {
+    
+        if (parsed_type_is_aggregate) {
+            return base_size;
+        }
+        
+        return base_size & 0x1f;
+    
+    }
+    
     return declarator_element_size_from_fields (base_size, field_sizes, field_count);
 
 }
