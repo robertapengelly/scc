@@ -3917,6 +3917,12 @@ void parse_direct_declarator (char **out_name) {
                         int saved_is_unsigned = parsed_type_is_unsigned;
                         int saved_is_floating = parsed_type_is_floating;
                         int saved_has_tag = parsed_type_has_tag;
+                        int saved_field_count = parsed_field_count;
+                        int saved_fields[MAX_AGG_FIELDS];
+                        int saved_is_array_typedef = parsed_type_is_array_typedef;
+                        int saved_array_element_size = parsed_type_array_element_size;
+                        long saved_type_array_count = parsed_type_array_count;
+                        char saved_tag_name[sizeof parsed_type_tag_name];
                         int saved_is_pointer = declarator_is_pointer;
                         int saved_pointer_depth = declarator_pointer_depth;
                         int saved_has_array = declarator_has_array;
@@ -3928,10 +3934,18 @@ void parse_direct_declarator (char **out_name) {
                         int saved_is_inline = parsed_type_is_inline;
                         
                         char *param_name = 0;
+                        
                         int param_base_size, param_size;
+                        int saved_field_i;
                         
                         int count_this_param = 0;
                         int saw_void_param_list = 0;
+                        
+                        memcpy (saved_tag_name, parsed_type_tag_name, sizeof (saved_tag_name));
+                        
+                        for (saved_field_i = 0; saved_field_i < saved_field_count; saved_field_i++) {
+                            saved_fields[saved_field_i] = parsed_field_sizes[saved_field_i];
+                        }
                         
                         parse_type_spec ();
                         param_base_size = parsed_type_size;
@@ -3997,7 +4011,17 @@ void parse_direct_declarator (char **out_name) {
                         parsed_type_is_unsigned = saved_is_unsigned;
                         parsed_type_is_floating = saved_is_floating;
                         parsed_type_has_tag = saved_has_tag;
+                        parsed_type_is_array_typedef = saved_is_array_typedef;
+                        parsed_type_array_element_size = saved_array_element_size;
+                        parsed_type_array_count = saved_type_array_count;
                         parsed_type_is_inline = saved_is_inline;
+                        
+                        memcpy (parsed_type_tag_name, saved_tag_name, sizeof (parsed_type_tag_name));
+                        parsed_field_count = saved_field_count;
+                        
+                        for (saved_field_i = 0; saved_field_i < saved_field_count; saved_field_i++) {
+                            parsed_field_sizes[saved_field_i] = saved_fields[saved_field_i];
+                        }
                         
                         declarator_calling_convention = saved_calling_convention;
                         declarator_is_pointer = saved_is_pointer;
