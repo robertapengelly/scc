@@ -6467,6 +6467,7 @@ static void switch_section (int sec) {
 }
 
 static int last_deref_cast_type_is_floating = 0;
+static int last_deref_cast_type_is_unsigned = 0;
 
 static int parse_deref_cast_type_name (int *out_size) {
 
@@ -6494,9 +6495,12 @@ static int parse_deref_cast_type_name (int *out_size) {
     
     int size = DATA_INT & 0x1f;
     int ok = 0, i;
+    
+    int cast_is_unsigned = 0;
     int cast_is_floating = 0;
     
     last_deref_cast_type_is_floating = 0;
+    last_deref_cast_type_is_unsigned = 0;
     
     for (i = 0; i < saved_field_count && i < MAX_AGG_FIELDS; i++) {
         saved_fields[i] = parsed_field_sizes[i];
@@ -6512,8 +6516,9 @@ static int parse_deref_cast_type_name (int *out_size) {
         declarator_array_count = 0;
         
         parse_type_spec ();
-        
         size = parsed_type_size & 0x1f;
+        
+        cast_is_unsigned = parsed_type_is_unsigned;
         cast_is_floating = parsed_type_is_floating;
         
         if (tok.kind != TOK_RPAREN) {
@@ -6540,6 +6545,7 @@ static int parse_deref_cast_type_name (int *out_size) {
             get_token ();
             ok = 1;
             
+            last_deref_cast_type_is_unsigned = cast_is_unsigned;
             last_deref_cast_type_is_floating = cast_is_floating;
         
         } else {
@@ -20490,6 +20496,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
     
         int deref_had_parens = 0;
         int deref_size = DATA_CHAR & 0x1f;
+        int deref_is_unsigned = 0;
         int deref_pointer_depth = 0;
         int deref_pointed_size = 0;
         
@@ -20908,6 +20915,8 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             
                 if (parse_deref_cast_type_name (&deref_size)) {
                 
+                    deref_is_unsigned = last_deref_cast_type_is_unsigned;
+                    
                     /*
                      * parse_deref_cast_type_name() consumes the cast parentheses
                      * only.  Do not consume a following ')' here: in expressions
@@ -21271,7 +21280,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         deref_pointer_depth = rhs_last_pointer_depth;
         deref_pointed_size = rhs_last_pointed_size;
         
-        emit_load_deref_reg_now (reg, deref_size);
+        emit_load_deref_reg_ex_now (reg, deref_size, deref_is_unsigned);
         
         if (deref_pointer_depth > 1) {
             set_rhs_last_pointer_info (deref_pointer_depth - 1, deref_pointed_size);
