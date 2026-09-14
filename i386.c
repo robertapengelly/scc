@@ -14669,10 +14669,11 @@ static int emit_load_address_of_parenthesized_postfix_to_reg_now (const char *re
     enum token_kind member_op;
     struct local_symbol *src;
     
+    const char *current_object_tag_name = 0;
     int global_index;
     
-    const char *current_object_tag_name = 0;
     int current_object_size = 0;
+    int parenthesis_consumed = 0;
     
     if (tok.kind != TOK_LPAREN) {
         return 0;
@@ -14690,6 +14691,76 @@ static int emit_load_address_of_parenthesized_postfix_to_reg_now (const char *re
             return 1;
         
         }
+    
+    }
+    
+    if (tok.kind == TOK_STAR) {
+    
+        struct aggregate_tag_entry *entry;
+        get_token ();
+        
+        if (tok.kind != TOK_IDENT) {
+        
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "expected identifier after '&(*'");
+            
+            expect (TOK_RPAREN, ")");
+            return 1;
+        
+        }
+        
+        name = xstrdup (tok.ident);
+        get_token ();
+        
+        src = find_local_symbol (name);
+        global_index = find_global_symbol (name);
+        
+        if (src && src->pointer_depth > 0) {
+        
+            current_object_tag_name = src->pointed_tag_name;
+            current_object_size = src->pointed_size;
+            
+            if (src->is_static && src->static_label) {
+                emit_load_global_to_reg (reg, src->static_label, DATA_PTR);
+            } else {
+                emit_load_local_to_reg (reg, src->offset, DATA_PTR);
+            }
+            
+            emit_load_deref_reg_now (reg, DATA_PTR & 0x1f);
+        
+       } else if (global_index >= 0 && get_global_symbol_pointer_depth (name) > 0) {
+        
+            current_object_tag_name = get_global_symbol_tag_name (name);
+            current_object_size = get_global_symbol_pointed_size (name);
+            
+            emit_load_global_to_reg (reg, name, DATA_PTR);
+            emit_load_deref_reg_now (reg, DATA_PTR & 0x1f);
+        
+        } else {
+        
+            report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "cannot dereference '%s'", name);
+            free (name);
+            
+            expect (TOK_RPAREN, ")");
+            return 1;
+        
+        }
+        
+        if (current_object_tag_name) {
+        
+            entry = find_aggregate_tag (current_object_tag_name, 0);
+            
+            if (entry) {
+                current_object_size = entry->size;
+            }
+        
+        }
+        
+        free (name);
+        
+        expect (TOK_RPAREN, ")");
+        parenthesis_consumed = 1;
+        
+        goto parenthesized_address_members;
     
     }
     
@@ -14835,6 +14906,8 @@ static int emit_load_address_of_parenthesized_postfix_to_reg_now (const char *re
     
     free (name);
     
+parenthesized_address_members:
+    
     while (tok.kind == TOK_ARROW || tok.kind == TOK_DOT) {
     
         char *member;
@@ -14932,7 +15005,10 @@ static int emit_load_address_of_parenthesized_postfix_to_reg_now (const char *re
     
     }
     
-    expect (TOK_RPAREN, ")");
+    if (!parenthesis_consumed) {
+        expect (TOK_RPAREN, ")");
+    }
+    
     return 1;
 
 }
