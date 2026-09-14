@@ -8546,6 +8546,313 @@ static void append_local_zero_initializer (struct local_init *inits, int *init_c
 
 }
 
+static int aggregate_field_index_from_offset (const int *fields, int field_count, int wanted_offset, int *out_index, long *out_offset) {
+
+    int offset = 0, i;
+    
+    for (i = 0; i < field_count; i++) {
+    
+        int size = fields[i];
+        
+        if (size < 0) {
+        
+            offset += -size;
+            continue;
+        
+        }
+        
+        if (offset == wanted_offset) {
+        
+            if (out_index) {
+                *out_index = i;
+            }
+            
+            if (out_offset) {
+                *out_offset = offset;
+            }
+            
+            return 1;
+        
+        }
+        
+        offset += size;
+    
+    }
+    
+    return 0;
+
+}
+
+static void append_local_aggregate_zero_initializers (struct local_init *inits, int *init_count, int max_inits, long base_offset, const int *fields, int field_count) {
+
+    long offset = 0, i;
+    
+    for (i = 0; i < field_count; i++) {
+    
+        int size = fields[i];
+        
+        if (size < 0) {
+        
+            offset += -size;
+            continue;
+        
+        }
+        
+        append_local_zero_initializer (inits, init_count, max_inits, base_offset + offset, size);
+        offset += size;
+    
+    }
+
+}
+
+static int parse_designated_member_path (int object_size, const char *owner_tag_name, int *out_offset, int *out_size, int *out_elem_size, int *out_is_array, int *out_is_floating, unsigned long *out_line, const char **out_start, const char **out_caret) {
+
+    char current_tag_name[128];
+    
+    int current_size = object_size;
+    int total_offset = 0;
+    
+    int member_elem_size = 0;
+    int member_is_array = 0;
+    int member_size = 0;
+    int member_is_floating = 0;
+    
+    current_tag_name[0] = '\0';
+    
+    if (owner_tag_name && owner_tag_name[0]) {
+    
+        strncpy (current_tag_name, owner_tag_name, sizeof (current_tag_name) - 1);
+        current_tag_name[sizeof (current_tag_name) - 1] = '\0';
+    
+    }
+    
+    while (tok.kind == TOK_DOT) {
+    
+        char *member_name;
+        
+        int found_member_elem_size = 0;
+        int found_member_is_array = 0;
+        
+        int member_offset = 0;
+        int member_pointer_depth = 0;
+        
+        const char *member_start;
+        const char *member_caret;
+        
+        unsigned long member_line;
+        get_token ();
+        
+        member_start = tok.start;
+        member_caret = tok.caret;
+        member_line = get_line_number ();
+        
+        if (out_line) {
+            *out_line = member_line;
+        }
+        
+        if (out_start) {
+            *out_start = member_start;
+        }
+        
+        if (out_caret) {
+            *out_caret = member_caret;
+        }
+        
+        if (tok.kind != TOK_IDENT) {
+        
+            report_line_at (get_filename (), member_line, REPORT_ERROR, member_start, member_caret, "expected member name after '.'");
+            return 0;
+        
+        }
+        
+        member_name = xstrdup (tok.ident);
+        get_token ();
+        
+        if (!find_member_info_ex_bounded (member_name, current_size,
+            current_tag_name[0] ? current_tag_name : 0,
+                &member_offset, &member_size, &found_member_elem_size,
+                    &member_pointer_depth, &found_member_is_array,
+                        &member_is_floating)) {
+        
+            report_line_at (get_filename (), member_line, REPORT_ERROR, member_start, member_caret, "unknown member '%s'", member_name);
+            
+            free (member_name);
+            return 0;
+        
+        }
+        
+        free (member_name);
+        
+        total_offset += member_offset;
+        current_size = member_size;
+        
+        member_elem_size = found_member_elem_size;
+        member_is_array = found_member_is_array;
+        
+        if (last_found_member_tag_name && last_found_member_tag_name[0]) {
+        
+            strncpy (current_tag_name, last_found_member_tag_name, sizeof (current_tag_name) - 1);
+            current_tag_name[sizeof (current_tag_name) - 1] = '\0';
+        
+        } else {
+            current_tag_name[0] = '\0';
+        }
+    
+    }
+    
+    expect (TOK_ASSIGN, "=");
+    
+    if (out_offset) {
+        *out_offset = total_offset;
+    }
+    
+    if (out_size) {
+        *out_size = member_size;
+    }
+    
+    if (out_elem_size) {
+        *out_elem_size = member_elem_size;
+    }
+    
+    if (out_is_array) {
+        *out_is_array = member_is_array;
+    }
+    
+    if (out_is_floating) {
+        *out_is_floating = member_is_floating;
+    }
+    
+    return 1;
+
+}
+
+static int parse_local_designated_aggregate_initializer (struct local_init *inits, int *init_count, int max_inits, long base_offset, const int *fields, int field_count, int object_size, const char *owner_tag_name) {
+
+    long next_field_offset = 0;
+    
+    int explicit_count = 0;
+    int next_field_index = 0;
+    
+    append_local_aggregate_zero_initializers (inits, init_count, max_inits, base_offset, fields, field_count);
+    
+    while (tok.kind != TOK_EOF && tok.kind != TOK_RBRACE) {
+    
+        int field_index = next_field_index;
+        long field_offset = next_field_offset;
+        
+        int field_size = 0;
+        int field_is_floating = 0;
+        
+        int member_size = 0;
+        int member_elem_size = 0;
+        int member_is_array = 0;
+        
+        if (tok.kind == TOK_DOT) {
+        
+            int member_offset = 0;
+            int member_is_floating = 0;
+            
+            const char *member_start = tok.start;
+            const char *member_caret = tok.caret;
+            
+            unsigned long member_line = get_line_number ();
+            
+            if (!parse_designated_member_path (object_size, owner_tag_name, &member_offset, &member_size, &member_elem_size, &member_is_array, &member_is_floating, &member_line, &member_start, &member_caret)) {
+            
+                skip_initializer ();
+                break;
+            
+            }
+            
+            if (!aggregate_field_index_from_offset (fields, field_count, member_offset, &field_index, &field_offset)) {
+            
+                report_line_at (get_filename (), member_line, REPORT_ERROR, member_start, member_caret, "member designator does not name a directly initializable field");
+                
+                skip_initializer ();
+                break;
+            
+            }
+            
+            field_size = member_size;
+            field_is_floating = member_is_floating;
+        
+        } else {
+        
+            while (field_index < field_count && fields[field_index] < 0) {
+                field_offset += -fields[field_index++];
+            }
+            
+            if (field_index >= field_count) {
+            
+                skip_initializer ();
+                break;
+            
+            }
+            
+            field_size = fields[field_index];
+        
+        }
+        
+        if (member_is_array && member_elem_size == (DATA_CHAR & 0x1f) && is_string_token ()) {
+        
+            int64_s string_values[MAX_STRING_INIT_BYTES];
+            
+            int string_count = 0;
+            int string_index;
+            
+            int string_capacity = member_size / (DATA_CHAR & 0x1f);
+            parse_string_initializer_values (string_values, MAX_STRING_INIT_BYTES, &string_count);
+            
+            if (string_count > string_capacity) {
+            
+                report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "too many initializer values for character array member");
+                string_count = string_capacity;
+            
+            }
+            
+            for (string_index = 0; string_index < string_count && *init_count < max_inits; string_index++) {
+            
+                inits[*init_count].offset = base_offset + field_offset + string_index;
+                inits[*init_count].size = DATA_CHAR & 0x1f;
+                inits[*init_count].kind = LOCAL_INIT_CONST;
+                inits[*init_count].value = string_values[string_index];
+                inits[*init_count].symbol = 0;
+                (*init_count)++;
+            
+            }
+        
+        } else if (*init_count < max_inits) {
+        
+            inits[*init_count].offset = base_offset + field_offset;
+            inits[*init_count].size = field_size;
+            
+            parse_local_initializer_value (&inits[*init_count], field_size, field_is_floating);
+            (*init_count)++;
+        
+        } else {
+            skip_initializer ();
+        }
+        
+        explicit_count++;
+        
+        next_field_index = field_index + 1;
+        next_field_offset = field_offset + fields[field_index];
+        
+        if (!_accept (TOK_COMMA)) {
+            break;
+        }
+        
+        if (tok.kind == TOK_RBRACE) {
+            break;
+        }
+    
+    }
+    
+    expect (TOK_RBRACE, "}");
+    return explicit_count;
+
+}
+
 static void parse_local_aggregate_initializer_group (struct local_init *inits, int *init_count, int max_inits, long base_offset, const int *fields, int field_count, int *field_index, long *field_offset) {
 
     int braced = 0;
@@ -8654,7 +8961,7 @@ static void parse_local_aggregate_initializer_group (struct local_init *inits, i
 
 }
 
-static int parse_local_aggregate_initializer_values (struct local_init *inits, int *init_count, int max_inits, long base_offset, const int *fields, int field_count) {
+static int parse_local_aggregate_initializer_values (struct local_init *inits, int *init_count, int max_inits, long base_offset, const int *fields, int field_count, int object_size, const char *owner_tag_name) {
 
     int initial_init_count = *init_count;
     int provided_init_count;
@@ -8662,7 +8969,73 @@ static int parse_local_aggregate_initializer_values (struct local_init *inits, i
     int field_index = 0;
     long field_offset = 0;
     
-    parse_local_aggregate_initializer_group (inits, init_count, max_inits, base_offset, fields, field_count, &field_index, &field_offset);
+    if (tok.kind == TOK_LBRACE) {
+    
+        get_token ();
+        
+        if (tok.kind == TOK_DOT) {
+            return parse_local_designated_aggregate_initializer (inits, init_count, max_inits, base_offset, fields, field_count, object_size, owner_tag_name);
+        }
+        
+        /* Re-enter the ordinary braced initializer parser after consuming '{'. */
+        while (field_index < field_count) {
+        
+            int field_size;
+            
+            while (field_index < field_count && fields[field_index] < 0) {
+                field_offset += -fields[field_index++];
+            }
+            
+            if (field_index >= field_count || tok.kind == TOK_RBRACE) {
+                break;
+            }
+            
+            field_size = fields[field_index];
+            
+            if (tok.kind == TOK_LBRACE) {
+                parse_local_aggregate_initializer_group (inits, init_count, max_inits, base_offset, fields, field_count, &field_index, &field_offset);
+            } else if (*init_count < max_inits) {
+            
+                if (is_string_token ()) {
+                    parse_local_string_field_initializer (inits, init_count, max_inits, base_offset + field_offset, field_size);
+                } else {
+                
+                    inits[*init_count].offset = base_offset + field_offset;
+                    inits[*init_count].size = field_size;
+                    
+                    parse_local_initializer_value (&inits[*init_count], 0, 0);
+                    (*init_count)++;
+                
+                }
+                
+                field_offset += field_size;
+                field_index++;
+            
+            } else {
+                
+                skip_initializer ();
+                
+                field_offset += field_size;
+                field_index++;
+            
+            }
+            
+            if (!_accept (TOK_COMMA)) {
+                break;
+            }
+            
+            if (tok.kind == TOK_RBRACE) {
+                break;
+            }
+        
+        }
+        
+        expect (TOK_RBRACE, "}");
+    
+    } else {
+        parse_local_aggregate_initializer_group (inits, init_count, max_inits, base_offset, fields, field_count, &field_index, &field_offset);
+    }
+    
     provided_init_count = *init_count - initial_init_count;
     
     while (field_index < field_count) {
@@ -8822,6 +9195,8 @@ static void ensure_block_stack_allocated (long block_stack_start, long *block_st
 }
 
 static int global_initializer_cast_before_address_now (void);
+
+static void parse_global_designated_initializer_values (int64_s *values, char **symbols, int max_values, int *count, int object_size, const char *owner_tag_name, const int *fields, int field_count);
 static void parse_global_initializer_values (int64_s *values, char **symbols, int max_values, int *count);
 
 static int aggregate_initializer_value_field_count (const int *field_sizes, int field_count);
@@ -9147,7 +9522,9 @@ static void parse_block (void) {
                                 int saved_accept_symbol_addresses = global_initializer_accept_symbol_addresses;
                                 global_initializer_accept_symbol_addresses = declarator_is_pointer || parsed_type_is_aggregate || declarator_has_array || global_initializer_cast_before_address_now ();
                                 
-                                if (declarator_has_array && !declarator_is_pointer && parsed_type_is_aggregate && parsed_field_count > 0 && tok.kind == TOK_LBRACE) {
+                                if (!declarator_has_array && !declarator_is_pointer && parsed_type_is_aggregate && tok.kind == TOK_LBRACE) {
+                                    parse_global_designated_initializer_values (init_values, init_symbols, MAX_AGG_FIELDS, &init_value_count, parsed_type_size, parsed_type_tag_name, object_fields, object_field_count);
+                                } else if (declarator_has_array && !declarator_is_pointer && parsed_type_is_aggregate && parsed_field_count > 0 && tok.kind == TOK_LBRACE) {
                                     parse_global_initializer_values_padded_elements (init_values, init_symbols, MAX_AGG_FIELDS, &init_value_count, aggregate_initializer_value_field_count (parsed_field_sizes, parsed_field_count));
                                 } else {
                                     parse_global_initializer_values (init_values, init_symbols, MAX_AGG_FIELDS, &init_value_count);
@@ -9313,7 +9690,7 @@ static void parse_block (void) {
                     } else if (object_is_auto && !declarator_is_pointer && (parsed_type_is_aggregate || declarator_has_array) && tok.kind == TOK_LBRACE) {
                     
                         int first_init_index = init_count;
-                        int provided_init_count = parse_local_aggregate_initializer_values (inits, &init_count, MAX_LOCAL_INITS, object_offset, object_fields, object_field_count);
+                        int provided_init_count = parse_local_aggregate_initializer_values (inits, &init_count, MAX_LOCAL_INITS, object_offset, object_fields, object_field_count, object_size, parsed_type_tag_name);
                         int expected_init_count = aggregate_initializer_value_field_count (parsed_field_sizes, parsed_field_count);
                         int zero_initializer = provided_init_count == 1 && first_init_index < init_count && inits[first_init_index].kind == LOCAL_INIT_CONST && !inits[first_init_index].symbol && inits[first_init_index].value.low == 0 && inits[first_init_index].value.high == 0;
                         
@@ -39799,6 +40176,175 @@ static void parse_global_initializer_values_padded_elements (int64_s *values, ch
 
 }
 
+static int aggregate_value_index_from_offset (const int *fields, int field_count, int wanted_offset) {
+
+    int offset = 0;
+    int value_index = 0;
+    
+    int i;
+    
+    for (i = 0; i < field_count; i++) {
+    
+        int size = fields[i];
+        
+        if (size < 0) {
+        
+            offset += -size;
+            continue;
+        
+        }
+        
+        if (offset == wanted_offset) {
+            return value_index;
+        }
+        
+        offset += size;
+        value_index++;
+    
+    }
+    
+    return -1;
+
+}
+
+static int aggregate_value_field_count (const int *fields, int field_count) {
+
+    int count = 0, i;
+    
+    for (i = 0; i < field_count; i++) {
+    
+        if (fields[i] > 0) {
+            count++;
+        }
+    
+    }
+    
+    return count;
+
+}
+
+static void parse_global_designated_initializer_values (int64_s *values, char **symbols, int max_values, int *count, int object_size, const char *owner_tag_name, const int *fields, int field_count) {
+
+    int field_values = aggregate_value_field_count (fields, field_count);
+    int next_value_index = 0, i;
+    
+    if (field_values > max_values) {
+        field_values = max_values;
+    }
+    
+    for (i = 0; i < field_values; i++) {
+    
+        values[i].low = 0;
+        values[i].high = 0;
+        
+        if (symbols) {
+            symbols[i] = 0;
+        }
+    
+    }
+    
+    *count = field_values;
+    expect (TOK_LBRACE, "{");
+    
+    while (tok.kind != TOK_EOF && tok.kind != TOK_RBRACE) {
+    
+        int value_index = next_value_index;
+        
+        int member_size = 0;
+        int member_elem_size = 0;
+        int member_is_array = 0;
+        
+        if (tok.kind == TOK_DOT) {
+        
+            int member_offset = 0;
+            int member_is_floating = 0;
+            
+            const char *member_start = tok.start;
+            const char *member_caret = tok.caret;
+            
+            unsigned long member_line = get_line_number ();
+
+            if (!parse_designated_member_path (object_size, owner_tag_name, &member_offset, &member_size, &member_elem_size, &member_is_array, &member_is_floating, &member_line, &member_start, &member_caret)) {
+            
+                skip_initializer ();
+                break;
+            
+            }
+            
+            value_index = aggregate_value_index_from_offset (fields, field_count, member_offset);
+            
+            if (value_index < 0 || value_index >= field_values) {
+            
+                report_line_at (get_filename (), member_line, REPORT_ERROR, member_start, member_caret, "member designator does not name a directly initializable field");
+                
+                skip_initializer ();
+                break;
+            
+            }
+        
+        }
+        
+        if (value_index >= 0 && value_index < field_values) {
+        
+            int parsed_count = 0;
+            
+            if (member_is_array && member_elem_size == (DATA_CHAR & 0x1f) && is_string_token ()) {
+            
+                int64_s string_values[MAX_STRING_INIT_BYTES];
+                
+                int string_count = 0;
+                int string_index;
+                
+                int string_capacity = member_size / (DATA_CHAR & 0x1f);
+                parse_string_initializer_values (string_values, MAX_STRING_INIT_BYTES, &string_count);
+                
+                if (string_count > string_capacity) {
+                
+                    report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "too many initializer values for character array member");
+                    string_count = string_capacity;
+                
+                }
+                
+                for (string_index = 0; string_index < string_count && value_index + string_index < field_values; string_index++) {
+                
+                    values[value_index + string_index] = string_values[string_index];
+                    
+                    if (symbols) {
+                        symbols[value_index + string_index] = 0;
+                    }
+                
+                }
+                
+                parsed_count = string_capacity;
+            
+            } else {
+                parse_global_initializer_values (values + value_index, symbols ? symbols + value_index : 0, field_values - value_index, &parsed_count);
+            }
+            
+            if (parsed_count <= 0) {
+                parsed_count = 1;
+            }
+            
+            next_value_index = value_index + parsed_count;
+        
+        } else {
+            skip_initializer ();
+        }
+        
+        if (!_accept (TOK_COMMA)) {
+            break;
+        }
+        
+        if (tok.kind == TOK_RBRACE) {
+            break;
+        }
+    
+    }
+    
+    expect (TOK_RBRACE, "}");
+
+}
+
 static const char *global_initializer_symbol_name_now (void) {
 
     struct local_symbol *local;
@@ -41036,7 +41582,9 @@ static void parse_external_after_type (void) {
                     int saved_accept_symbol_addresses = global_initializer_accept_symbol_addresses;
                     global_initializer_accept_symbol_addresses = declarator_is_pointer || declarator_has_function || parsed_type_is_aggregate || declarator_has_array || global_initializer_cast_before_address_now ();
                     
-                    if (declarator_has_array && !declarator_is_pointer && parsed_type_is_aggregate && parsed_field_count > 0 && tok.kind == TOK_LBRACE) {
+                    if (!declarator_has_array && !declarator_is_pointer && parsed_type_is_aggregate && tok.kind == TOK_LBRACE) {
+                        parse_global_designated_initializer_values (init_values, init_symbols, MAX_GLOBAL_INIT_FIELDS, &init_value_count, parsed_type_size, parsed_type_tag_name, object_fields, object_field_count);
+                    } else if (declarator_has_array && !declarator_is_pointer && parsed_type_is_aggregate && parsed_field_count > 0 && tok.kind == TOK_LBRACE) {
                         parse_global_initializer_values_padded_elements (init_values, init_symbols, MAX_GLOBAL_INIT_FIELDS, &init_value_count, aggregate_initializer_value_field_count (parsed_field_sizes, parsed_field_count));
                     } else {
                         parse_global_initializer_values (init_values, init_symbols, MAX_GLOBAL_INIT_FIELDS, &init_value_count);
