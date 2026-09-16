@@ -33302,6 +33302,21 @@ static int inline_asm_template_is_out (const char *templ) {
 
 }
 
+static int inline_asm_template_is_in (const char *templ) {
+
+    if (!templ) {
+        return 0;
+    }
+    
+    while (*templ == ' ' || *templ == '\t') {
+        templ++;
+    }
+    
+    return  strncmp (templ, "inb ", 4) == 0 || strncmp (templ, "inw ", 4) == 0 ||
+                strncmp (templ, "inl ", 4) == 0 || strncmp (templ, "in ", 3) == 0;
+
+}
+
 static int inline_asm_out_operand_size (const char *templ, const char *constraint) {
 
     if (!templ || !constraint) {
@@ -33597,12 +33612,12 @@ static void inline_asm_emit_input_load (const char *constraint, int input_index,
         
         }
         
-        if (inline_asm_template_is_out (templ)) {
+        if (inline_asm_template_is_out (templ) || inline_asm_template_is_in (templ)) {
         
             /**
              * GCC's "N" constraint is really an 8-bit immediate port.
-             * For the OUT templates, allow a non-constant here as a
-             * convenience and lower it through DX, because x86 OUT cannot
+             * For the IN/OUT templates, allow a non-constant here as a
+             * convenience and lower it through DX, because x86 IN/OUT cannot
              * encode a variable port as an immediate.
              */
             emit_load_assignment_rhs_expression_to_reg ("rdx");
@@ -33641,7 +33656,7 @@ static void inline_asm_emit_input_load (const char *constraint, int input_index,
             inputs[input_index].size = inline_asm_identifier_size (tok.ident);
         }
         
-        if (inline_asm_template_is_out (templ)) {
+        if (inline_asm_template_is_out (templ) || inline_asm_template_is_in (templ)) {
         
             int out_size = inline_asm_out_operand_size (templ, constraint);
             
@@ -33859,6 +33874,46 @@ static void inline_asm_emit_template (const char *templ, struct inline_asm_input
                 }
                 
                 fprintf (state->ofp, "    out %s, %s\n", rhs, lhs);
+                inline_asm_finish_operands (inputs, input_count);
+                
+                return;
+            
+            }
+        
+        }
+    
+    }
+    
+    if ((strncmp (line, "inb ", 4) == 0 || strncmp (line, "inw ", 4) == 0 || strncmp (line, "inl ", 4) == 0 || strncmp (line, "in ", 3) == 0)) {
+    
+        char *args;
+        char *comma;
+        char *lhs;
+        char *rhs;
+        
+        args = strchr (line, ' ');
+        
+        if (args) {
+        
+            args++;
+            comma = strchr (args, ',');
+            
+            if (comma) {
+            
+                *comma = 0;
+                
+                lhs = args;
+                rhs = comma + 1;
+                
+                while (*lhs == ' ' || *lhs == '\t') {
+                    lhs++;
+                }
+                
+                while (*rhs == ' ' || *rhs == '\t') {
+                    rhs++;
+                }
+                
+                fprintf (state->ofp, "    in %s, %s\n", rhs, lhs);
                 inline_asm_finish_operands (inputs, input_count);
                 
                 return;
