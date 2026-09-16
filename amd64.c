@@ -26641,11 +26641,16 @@ static int amd64_emit_bare_64bit_identifier_to_rax_now (void) {
     
     if (!sym && find_global_symbol (name) >= 0 && get_global_symbol_kind (name) == GLOBAL_SYMBOL_FUNCTION) {
     
+        int function_symbol_index = find_global_symbol (name);
+        
+        if (function_symbol_index >= 0) {
+            global_symbols[function_symbol_index].used = 1;
+        }
+        
         emit_load_address_to_reg_now ("rax", name);
-        
         get_token ();
-        free (name);
         
+        free (name);
         return 1;
     
     }
