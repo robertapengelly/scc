@@ -30605,6 +30605,42 @@ static int inline_asm_template_is_out (const char *templ) {
 
 }
 
+static int inline_asm_out_operand_size (const char *templ, const char *constraint) {
+
+    if (!templ || !constraint) {
+        return 0;
+    }
+    
+    while (*templ == ' ' || *templ == '\t') {
+        templ++;
+    }
+    
+    /* OUT always uses DX for a register port operand. */
+    if (strchr (constraint, 'd')) {
+        return 2;
+    }
+    
+    /* The accumulator width is determined by the OUT mnemonic. */
+    if (strchr (constraint, 'a')) {
+    
+        if (strncmp (templ, "outb ", 5) == 0) {
+            return 1;
+        }
+        
+        if (strncmp (templ, "outw ", 5) == 0) {
+            return 2;
+        }
+        
+        if (strncmp (templ, "outl ", 5) == 0) {
+            return 4;
+        }
+    
+    }
+    
+    return 0;
+
+}
+
 static int inline_asm_is_reg32_name (const char *s, size_t len) {
 
     return  (len == 3 && strncmp (s, "eax", 3) == 0) ||
@@ -30906,6 +30942,16 @@ static void inline_asm_emit_input_load (const char *constraint, int input_index,
         
         if (tok.kind == TOK_IDENT && tok.ident) {
             inputs[input_index].size = inline_asm_identifier_size (tok.ident);
+        }
+        
+        if (inline_asm_template_is_out (templ)) {
+        
+            int out_size = inline_asm_out_operand_size (templ, constraint);
+            
+            if (out_size) {
+                inputs[input_index].size = out_size;
+            }
+        
         }
         
         subst = inline_asm_reg_for_size (reg32, inputs[input_index].size);
