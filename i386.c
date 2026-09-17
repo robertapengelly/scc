@@ -14662,6 +14662,116 @@ static void emit_load_member_from_addr_reg_now (const char *dst_reg, const char 
     emit_load_member_from_addr_reg_ex_now (dst_reg, addr_reg, offset, size, 0);
 }
 
+static int emit_load_address_of_call_postfix_to_reg_now (const char *name, const char *reg, const char *name_start, const char *name_caret, unsigned long name_line) {
+
+    const char *current_object_tag_name;
+    int current_object_size;
+    
+    if (tok.kind != TOK_LPAREN || find_global_symbol (name) < 0 || get_global_symbol_kind (name) != GLOBAL_SYMBOL_FUNCTION || get_global_symbol_pointer_depth (name) <= 0) {
+        return 0;
+    }
+    
+    current_object_tag_name = get_global_symbol_tag_name (name);
+    current_object_size = get_global_symbol_pointed_size (name);
+    
+    if (current_object_size <= 0) {
+        current_object_size = DATA_PTR & 0x1f;
+    }
+    
+    emit_call_identifier_to_reg_now (name, reg, name_start, name_caret, name_line);
+    
+    if (tok.kind != TOK_ARROW && tok.kind != TOK_DOT) {
+        return 0;
+    }
+    
+    while (tok.kind == TOK_ARROW || tok.kind == TOK_DOT) {
+    
+        enum token_kind member_op = tok.kind;
+        char *member;
+        
+        const char *member_start;
+        const char *member_caret;
+        
+        unsigned long member_line;
+        
+        int offset = 0;
+        int member_size = DATA_INT & 0x1f;
+        int elem_size = DATA_INT & 0x1f;
+        int pointer_depth = 0;
+        
+        get_token ();
+        
+        member_start = tok.start;
+        member_caret = tok.caret;
+        member_line = get_line_number ();
+        
+        if (tok.kind != TOK_IDENT) {
+        
+            report_line_at (get_filename (), member_line, REPORT_ERROR, member_start, member_caret,
+                "expected member name after %s", member_op == TOK_ARROW ? "->" : ".");
+            return 1;
+        
+        }
+        
+        member = xstrdup (tok.ident);
+        get_token ();
+        
+        if (!find_member_info_ex_bounded (member, current_object_size, current_object_tag_name, &offset, &member_size, &elem_size, &pointer_depth, 0, 0)) {
+        
+            report_line_at (get_filename (), member_line, REPORT_ERROR, member_start, member_caret,
+                "unknown member '%s'", member);
+            
+            free (member);
+            return 1;
+        
+        }
+        
+        current_object_tag_name = last_found_member_tag_name;
+        free (member);
+        
+        if (tok.kind == TOK_ARROW || tok.kind == TOK_DOT) {
+        
+            if (pointer_depth > 0) {
+            
+                emit_load_member_from_addr_reg_now (reg, reg, offset, DATA_PTR & 0x1f);
+                current_object_size = elem_size > 0 ? elem_size : DATA_PTR & 0x1f;
+            
+            } else {
+            
+                if (state->ofp && offset != 0) {
+                
+                    if (state->syntax & ASM_SYNTAX_INTEL) {
+                        fprintf (state->ofp, "    add %s, %d\n", reg, offset);
+                    } else {
+                        fprintf (state->ofp, "    addl $%d, %%%s\n", offset, reg);
+                    }
+                
+                }
+                
+                current_object_size = member_size;
+            
+            }
+        
+        } else {
+        
+            if (state->ofp && offset != 0) {
+            
+                if (state->syntax & ASM_SYNTAX_INTEL) {
+                    fprintf (state->ofp, "    add %s, %d\n", reg, offset);
+                } else {
+                    fprintf (state->ofp, "    addl $%d, %%%s\n", offset, reg);
+                }
+            
+            }
+        
+        }
+    
+    }
+    
+    return 1;
+
+}
+
 static int emit_load_address_of_parenthesized_postfix_to_reg_now (const char *reg) {
 
     char *name;
@@ -18802,6 +18912,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         
         name_start = tok.start;
         name_caret = tok.caret;
+        
         name_line = get_line_number ();
         
         if (tok.kind != TOK_IDENT) {
@@ -18820,6 +18931,13 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         
         name = xstrdup (tok.ident);
         get_token ();
+        
+        if (tok.kind == TOK_LPAREN && emit_load_address_of_call_postfix_to_reg_now (name, reg, name_start, name_caret, name_line)) {
+        
+            free (name);
+            return;
+        
+        }
         
         src = find_local_symbol (name);
         
