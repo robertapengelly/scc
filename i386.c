@@ -20742,6 +20742,14 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             
             emit_call_identifier_to_reg_now (name, reg, name_start, name_caret, name_line);
             
+            /*
+             * A postfix member chain after a function call starts from the
+             * function's pointed-to type.  Do not leave the member walker
+             * using stale metadata from an earlier expression.
+             */
+            postfix_copy_lvalue_size = get_global_symbol_pointed_size (name);
+            postfix_copy_lvalue_tag_name = get_global_symbol_tag_name (name);
+            
             if (tok.kind == TOK_LBRACK) {
             
                 int subscript_pointer_depth = get_global_symbol_pointer_depth (name);
