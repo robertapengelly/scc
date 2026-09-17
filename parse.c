@@ -1046,7 +1046,7 @@ static const char *find_member_tag_name (const char *name) {
 
 }
 
-static int parse_sizeof_member_expr_size (int leading_stars, int *out_size) {
+static int parse_sizeof_member_expr_size (int leading_stars, int consume_inner_rparen, int *out_size) {
 
     int size = DATA_INT & 0x1f;
     int pointer_depth = 0;
@@ -1057,6 +1057,9 @@ static int parse_sizeof_member_expr_size (int leading_stars, int *out_size) {
     int final_pointed_size = 0;
     int final_is_array = 0;
     int final_array_element_size = 0;
+    
+    const char *current_tag_name = 0;
+    int current_object_size = 0;
     
     struct local_symbol *local;
     
@@ -1075,9 +1078,13 @@ static int parse_sizeof_member_expr_size (int leading_stars, int *out_size) {
         
         is_array = local->is_array;
         array_element_size = local->array_element_size;
+        
+        current_object_size = local->pointed_size > 0 ? local->pointed_size : local->size;
+        current_tag_name = local->pointed_tag_name ? local->pointed_tag_name : local->tag_name;
     
     } else if (find_global_symbol (tok.ident) >= 0) {
     
+        int global_index = find_global_symbol (tok.ident);
         size = get_global_symbol_size (tok.ident);
         
         pointer_depth = get_global_symbol_pointer_depth (tok.ident);
@@ -1085,6 +1092,9 @@ static int parse_sizeof_member_expr_size (int leading_stars, int *out_size) {
         
         is_array = get_global_symbol_array (tok.ident);
         array_element_size = get_global_symbol_array_element_size (tok.ident);
+        
+        current_object_size = pointed_size > 0 ? pointed_size : size;
+        current_tag_name = global_index >= 0 ? global_symbols[global_index].tag_name : 0;
     
     } else {
         report_line_at (get_filename (), get_line_number (), REPORT_ERROR, tok.report_start, tok.report_caret, "unknown symbol '%s'", tok.ident ? tok.ident : "");
@@ -1184,7 +1194,7 @@ static int parse_sizeof_member_expr_size (int leading_stars, int *out_size) {
             
             }
             
-            if (find_member_info_ex (tok.ident, &member_offset, &member_size, &member_pointed_size, &member_pointer_depth, &member_is_array, 0)) {
+            if (find_member_info_ex_bounded (tok.ident, current_object_size, current_tag_name, &member_offset, &member_size, &member_pointed_size, &member_pointer_depth, &member_is_array, 0)) {
                 
                 member_tag_name = last_found_member_tag_name ? last_found_member_tag_name : find_member_tag_name (tok.ident);
                 size = member_size;
@@ -1195,13 +1205,34 @@ static int parse_sizeof_member_expr_size (int leading_stars, int *out_size) {
                 final_is_array = member_is_array;
                 final_array_element_size = member_is_array ? member_size : 0;
                 
-                if (final_pointer_depth > 0 && member_tag_name) {
+                if (member_tag_name) {
                 
                     struct aggregate_tag_entry *entry = find_aggregate_tag (member_tag_name, 0);
-                
-                    if (entry) {
-                        final_pointed_size = entry->size;
+                    
+                    if (!entry) {
+                        entry = find_aggregate_tag (member_tag_name, 1);
                     }
+                    
+                    if (entry) {
+                    
+                        if (final_pointer_depth > 0) {
+                            final_pointed_size = entry->size;
+                        }
+                        
+                        current_object_size = entry->size;
+                        current_tag_name = member_tag_name;
+                    
+                    } else {
+                    
+                        current_object_size = member_size;
+                        current_tag_name = member_tag_name;
+                    
+                    }
+                
+                } else {
+                
+                    current_object_size = member_size;
+                    current_tag_name = 0;
                 
                 }
             
@@ -1213,6 +1244,10 @@ static int parse_sizeof_member_expr_size (int leading_stars, int *out_size) {
         
         }
     
+    }
+    
+    if (consume_inner_rparen && tok.kind == TOK_RPAREN) {
+        get_token ();
     }
     
     if (leading_stars > 0 && final_is_array) {
@@ -1951,27 +1986,30 @@ int parse_sizeof_value (void) {
                 
                 if (first && tok.kind == TOK_IDENT) {
                 
-                    parse_sizeof_member_expr_size (leading_stars, &size);
+                    parse_sizeof_member_expr_size (leading_stars, 0, &size);
                     
                     first = 0;
                     continue;
                 
                 }
                 
-                if (first && tok.kind == TOK_LPAREN && leading_stars > 0) {
+                if (first && tok.kind == TOK_LPAREN) {
                 
+                    int inner_stars = leading_stars;
                     get_token ();
                     
+                    while (tok.kind == TOK_STAR || tok.kind == TOK_AMPER || tok.kind == TOK_PLUS || tok.kind == TOK_MINUS) {
+                    
+                        if (tok.kind == TOK_STAR) {
+                            inner_stars++;
+                        }
+                        
+                        get_token ();
+                    
+                    }
+                    
                     if (tok.kind == TOK_IDENT) {
-                        parse_sizeof_member_expr_size (leading_stars, &size);
-                    }
-                    
-                    while (tok.kind != TOK_EOF && tok.kind != TOK_RPAREN) {
-                        get_token ();
-                    }
-                    
-                    if (tok.kind == TOK_RPAREN) {
-                        get_token ();
+                        parse_sizeof_member_expr_size (inner_stars, 1, &size);
                     }
                     
                     first = 0;
@@ -2024,7 +2062,7 @@ int parse_sizeof_value (void) {
             size = value_count;
         
         } else if (tok.kind == TOK_IDENT) {
-            parse_sizeof_member_expr_size (leading_stars, &size);
+            parse_sizeof_member_expr_size (leading_stars, 0, &size);
         } else if (tok.kind == TOK_LPAREN) {
         
             int depth = 1;
