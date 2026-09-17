@@ -1107,8 +1107,17 @@ static int parse_sizeof_member_expr_size (int leading_stars, int consume_inner_r
     
     get_token ();
     
-    while (tok.kind == TOK_ARROW || tok.kind == TOK_DOT || tok.kind == TOK_LBRACK) {
+    while (tok.kind == TOK_ARROW || tok.kind == TOK_DOT || tok.kind == TOK_LBRACK || (consume_inner_rparen && tok.kind == TOK_RPAREN)) {
     
+        if (consume_inner_rparen && tok.kind == TOK_RPAREN) {
+        
+            get_token ();
+            
+            consume_inner_rparen = 0;
+            continue;
+        
+        }
+        
         if (tok.kind == TOK_LBRACK) {
         
             int depth = 1;
@@ -1244,10 +1253,6 @@ static int parse_sizeof_member_expr_size (int leading_stars, int consume_inner_r
         
         }
     
-    }
-    
-    if (consume_inner_rparen && tok.kind == TOK_RPAREN) {
-        get_token ();
     }
     
     if (leading_stars > 0 && final_is_array) {
