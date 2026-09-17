@@ -17481,7 +17481,7 @@ static int emit_parse_postfix_copy_source_address_now (const char *reg, struct l
             }
             
             last_elem_size = member_elem_size;
-            last_lvalue_size = member_size;
+            last_lvalue_size = (member_pointer_depth > 0 && !member_is_array) ? (DATA_PTR & 0x1f) : member_size;
             
             if (member_pointer_depth > 0 || member_is_array) {
                 current_object_size = member_elem_size;
