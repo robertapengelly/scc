@@ -26376,6 +26376,16 @@ static void emit_load_assignment_rhs_expression_to_pair (const char *lo, const c
             emit_push_reg_now ("eax");
             emit_push_reg_now ("edx");
             
+            /*
+             * The left operand may have been loaded from a 64-bit structure
+             * member, leaving postfix_member_seen set while its address was
+             * consumed by the pair loader.  The shift count starts a new
+             * operand, so do not let that stale member state make the 32-bit
+             * RHS loader dereference the count as though it were the previous
+             * member address.
+             */
+            postfix_member_seen = 0;
+            
             emit_load_assignment_binary_expression_to_reg ("ebx");
             
             if (state->syntax & ASM_SYNTAX_INTEL) {
