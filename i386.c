@@ -19127,9 +19127,12 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         
         if (find_global_symbol (name) >= 0) {
         
-            emit_load_address_to_reg_now (reg, name);
+            int global_index = find_global_symbol (name);
+            global_symbols[global_index].used = 1;
             
+            emit_load_address_to_reg_now (reg, name);
             free (name);
+            
             return;
         
         }
