@@ -32218,7 +32218,7 @@ static int parse_identifier_assignment_statement (void) {
                     if (state->syntax & ASM_SYNTAX_INTEL) {
                     
                         const char *opname = postfix_op == TOK_INCR ? "add" : "sub";
-                        const char *opsize = member_size == 1 ? "byte" : (member_size == 2 ? "word" : "dword");
+                        const char *opsize = member_size == 1 ? "byte" : (member_size == 2 ? "word" : (member_size == 8 ? "qword" : "dword"));
                         
                         if (state->syntax & ASM_SYNTAX_NASM) {
                             fprintf (state->ofp, "    %s %s [rdx + %d], %d\n", opname, opsize, member_offset, step);
@@ -32228,7 +32228,7 @@ static int parse_identifier_assignment_statement (void) {
                     
                     } else {
                     
-                        const char *suffix = member_size == 1 ? "b" : (member_size == 2 ? "w" : "l");
+                        const char *suffix = member_size == 1 ? "b" : (member_size == 2 ? "w" : (member_size == 8 ? "q" : "l"));
                         fprintf (state->ofp, "    %s%s $%d, %d(%%rdx)\n", postfix_op == TOK_INCR ? "add" : "sub", suffix, step, member_offset);
                     
                     }
