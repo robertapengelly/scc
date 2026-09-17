@@ -31610,6 +31610,9 @@ static int parse_parenthesized_indirect_member_assignment_statement (void) {
     int saw_close = 0;
     int lvalue_outer_paren_depth = 0;
     
+    const char *object_tag_name = 0;
+    int object_size = 0;
+    
     if (tok.kind != TOK_LPAREN || !source_starts_parenthesized_star_now ()) {
         return 0;
     }
@@ -31704,7 +31707,28 @@ static int parse_parenthesized_indirect_member_assignment_statement (void) {
         }
     
     } else {
+    
+        if (tok.kind == TOK_IDENT && tok.ident) {
+        
+            struct local_symbol *object = find_local_symbol (tok.ident);
+            int object_global = find_global_symbol (tok.ident);
+            
+            if (object && object->pointer_depth > 0) {
+            
+                object_size = object->pointed_size;
+                object_tag_name = object->pointed_tag_name;
+            
+            } else if (object_global >= 0 && get_global_symbol_pointer_depth (tok.ident) > 0) {
+            
+                object_size = get_global_symbol_pointed_size (tok.ident);
+                object_tag_name = get_global_symbol_tag_name (tok.ident);
+            
+            }
+        
+        }
+        
         emit_load_assignment_rhs_expression_to_reg ("rdx");
+    
     }
     
     while (tok.kind == TOK_RPAREN) {
@@ -31833,7 +31857,7 @@ static int parse_parenthesized_indirect_member_assignment_statement (void) {
     member = xstrdup (tok.ident);
     get_token ();
     
-    if (!find_member_info (member, &member_offset, &member_size)) {
+    if (!find_member_info_ex_bounded (member, object_size, object_tag_name, &member_offset, &member_size, 0, 0, 0, 0)) {
     
         report_line_at (get_filename (), member_line, REPORT_ERROR, member_start, member_caret, "unknown member '%s'", member);
         free (member);
