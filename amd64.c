@@ -38832,7 +38832,7 @@ static int parse_postfix_assignment_statement_now (void) {
     }
     
     assign_op = tok.kind;
-    lvalue_size = index_step_size (postfix_copy_lvalue_size);
+    lvalue_size = postfix_member_pointer_depth > 0 ? (DATA_PTR & 0x1f) : index_step_size (postfix_copy_lvalue_size);
     
     if (lvalue_size <= 0) {
         lvalue_size = DATA_INT & 0x1f;
