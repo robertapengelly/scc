@@ -18581,6 +18581,14 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             
             } else {
             
+                if (postfix_member_seen && postfix_member_pointer_depth == 0 && postfix_member_size == (DATA_LLONG & 0x1f) &&
+                    cast_base_size <= (DATA_PTR & 0x1f) && !postfix_member_is_floating) {
+                
+                    emit_load_deref_reg_now (reg, DATA_INT & 0x1f);
+                    postfix_member_size = DATA_INT & 0x1f;
+                
+                }
+                
                 emit_apply_integer_cast_to_reg_now (reg, cast_base_size, cast_is_unsigned);
                 clear_rhs_last_pointer_info ();
             
