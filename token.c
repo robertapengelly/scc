@@ -60,10 +60,11 @@ static int handler_include (char *start, char **pp) {
     char *inc_path, *tmp;
     FILE *fp;
     
-    char *current_directory,*p;
+    char *current_directory;
     int len;
     
     struct history *history;
+    const char *p;
     
     if (**pp != '"' && **pp != '<') {
     

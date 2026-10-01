@@ -37,7 +37,8 @@ static void cleanup (void) {
 
 int main (int argc, char **argv) {
 
-    char *p, *root;
+    const char *p;
+    char *root;
     
     if (argc && *argv) {
     

@@ -39666,9 +39666,9 @@ void compile_translation_unit32 (void) {
     
     if (vec_dllexports.length || vec_dllaliases.length) {
     
-        char *p, *tmp;
+        const char *name, *p;
         
-        const char *name;
+        char *tmp;
         long i;
         
         FILE *fp;

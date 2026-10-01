@@ -379,7 +379,9 @@ static int handler_include (char *start, char **pp) {
     struct hashtab_name *key;
     struct macro *m;
     
-    char *current_directory,*p;
+    const char *p;
+    
+    char *current_directory;
     int len;
     
     if (**pp != '"' && **pp != '<') {
