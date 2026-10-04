@@ -8220,6 +8220,7 @@ static int rhs_current_operand_is_unsigned_now (void);
 static int rhs_current_operand_signedness_for_warning_now (void);
 static void warn_signedness_comparison_values_now (int left_signedness, int right_signedness, const char *report_start, const char *report_caret);
 
+static int rhs_last_explicit_integer_cast_signedness = -1;
 static int64_s parse_floating_const_expr_bits_now (int size);
 
 static int initializer_contains_runtime_call_now (void) {
@@ -19801,7 +19802,9 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             } else {
             
                 emit_apply_integer_cast_to_reg_now (reg, cast_base_size, cast_is_unsigned);
+                
                 clear_rhs_last_pointer_info ();
+                rhs_last_explicit_integer_cast_signedness = cast_is_unsigned ? 1 : 0;
             
             }
             
@@ -27739,7 +27742,9 @@ struct switch_context {
     
     int case_count;
     int default_label;
+    
     int break_label;
+    int break_seen;
 
 };
 
@@ -28083,7 +28088,9 @@ static void parse_switch_statement (void) {
     
     sw.case_count = 0;
     sw.default_label = -1;
+    
     sw.break_label = anon_label++;
+    sw.break_seen = 0;
     
     get_token ();
     expect (TOK_LPAREN, "(");
@@ -28180,8 +28187,7 @@ static void parse_switch_statement (void) {
      * is compiled without the jump over the else block and the true branch
      * falls through into the else body.
      */
-    (void)saved_ends_control_flow;
-    statement_ends_control_flow = 0;
+    statement_ends_control_flow = sw.default_label >= 0 && !sw.break_seen && saved_ends_control_flow;
 
 }
 
@@ -28560,8 +28566,14 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
     const char *rhs_report_start;
     const char *rhs_report_caret;
     
+    rhs_last_explicit_integer_cast_signedness = -1;
+    
     lhs_signedness = rhs_current_operand_signedness_for_warning_now ();
     is_unsigned = emit_load_assignment_binary_expression_prec_to_reg (reg, 1);
+    
+    if (rhs_last_explicit_integer_cast_signedness >= 0) {
+        lhs_signedness = rhs_last_explicit_integer_cast_signedness;
+    }
     
     lhs_pointer_depth = rhs_last_pointer_depth;
     
@@ -28582,6 +28594,7 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
         op = tok.kind;
         get_token ();
         
+        rhs_last_explicit_integer_cast_signedness = -1;
         rhs_signedness = rhs_current_operand_signedness_for_warning_now ();
         
         rhs_report_start = tok.report_start;
@@ -28651,6 +28664,8 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
                 rhs_signedness = -1;
             } else if (postfix_member_seen) {
                 rhs_signedness = postfix_member_is_unsigned ? 1 : 0;
+            } else if (rhs_last_explicit_integer_cast_signedness >= 0) {
+                rhs_signedness = rhs_last_explicit_integer_cast_signedness;
             }
         
         }
@@ -39574,6 +39589,10 @@ static void parse_statement (void) {
         
         if (target_label >= 0) {
         
+            if (current_switch_context && target_label == current_switch_context->break_label) {
+                current_switch_context->break_seen = 1;
+            }
+            
             cleanup_bytes = current_block_cleanup_bytes - cleanup_base;
             
             if (!current_function_uses_single_frame && cleanup_bytes > 0) {
