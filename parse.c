@@ -91,10 +91,11 @@ int parsed_field_count = 0;
 struct member_info_entry member_infos[MAX_MEMBER_INFOS];
 int member_info_count = 0;
 
-const char *last_found_member_tag_name = 0;
+int last_found_member_array_dimensions = 0;
 int last_found_member_is_unsigned = 0;
 
 struct pending_param pending_params[MAX_PENDING_PARAMS];
+const char *last_found_member_tag_name = 0;
 
 int pending_param_count;
 int preserve_pending_params;
@@ -1467,6 +1468,7 @@ int find_member_info_ex_bounded (const char *name, int max_size, const char *own
     
     last_found_member_tag_name = 0;
     last_found_member_is_unsigned = 0;
+    last_found_member_array_dimensions = 0;
     last_found_member_calling_convention = TOK_EOF;
     
     if (!name) {
@@ -1532,6 +1534,7 @@ int find_member_info_ex_bounded (const char *name, int max_size, const char *own
     
         last_found_member_tag_name = member_infos[best].tag_name;
         last_found_member_is_unsigned = member_infos[best].is_unsigned ? 1 : 0;
+        last_found_member_array_dimensions = member_infos[best].array_dimensions;
         last_found_member_calling_convention = member_infos[best].calling_convention;
         
         if (offset) {
@@ -2686,6 +2689,7 @@ int find_member_info_ex (const char *name, int *offset, int *size, int *elem_siz
     
     last_found_member_tag_name = 0;
     last_found_member_is_unsigned = 0;
+    last_found_member_array_dimensions = 0;
     last_found_member_calling_convention = TOK_EOF;
     
     if (!name) {
@@ -2711,6 +2715,7 @@ int find_member_info_ex (const char *name, int *offset, int *size, int *elem_siz
     
     last_found_member_tag_name = member_infos[best].tag_name;
     last_found_member_is_unsigned = member_infos[best].is_unsigned ? 1 : 0;
+    last_found_member_array_dimensions = member_infos[best].array_dimensions;
     last_found_member_calling_convention = member_infos[best].calling_convention;
 
     if (offset) {
@@ -2831,6 +2836,7 @@ static void remember_member_info_ex (const char *name, int offset, int size, int
     member_infos[member_info_count].size = size;
     member_infos[member_info_count].elem_size = elem_size > 0 ? elem_size : size;
     member_infos[member_info_count].pointer_depth = pointer_depth;
+    member_infos[member_info_count].array_dimensions = is_array ? declarator_array_dimensions : 0;
     member_infos[member_info_count].is_array = is_array;
     member_infos[member_info_count].is_floating = is_floating ? 1 : 0;
     member_infos[member_info_count].is_unsigned = parsed_type_is_unsigned ? 1 : 0;
@@ -2877,6 +2883,7 @@ static void promote_anonymous_aggregate_members (const char *owner_tag_name, int
         dst->size = src->size;
         dst->elem_size = src->elem_size;
         dst->pointer_depth = src->pointer_depth;
+        dst->array_dimensions = src->array_dimensions;
         dst->is_array = src->is_array;
         dst->is_floating = src->is_floating;
         dst->is_unsigned = src->is_unsigned;
@@ -3550,11 +3557,27 @@ void parse_type_spec (void) {
                         
                         if (declarator_has_array && declarator_is_pointer) {
                             member_info_elem_size = DATA_PTR;
+                        } else if (declarator_has_array && declarator_first_array_count > 0) {
+                        
+                            /*
+                             * One subscript of a multidimensional array member
+                             * selects the complete object after the first
+                             * dimension.  member_size already contains the
+                             * storage for every dimension, so divide by the
+                             * first dimension rather than recording the scalar
+                             * base type.
+                             *
+                             *     char segment[32][4];
+                             *
+                             * segment[i] therefore has a four-byte stride.
+                             */
+                            member_info_elem_size = member_size / declarator_first_array_count;
+                        
                         } else {
                         
                             member_info_elem_size = declarator_is_pointer ?
                                 (parsed_type_is_aggregate ? parsed_type_size : (parsed_type_size & 0x1f)) :
-                                    (declarator_has_array ? member_type_size : member_size);
+                                    member_size;
                         
                         }
                         

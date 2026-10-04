@@ -13686,11 +13686,14 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
             const char *member_caret;
             
             unsigned long member_line;
-            
             int offset = 0;
+            
             int size = DATA_INT & 0x1f;
             int elem_size = DATA_INT & 0x1f;
+            
+            int array_dimensions = 0;
             int pointer_depth = 0;
+            
             int is_array = 0;
             int is_floating = 0;
             int is_unsigned = 0;
@@ -13721,6 +13724,7 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
             }
             
             is_unsigned = last_found_member_is_unsigned;
+            array_dimensions = last_found_member_array_dimensions;
             
             {
             
@@ -13807,9 +13811,11 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
                     
                     }
                 
+                } else if (array_dimensions > 1) {
+                    emit_parse_postfix_subscripts_to_reg_dims_now (reg, subscript_elem_size, pointer_depth, elem_size, array_dimensions, is_unsigned, &subscript_elem_size);
                 } else {
                     emit_parse_postfix_subscript_scaled_address_to_reg_now (reg, subscript_elem_size);
-                }
+                 }
                 
                 if (tok.kind == TOK_ARROW && subscript_elem_size <= (DATA_PTR & 0x1f)) {
                 
@@ -13957,7 +13963,7 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
                     postfix_member_pointer_depth--;
                 }
                 
-                if (postfix_member_pointer_depth != 0 || postfix_member_size <= (DATA_PTR & 0x1f)) {
+                if (array_dimensions <= 1 && (postfix_member_pointer_depth != 0 || postfix_member_size <= (DATA_PTR & 0x1f))) {
                     emit_load_deref_reg_ex_now (reg, subscript_elem_size, is_unsigned);
                 }
                 
