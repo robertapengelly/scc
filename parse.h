@@ -143,6 +143,7 @@ struct member_info_entry {
     int elem_size;
     
     int array_dimensions;
+    int scalar_elem_size;
     int pointer_depth;
     
     int is_array;
@@ -200,9 +201,10 @@ struct local_symbol {
 };
 
 extern const char *last_found_member_tag_name;
-
 extern int last_found_member_is_unsigned;
+
 extern int last_found_member_array_dimensions;
+extern int last_found_member_scalar_elem_size;
 
 struct aggregate_tag_entry {
 

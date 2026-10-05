@@ -92,6 +92,7 @@ struct member_info_entry member_infos[MAX_MEMBER_INFOS];
 int member_info_count = 0;
 
 int last_found_member_array_dimensions = 0;
+int last_found_member_scalar_elem_size = 0;
 int last_found_member_is_unsigned = 0;
 
 struct pending_param pending_params[MAX_PENDING_PARAMS];
@@ -1469,6 +1470,7 @@ int find_member_info_ex_bounded (const char *name, int max_size, const char *own
     last_found_member_tag_name = 0;
     last_found_member_is_unsigned = 0;
     last_found_member_array_dimensions = 0;
+    last_found_member_scalar_elem_size = 0;
     last_found_member_calling_convention = TOK_EOF;
     
     if (!name) {
@@ -1535,6 +1537,7 @@ int find_member_info_ex_bounded (const char *name, int max_size, const char *own
         last_found_member_tag_name = member_infos[best].tag_name;
         last_found_member_is_unsigned = member_infos[best].is_unsigned ? 1 : 0;
         last_found_member_array_dimensions = member_infos[best].array_dimensions;
+        last_found_member_scalar_elem_size = member_infos[best].scalar_elem_size;
         last_found_member_calling_convention = member_infos[best].calling_convention;
         
         if (offset) {
@@ -2690,6 +2693,7 @@ int find_member_info_ex (const char *name, int *offset, int *size, int *elem_siz
     last_found_member_tag_name = 0;
     last_found_member_is_unsigned = 0;
     last_found_member_array_dimensions = 0;
+    last_found_member_scalar_elem_size = 0;
     last_found_member_calling_convention = TOK_EOF;
     
     if (!name) {
@@ -2716,6 +2720,7 @@ int find_member_info_ex (const char *name, int *offset, int *size, int *elem_siz
     last_found_member_tag_name = member_infos[best].tag_name;
     last_found_member_is_unsigned = member_infos[best].is_unsigned ? 1 : 0;
     last_found_member_array_dimensions = member_infos[best].array_dimensions;
+    last_found_member_scalar_elem_size = member_infos[best].scalar_elem_size;
     last_found_member_calling_convention = member_infos[best].calling_convention;
 
     if (offset) {
@@ -2821,7 +2826,7 @@ static void load_typedef_name (struct typedef_entry *entry) {
 
 }
 
-static void remember_member_info_ex (const char *name, int offset, int size, int elem_size, int pointer_depth, int is_array, int is_floating, int is_packed) {
+static void remember_member_info_ex (const char *name, int offset, int size, int elem_size, int scalar_elem_size, int pointer_depth, int is_array, int is_floating, int is_packed) {
 
     if (!name) {
         return;
@@ -2834,6 +2839,7 @@ static void remember_member_info_ex (const char *name, int offset, int size, int
     member_infos[member_info_count].name = xstrdup (name);
     member_infos[member_info_count].offset = offset;
     member_infos[member_info_count].size = size;
+    member_infos[member_info_count].scalar_elem_size = scalar_elem_size > 0 ? scalar_elem_size : member_infos[member_info_count].elem_size;
     member_infos[member_info_count].elem_size = elem_size > 0 ? elem_size : size;
     member_infos[member_info_count].pointer_depth = pointer_depth;
     member_infos[member_info_count].array_dimensions = is_array ? declarator_array_dimensions : 0;
@@ -2882,6 +2888,7 @@ static void promote_anonymous_aggregate_members (const char *owner_tag_name, int
         dst->offset = base_offset + src->offset;
         dst->size = src->size;
         dst->elem_size = src->elem_size;
+        dst->scalar_elem_size = src->scalar_elem_size;
         dst->pointer_depth = src->pointer_depth;
         dst->array_dimensions = src->array_dimensions;
         dst->is_array = src->is_array;
@@ -3585,7 +3592,7 @@ void parse_type_spec (void) {
                         
                         if (is_union) {
                         
-                            remember_member_info_ex (member, 0, member_size, member_info_elem_size, declarator_is_pointer ? declarator_pointer_depth : 0, declarator_has_array, declarator_is_pointer ? 0 : member_type_is_floating, aggregate_is_packed);
+                            remember_member_info_ex (member, 0, member_size, member_info_elem_size, member_type_size, declarator_is_pointer ? declarator_pointer_depth : 0, declarator_has_array, declarator_is_pointer ? 0 : member_type_is_floating, aggregate_is_packed);
                             
                             if (member_size > aggregate_size) {
                                 aggregate_size = member_size;
@@ -3616,7 +3623,7 @@ void parse_type_spec (void) {
                             
                             aggregate_size = member_offset;
                             
-                            remember_member_info_ex (member, member_offset, member_size, member_info_elem_size, declarator_is_pointer ? declarator_pointer_depth : 0, declarator_has_array, declarator_is_pointer ? 0 : member_type_is_floating, aggregate_is_packed);
+                            remember_member_info_ex (member, member_offset, member_size, member_info_elem_size, member_type_size, declarator_is_pointer ? declarator_pointer_depth : 0, declarator_has_array, declarator_is_pointer ? 0 : member_type_is_floating, aggregate_is_packed);
                             aggregate_size += member_size;
                             
                             for (r = 0; r < repeat; r++) {

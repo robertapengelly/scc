@@ -11442,7 +11442,7 @@ static int emit_parse_postfix_subscripts_to_reg_now (const char *reg, int elem_s
 
 }
 
-static int emit_parse_postfix_subscripts_to_reg_dims_now (const char *reg, int elem_size, int pointer_depth, int pointed_size, int array_dimensions, int is_unsigned, int *final_elem_size) {
+static int emit_parse_postfix_subscripts_to_reg_dims_now (const char *reg, int elem_size, int scalar_elem_size, int pointer_depth, int pointed_size, int array_dimensions, int is_unsigned, int *final_elem_size) {
 
     const char *index_reg;
     int saw_subscript = 0;
@@ -11472,7 +11472,15 @@ static int emit_parse_postfix_subscripts_to_reg_dims_now (const char *reg, int e
         
         if (tok.kind == TOK_LBRACK) {
         
-            if (pointer_depth == 0 && pointed_size > 0 && elem_size > pointed_size) {
+            if (pointer_depth == 0 && dims_before > 1) {
+            
+                emit_add_indexed_scaled_address_to_reg_now (reg, index_reg, elem_size);
+                
+                if (array_dimensions == 1 && scalar_elem_size > 0) {
+                    elem_size = index_step_size (scalar_elem_size);
+                }
+            
+            } else if (pointer_depth == 0 && pointed_size > 0 && elem_size > pointed_size) {
             
                 emit_add_indexed_scaled_address_to_reg_now (reg, index_reg, elem_size);
                 elem_size = index_step_size (pointed_size);
@@ -14895,10 +14903,10 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
                     }
                 
                 } else if (array_dimensions > 1) {
-                    emit_parse_postfix_subscripts_to_reg_dims_now (reg, subscript_elem_size, pointer_depth, elem_size, array_dimensions, is_unsigned, &subscript_elem_size);
+                    emit_parse_postfix_subscripts_to_reg_dims_now (reg, subscript_elem_size, last_found_member_scalar_elem_size, pointer_depth, elem_size, array_dimensions, is_unsigned, &subscript_elem_size);
                 } else {
                     emit_parse_postfix_subscript_scaled_address_to_reg_now (reg, subscript_elem_size);
-                 }
+                }
                 
                 if (tok.kind == TOK_ARROW && subscript_elem_size <= (DATA_PTR & 0x1f)) {
                 
@@ -21953,7 +21961,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                         emit_load_local_to_reg (reg, src->offset, DATA_PTR);
                     }
                     
-                    saw_subscript = emit_parse_postfix_subscripts_to_reg_dims_now (reg, elem_size, src->pointer_depth, src->pointed_size, src->array_dimensions, src->pointer_depth > 0 ? src->pointed_is_unsigned : src->is_unsigned, &final_subscript_elem_size);
+                    saw_subscript = emit_parse_postfix_subscripts_to_reg_dims_now (reg, elem_size, src->pointed_size, src->pointer_depth, src->pointed_size, src->array_dimensions, src->pointer_depth > 0 ? src->pointed_is_unsigned : src->is_unsigned, &final_subscript_elem_size);
                     
                     postfix_copy_lvalue_size = index_step_size (final_subscript_elem_size);
                     postfix_copy_lvalue_tag_name = src->is_array ? (src->tag_name ? src->tag_name : src->pointed_tag_name) : src->pointed_tag_name;
@@ -22021,7 +22029,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                         emit_load_global_to_reg (reg, name, DATA_PTR);
                     }
                     
-                    saw_subscript = emit_parse_postfix_subscripts_to_reg_dims_now (reg, elem_size, get_global_symbol_pointer_depth (name), get_global_symbol_pointed_size (name), get_global_symbol_array_dimensions (name), get_global_symbol_pointer_depth (name) > 0 ? get_global_symbol_pointed_is_unsigned (name) : get_global_symbol_unsigned (name), &final_subscript_elem_size);
+                    saw_subscript = emit_parse_postfix_subscripts_to_reg_dims_now (reg, elem_size, get_global_symbol_pointed_size (name), get_global_symbol_pointer_depth (name), get_global_symbol_pointed_size (name), get_global_symbol_array_dimensions (name), get_global_symbol_pointer_depth (name) > 0 ? get_global_symbol_pointed_is_unsigned (name) : get_global_symbol_unsigned (name), &final_subscript_elem_size);
                     
                     postfix_copy_lvalue_size = index_step_size (final_subscript_elem_size);
                     postfix_copy_lvalue_tag_name = get_global_symbol_array (name) ? get_global_symbol_tag_name (name) : 0;
