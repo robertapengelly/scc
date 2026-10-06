@@ -19109,6 +19109,8 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             
             }
             
+            set_rhs_last_pointer_info (1, current_object_size);
+            
             free (name);
             return;
         
@@ -23714,10 +23716,13 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
 
     enum token_kind saved_calling_convention = postfix_member_calling_convention;
     
-    int argc = 0;
     int total_arg_bytes = 0;
-    int arg_bytes;
+    int argc = 0;
+    
+    int arg_starts_address_of;
     int arg_is_floating;
+    int arg_bytes;
+    
     int i;
     int ch;
     
@@ -23746,6 +23751,8 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
     
         for (;;) {
         
+            arg_starts_address_of = tok.kind == TOK_AMPER;
+            
             arg_saved_ofp = 0;
             arg_tmp_ofp = 0;
             
@@ -23837,12 +23844,12 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
                         emit_push_reg_now ("edx");
                         emit_push_reg_now ("eax");
                     
-                    } else if (!arg_is_floating && postfix_member_seen && postfix_member_pointer_depth == 0 && !postfix_value_is_array && postfix_member_size > (DATA_PTR & 0x1f)) {
+                    } else if (!arg_is_floating && !arg_starts_address_of && !rhs_last_pointer_depth && postfix_member_seen && postfix_member_pointer_depth == 0 && !postfix_value_is_array && postfix_member_size > (DATA_PTR & 0x1f)) {
                     
                         arg_bytes = postfix_member_size;
                         emit_push_aggregate_from_addr_reg_now ("eax", arg_bytes);
                     
-                    } else if (!arg_is_floating && !postfix_value_is_array && postfix_member_size > (DATA_PTR & 0x1f)) {
+                    } else if (!arg_is_floating && !arg_starts_address_of && !rhs_last_pointer_depth && !postfix_value_is_array && postfix_member_size > (DATA_PTR & 0x1f)) {
                     
                         arg_bytes = postfix_member_size;
                         emit_push_aggregate_from_addr_reg_now ("eax", arg_bytes);
@@ -24235,6 +24242,7 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
     int total_arg_bytes = 0;
     
     int arg_is_floating, ch, i;
+    int arg_starts_address_of;
     int arg_bytes;
     
     int saved_arg_assignment32_stop_before_condition_operator;
@@ -24325,6 +24333,8 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
     
         for (;;) {
         
+            arg_starts_address_of = tok.kind == TOK_AMPER;
+            
             arg_saved_ofp = 0;
             arg_tmp_ofp = 0;
             
@@ -24495,12 +24505,12 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                         emit_push_reg_now ("edx");
                         emit_push_reg_now ("eax");
                     
-                    } else if (!use_inline && !arg_is_floating && postfix_member_seen && postfix_member_pointer_depth == 0 && !postfix_value_is_array && postfix_member_size > (DATA_PTR & 0x1f)) {
+                    } else if (!use_inline && !arg_is_floating && !arg_starts_address_of && !rhs_last_pointer_depth && postfix_member_seen && postfix_member_pointer_depth == 0 && !postfix_value_is_array && postfix_member_size > (DATA_PTR & 0x1f)) {
                     
                         arg_bytes = postfix_member_size;
                         emit_push_aggregate_from_addr_reg_now ("eax", arg_bytes);
                     
-                    } else if (!use_inline && !arg_is_floating && !postfix_value_is_array && postfix_member_size > (DATA_PTR & 0x1f)) {
+                    } else if (!use_inline && !arg_is_floating && !arg_starts_address_of && !rhs_last_pointer_depth && !postfix_value_is_array && postfix_member_size > (DATA_PTR & 0x1f)) {
                     
                         arg_bytes = postfix_member_size;
                         emit_push_aggregate_from_addr_reg_now ("eax", arg_bytes);
