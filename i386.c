@@ -51,6 +51,7 @@ static int index_step_size (int size) {
 
 static int rhs_last_pointer_depth = 0;
 static int rhs_last_pointed_size = 0;
+static int rhs_deref_cast_operand = 0;
 
 static int rhs_last_expression_is_void = 0;
 static int rhs_allow_void_function_value = 0;
@@ -19768,7 +19769,10 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                      * unary '*'.  Otherwise the caller sees the unconsumed
                      * identifier/operator and reports a false "expected )".
                      */
+                    ++rhs_deref_cast_operand;
                     emit_load_assignment_rhs_to_reg (reg);
+                    
+                    --rhs_deref_cast_operand;
                     goto dereference_loaded_address;
                 
                 }
@@ -20062,6 +20066,40 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         }
         
     dereference_loaded_address:
+        
+        if (tok.kind == TOK_ASSIGN) {
+        
+            get_token ();
+            emit_push_reg_now (reg);
+            
+            if (deref_size == (DATA_LLONG & 0x1f)) {
+            
+                emit_load_assignment_rhs_expression_to_pair ("eax", "edx", deref_is_unsigned);
+                emit_pop_reg_now ("ecx");
+                emit_store_pair_to_deref_reg_now ("ecx", "eax", "edx");
+            
+            } else {
+            
+                emit_load_assignment_rhs_expression_to_reg ("eax");
+                emit_pop_reg_now ("edx");
+                emit_store_reg_to_deref_reg_now ("edx", "eax", deref_size);
+            
+            }
+            
+            if (strcmp (reg, "eax") != 0 && state->ofp) {
+            
+                if (state->syntax & ASM_SYNTAX_INTEL) {
+                    fprintf (state->ofp, "    mov %s, eax\n", reg);
+                } else {
+                    fprintf (state->ofp, "    movl %%eax, %%%s\n", reg);
+                }
+            
+            }
+            
+            clear_rhs_last_pointer_info ();
+            return;
+        
+        }
         
         deref_pointer_depth = rhs_last_pointer_depth;
         deref_pointed_size = rhs_last_pointed_size;
@@ -20875,10 +20913,11 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         
         }
         
-        if (is_assignment_operator (tok.kind)) {
+        if (!rhs_deref_cast_operand && is_assignment_operator (tok.kind)) {
         
             enum token_kind assign_op = tok.kind;
             struct local_symbol *dst;
+            
             int global_index;
             int dst_size;
             int dst_is_floating;
@@ -28011,7 +28050,12 @@ static int parse_cast_indirect_assignment_statement (int lvalue_outer_paren_dept
             free (addr_name);
         
         } else {
+        
+            ++rhs_deref_cast_operand;
+            
             emit_load_assignment_rhs_to_reg ("edx");
+            --rhs_deref_cast_operand;
+        
         }
         
         for (;;) {
@@ -28104,6 +28148,19 @@ static int parse_cast_indirect_assignment_statement (int lvalue_outer_paren_dept
     
     if (op == TOK_ASSIGN) {
     
+        if (deref_size == (DATA_LLONG & 0x1f)) {
+        
+            emit_push_reg_now ("edx");
+            emit_load_assignment_rhs_expression_to_pair ("eax", "edx", 1);
+            
+            emit_pop_reg_now ("ecx");
+            emit_store_pair_to_deref_reg_now ("ecx", "eax", "edx");
+            
+            expect_semi_or_recover ();
+            return 1;
+        
+        }
+        
         emit_push_reg_now ("edx");
         emit_load_assignment_rhs_expression_to_reg ("eax");
         emit_pop_reg_now ("edx");

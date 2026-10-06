@@ -80,6 +80,7 @@ static int index_step_size (int size) {
 
 static int rhs_last_pointer_depth = 0;
 static int rhs_last_pointed_size = 0;
+static int rhs_deref_cast_operand = 0;
 
 static int rhs_last_expression_is_void = 0;
 static int rhs_allow_void_function_value = 0;
@@ -21093,7 +21094,10 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                      * unary '*'.  Otherwise the caller sees the unconsumed
                      * identifier/operator and reports a false "expected )".
                      */
+                    ++rhs_deref_cast_operand;
                     emit_load_assignment_rhs_to_reg (reg);
+                    
+                    --rhs_deref_cast_operand;
                     goto dereference_loaded_address;
                 
                 }
@@ -21416,6 +21420,31 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         }
         
     dereference_loaded_address:
+        
+        if (tok.kind == TOK_ASSIGN) {
+        
+            get_token ();
+            
+            amd64_emit_push_reg_now (reg);
+            emit_load_assignment_rhs_expression_to_reg ("rax");
+            
+            amd64_emit_pop_reg_now ("rdx");
+            emit_store_reg_to_deref_reg_now ("rdx", "rax", deref_size);
+            
+            if (strcmp (reg, "rax") != 0 && state->ofp) {
+            
+                if (state->syntax & ASM_SYNTAX_INTEL) {
+                    fprintf (state->ofp, "    mov %s, rax\n", reg);
+                } else {
+                    fprintf (state->ofp, "    movq %%rax, %%%s\n", reg);
+                }
+            
+            }
+            
+            clear_rhs_last_pointer_info ();
+            return;
+        
+        }
         
         deref_pointer_depth = rhs_last_pointer_depth;
         deref_pointed_size = rhs_last_pointed_size;
@@ -24073,7 +24102,7 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
         
         }
         
-        if (is_assignment_operator (tok.kind)) {
+        if (!rhs_deref_cast_operand && is_assignment_operator (tok.kind)) {
         
             enum token_kind assign_op = tok.kind;
             
