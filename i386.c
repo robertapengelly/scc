@@ -19251,6 +19251,98 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                 
                 emit_parse_postfix_subscript_scaled_address_to_reg_now (reg, elem_size);
                 
+                /*
+                 * Address-of must consume a member chain that follows a
+                 * subscripted global object.  Leaving the . / -> token for the
+                 * enclosing expression parser turns &array[i].member into an
+                 * ordinary member-value access.  In 32-bit casts this can even
+                 * turn the correctly computed address into a bogus load through
+                 * that address.
+                 */
+                if (tok.kind == TOK_ARROW || tok.kind == TOK_DOT) {
+                
+                    const char *current_object_tag_name = get_global_symbol_tag_name (name);
+                    int current_object_size = elem_size;
+                    
+                    while (tok.kind == TOK_ARROW || tok.kind == TOK_DOT) {
+                    
+                        enum token_kind member_op = tok.kind;
+                        char *member;
+                        
+                        const char *member_start;
+                        const char *member_caret;
+                        
+                        unsigned long member_line;
+                        
+                        int offset = 0;
+                        int member_size = DATA_INT & 0x1f;
+                        int member_elem_size = DATA_INT & 0x1f;
+                        int member_pointer_depth = 0;
+                        
+                        get_token ();
+                        
+                        member_start = tok.start;
+                        member_caret = tok.caret;
+                        member_line = get_line_number ();
+                        
+                        if (tok.kind != TOK_IDENT) {
+                        
+                            report_line_at (get_filename (), member_line, REPORT_ERROR, member_start, member_caret, "expected member name after %s", member_op == TOK_ARROW ? "->" : ".");
+                            
+                            free (name);
+                            return;
+                        
+                        }
+                        
+                        member = xstrdup (tok.ident);
+                        get_token ();
+                        
+                        if (!find_member_info_ex_bounded (member, current_object_size, current_object_tag_name, &offset, &member_size, &member_elem_size, &member_pointer_depth, 0, 0)) {
+                        
+                            report_line_at (get_filename (), member_line, REPORT_ERROR, member_start, member_caret, "unknown member '%s'", member);
+                            
+                            free (member);
+                            free (name);
+                            
+                            return;
+                        
+                        }
+                        
+                        current_object_tag_name = last_found_member_tag_name;
+                        free (member);
+                        
+                        if (state->ofp && offset != 0) {
+                        
+                            if (state->syntax & ASM_SYNTAX_INTEL) {
+                                fprintf (state->ofp, "    add %s, %d\n", reg, offset);
+                            } else {
+                                fprintf (state->ofp, "    addl $%d, %%%s\n", offset, reg);
+                            }
+                        
+                        }
+                        
+                        if (tok.kind == TOK_LBRACK) {
+                        
+                            if (member_pointer_depth > 0) {
+                                emit_load_member_from_addr_reg_now (reg, reg, 0, DATA_PTR & 0x1f);
+                            }
+                            
+                            emit_parse_postfix_subscript_scaled_address_to_reg_now (reg, member_elem_size > 0 ? member_elem_size : DATA_INT & 0x1f);
+                        
+                        } else if (member_pointer_depth > 0 && (tok.kind == TOK_ARROW || tok.kind == TOK_DOT)) {
+                            emit_load_member_from_addr_reg_now (reg, reg, 0, DATA_PTR & 0x1f);
+                        }
+                        
+                        if (member_pointer_depth > 0) {
+                            current_object_size = member_elem_size > 0 ? member_elem_size : DATA_PTR;
+                        } else {
+                            current_object_size = member_size;
+                        }
+                    
+                    }
+                
+                }
+                
                 free (name);
                 return;
             
