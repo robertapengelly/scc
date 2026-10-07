@@ -28931,6 +28931,8 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
     int true_label;
     int end_label;
     
+    postfix_member_seen = 0;
+    
     if (rhs_current_operand_is_floating_now ()) {
     
         emit_load_floating_rhs_expression_now (DATA_DOUBLE & 0x1f);
