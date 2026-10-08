@@ -30369,6 +30369,21 @@ static int parse_identifier_assignment_statement (void) {
         lhs_size = lhs ? lhs->size : get_global_symbol_size (name);
         lhs_is_floating = lhs ? lhs->is_floating : get_global_symbol_floating (name);
         
+        if (is_simple_assign && lhs_size > (DATA_LLONG & 0x1f) && tok.kind == TOK_STAR) {
+        
+            emit_load_symbol_address_for_copy_now ("edx", lhs, name);
+            
+            if (emit_aggregate_copy_from_current_rhs_to_addr_reg_now ("edx", 0, lhs_size)) {
+            
+                expect_semi_or_recover ();
+                
+                free (name);
+                return 1;
+            
+            }
+        
+        }
+        
         if (is_simple_assign && lhs_size > (DATA_LLONG & 0x1f) && tok.kind == TOK_IDENT) {
             
             char *rhs_name = xstrdup (tok.ident);
