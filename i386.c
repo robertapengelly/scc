@@ -18223,6 +18223,112 @@ static int current_floating_token_is_nonzero_now (void) {
 
 }
 
+static int source_parenthesized_not_wide_operand_now (const char *p) {
+
+    char name[128];
+    
+    int n = 0;
+    int depth = 0;
+    int has_member = 0;
+    
+    struct local_symbol *sym;
+    
+    if (!p) {
+        return 0;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    while (*p == '(') {
+    
+        depth++;
+        p++;
+        
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+    
+    }
+    
+    if (!depth || !((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
+        return 0;
+    }
+    
+    while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_') {
+    
+        if (n + 1 < (int) sizeof (name)) {
+            name[n++] = *p;
+        }
+        
+        p++;
+    
+    }
+    
+    name[n] = 0;
+    
+    for (;;) {
+    
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+        
+        if (*p != '.' && !(p[0] == '-' && p[1] == '>')) {
+            break;
+        }
+        
+        has_member = 1;
+        p += (*p == '.') ? 1 : 2;
+        
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+        
+        if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
+            return 0;
+        }
+        
+        while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_') {
+            p++;
+        }
+    
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    
+    while (depth && *p == ')') {
+    
+        depth--;
+        p++;
+        
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+    
+    }
+    
+    if (depth) {
+        return 0;
+    }
+    
+    if (has_member) {
+        return 1;
+    }
+    
+    sym = find_local_symbol (name);
+    
+    if (sym) {
+        return sym->size == (DATA_LLONG & 0x1f) && !sym->is_array && !sym->pointer_depth && !sym->is_floating && !sym->tag_name;
+    }
+    
+    return find_global_symbol (name) >= 0 && get_global_symbol_size (name) == (DATA_LLONG & 0x1f) &&
+        !get_global_symbol_array (name) && !get_global_symbol_pointer_depth (name) && !get_global_symbol_floating (name) && !get_global_symbol_tag_name (name);
+
+}
+
 static void emit_load_assignment_rhs_to_reg (const char *reg) {
 
     rhs_last_scalar_is_unsigned = -1;
@@ -20326,31 +20432,55 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
     
     } else if (tok.kind == TOK_XMARK) {
     
+        int wide;
         get_token ();
-        emit_load_assignment_rhs_to_reg (reg);
+        
+        wide = current_token_is_64bit_integer_value_now () || source_starts_64bit_integer_cast_now (tok.caret) ||
+            (tok.kind == TOK_LPAREN && source_parenthesized_not_wide_operand_now (tok.caret));
+        
+        if (wide) {
+            emit_load_assignment_rhs_to_pair ("eax", "edx");
+        } else {
+        
+            postfix_member_seen = 0;
+            emit_load_assignment_rhs_to_reg (reg);
+            
+            if (postfix_member_seen && postfix_member_pointer_depth == 0 && postfix_member_size == (DATA_LLONG & 0x1f) && !postfix_member_is_floating) {
+            
+                emit_copy_reg_now ("ecx", reg);
+                emit_load_pair_from_deref_reg_now ("eax", "edx", "ecx");
+                
+                wide = 1;
+            
+            }
+        
+        }
         
         if (state->ofp) {
         
             if (state->syntax & ASM_SYNTAX_INTEL) {
             
-                fprintf (state->ofp, "    test %s, %s\n", reg, reg);
+                if (wide) {
+                    fprintf (state->ofp, "    or eax, edx\n");
+                } else {
+                    fprintf (state->ofp, "    test %s, %s\n", reg, reg);
+                }
+                
+                fprintf (state->ofp, "    setz al\n");
+                fprintf (state->ofp, "    movzx eax, al\n");
                 
                 if (strcmp (reg, "eax") != 0) {
-                
-                    fprintf (state->ofp, "    setz al\n");
-                    fprintf (state->ofp, "    movzx eax, al\n");
                     fprintf (state->ofp, "    mov %s, eax\n", reg);
-                
-                } else {
-                
-                    fprintf (state->ofp, "    setz al\n");
-                    fprintf (state->ofp, "    movzx eax, al\n");
-                
                 }
             
             } else {
             
-                fprintf (state->ofp, "    testl %%%s, %%%s\n", reg, reg);
+                if (wide) {
+                    fprintf (state->ofp, "    orl %%edx, %%eax\n");
+                } else {
+                    fprintf (state->ofp, "    testl %%%s, %%%s\n", reg, reg);
+                }
+                
                 fprintf (state->ofp, "    setz %%al\n");
                 fprintf (state->ofp, "    movzbl %%al, %%eax\n");
                 
@@ -20361,6 +20491,9 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             }
         
         }
+        
+        clear_rhs_last_pointer_info ();
+        postfix_member_seen = 0;
         
         return;
     
