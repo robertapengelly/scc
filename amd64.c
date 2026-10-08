@@ -20225,7 +20225,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                 if (tok.kind == TOK_DOT || src->is_array) {
                 
                     current_object_size = src->is_array && src->pointed_size > 0 ? src->pointed_size : src->size;
-                    current_object_tag_name = src->is_array ? (src->pointed_tag_name ? src->pointed_tag_name : src->tag_name) : 0;
+                    current_object_tag_name = src->is_array ? (src->pointed_tag_name ? src->pointed_tag_name : src->tag_name) : src->tag_name;
                     
                     if (src->is_static && src->static_label) {
                         emit_load_address_to_reg_now (reg, src->static_label);
