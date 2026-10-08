@@ -36629,6 +36629,202 @@ static int source_starts_with_parenthesized_indirect_call_now (void) {
 
 }
 
+static int token_text_looks_like_member_incdec_now (void) {
+
+    const char *p = tok.caret ? tok.caret : tok.start;
+    int prefix = (tok.kind == TOK_INCR || tok.kind == TOK_DECR);
+    
+    int bracket_depth = 0;
+    int paren_depth = 0;
+    
+    int saw_member = 0;
+    int saw_incdec = 0;
+    
+    if (!p || (tok.kind != TOK_IDENT && !prefix)) {
+        return 0;
+    }
+    
+    if (prefix) {
+        p += 2;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        ++p;
+    }
+    
+    if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
+        return 0;
+    }
+    
+    while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_') {
+        ++p;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        ++p;
+    }
+    
+    if (*p != '[' && *p != '.' && !(*p == '-' && p[1] == '>')) {
+        return 0;
+    }
+    
+    while (*p && *p != ';') {
+    
+        if (*p == '[') {
+        
+            saw_member = 1;
+            ++bracket_depth;
+        
+        } else if (*p == ']') {
+        
+            if (!bracket_depth) {
+                return 0;
+            }
+            
+            --bracket_depth;
+        
+        } else if (*p == '(') {
+            ++paren_depth;
+        } else if (*p == ')') {
+        
+            if (!paren_depth) {
+                return 0;
+            }
+            
+            --paren_depth;
+        
+        } else if (!bracket_depth && !paren_depth) {
+        
+            if (*p == '.' || (*p == '-' && p[1] == '>')) {
+            
+                saw_member = 1;
+                
+                if (*p == '-') {
+                    ++p;
+                }
+            
+            } else if ((*p == '+' && p[1] == '+') || (*p == '-' && p[1] == '-')) {
+            
+                if (prefix || saw_incdec) {
+                    return 0;
+                }
+                
+                saw_incdec = 1;
+                ++p;
+            
+            } else if ((*p == '+' || *p == '-' || *p == '*' || *p == '/' || *p == '=' ||
+                *p == '&' || *p == '|' || *p == '^' || *p == '?' || *p == ':' || *p == ',') ||
+                    (saw_incdec && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n')) {
+                return 0;
+            }
+        
+        }
+        
+        ++p;
+    
+    }
+    
+    return *p == ';' && !bracket_depth && !paren_depth && saw_member && (prefix || saw_incdec);
+
+}
+
+static int parse_member_incdec_statement_now (void) {
+
+    enum token_kind op;
+    
+    int prefix;
+    int size;
+    
+    int step = 1;
+    char *name;
+    
+    const char *name_start, *name_caret;
+    unsigned long name_line;
+    
+    struct local_symbol *src;
+    
+    if (!token_text_looks_like_member_incdec_now ()) {
+        return 0;
+    }
+    
+    prefix = tok.kind == TOK_INCR || tok.kind == TOK_DECR;
+    op = prefix ? tok.kind : TOK_EOF;
+    
+    if (prefix) {
+        get_token ();
+    }
+    
+    if (tok.kind != TOK_IDENT) {
+        return 0;
+    }
+    
+    name = xstrdup (tok.ident);
+    name_start = tok.start;
+    name_caret = tok.caret;
+    name_line = get_line_number ();
+    src = find_local_symbol (name);
+    
+    get_token ();
+    postfix_member_seen = 0;
+    
+    if (!emit_parse_postfix_copy_source_address_now ("edx", src, name, name_start, name_caret, name_line)) {
+    
+        free (name);
+        return 0;
+    
+    }
+    
+    free (name);
+    
+    if (!prefix) {
+    
+        op = tok.kind;
+        get_token ();
+    
+    }
+    
+    size = index_step_size (postfix_copy_lvalue_size);
+    
+    if (postfix_member_seen && postfix_member_pointer_depth > 0) {
+    
+        size = DATA_PTR & 0x1f;
+        step = postfix_member_pointed_size > 0 ? postfix_member_pointed_size : 1;
+    
+    }
+    
+    if (state->ofp) {
+    
+        if (state->syntax & ASM_SYNTAX_INTEL) {
+        
+            const char *width = size == 1 ? "byte" : (size == 2 ? "word" : "dword");
+            const char *ptr = (state->syntax & ASM_SYNTAX_NASM) ? "" : "ptr ";
+            const char *arith = op == TOK_INCR ? "add" : "sub";
+            
+            if (size == (DATA_LLONG & 0x1f)) {
+            
+                fprintf (state->ofp, "    %s dword %s[edx], 1\n", arith, ptr);
+                fprintf (state->ofp, "    %s dword %s[edx + 4], 0\n", op == TOK_INCR ? "adc" : "sbb", ptr);
+            
+            } else {
+                fprintf (state->ofp, "    %s %s %s[edx], %d\n", arith, width, ptr, step);
+            }
+        
+        } else if (size == (DATA_LLONG & 0x1f)) {
+        
+            fprintf (state->ofp, "    %sl $1, (%%edx)\n", op == TOK_INCR ? "add" : "sub");
+            fprintf (state->ofp, "    %sl $0, 4(%%edx)\n", op == TOK_INCR ? "adc" : "sbb");
+        
+        } else {
+            fprintf (state->ofp, "    %s%s $%d, (%%edx)\n", op == TOK_INCR ? "add" : "sub", size == 1 ? "b" : (size == 2 ? "w" : "l"), step);
+        }
+    
+    }
+    
+    postfix_member_seen = 0;
+    return 1;
+
+}
+
 static int parse_postfix_assignment_statement_now (void) {
 
     char *name;
@@ -36989,6 +37185,13 @@ static void parse_statement (void) {
     
     if (parse_inline_asm_statement ()) {
         return;
+    }
+    
+    if (parse_member_incdec_statement_now ()) {
+    
+        expect_semi_or_recover ();
+        return;
+    
     }
     
     if (parse_prefix_incdec_statement ()) {
