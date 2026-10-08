@@ -150,6 +150,8 @@ static int assignment32_stop_before_condition_operator = 0;
 static int assignment64_stop_before_condition_operator = 0;
 static int call_argument_preserve_wide_member_address = 0;
 
+static int assignment64_stop_before_logical_operator = 0;
+static int assignment64_expression_depth = 0;
 static void masm_flush_data_line (void);
 
 static int postfix_member_pointer_depth = 0;
@@ -26506,7 +26508,7 @@ static void emit_assignment64_compare_op_to_pair_now (enum token_kind op, const 
 
 }
 
-static void emit_load_assignment_rhs_expression_to_pair (const char *lo, const char *hi, int is_unsigned) {
+static void emit_load_assignment_rhs_expression_to_pair_internal (const char *lo, const char *hi, int is_unsigned) {
 
     enum token_kind op;
     
@@ -26524,7 +26526,10 @@ static void emit_load_assignment_rhs_expression_to_pair (const char *lo, const c
     
     emit_load_assignment_rhs_to_pair (lo, hi);
     
-    while (is_assignment64_binary_operator (tok.kind) && !(assignment64_stop_before_condition_operator && is_assignment64_condition_stop_operator (tok.kind))) {
+    while (is_assignment64_binary_operator (tok.kind) &&
+        !(assignment64_stop_before_condition_operator && is_assignment64_condition_stop_operator (tok.kind)) &&
+            !(assignment64_stop_before_logical_operator == assignment64_expression_depth &&
+                (tok.kind == TOK_LOGAND || tok.kind == TOK_LOGOR))) {
     
         op = tok.kind;
         get_token ();
@@ -26713,6 +26718,15 @@ static void emit_load_assignment_rhs_expression_to_pair (const char *lo, const c
     } else {
         rhs_last_expression_is_wide = 1;
     }
+
+}
+
+static void emit_load_assignment_rhs_expression_to_pair (const char *lo, const char *hi, int is_unsigned) {
+
+    ++assignment64_expression_depth;
+    
+    emit_load_assignment_rhs_expression_to_pair_internal (lo, hi, is_unsigned);
+    --assignment64_expression_depth;
 
 }
 
@@ -35716,6 +35730,10 @@ static void emit_statement_jump_if_false (int label) {
     statement_condition_constant_known = 0;
     statement_condition_constant_value = 0;
     
+    if (tok.kind != TOK_XMARK && (current_expression_mentions_64bit_symbol_now () || source_starts_64bit_integer_cast_now (tok.caret))) {
+        goto wide_condition;
+    }
+    
     if (emit_statement_ident_immediate_compare_jump_if_false_now (label)) {
         return;
     }
@@ -36230,10 +36248,19 @@ static void emit_statement_jump_if_false (int label) {
     
     }
     
-    if (current_expression_mentions_64bit_symbol_now ()) {
+wide_condition:
+    
+    if (current_expression_mentions_64bit_symbol_now () || source_starts_64bit_integer_cast_now (tok.caret)) {
     
         int old_assignment64_stop_before_condition_operator;
+        int old_assignment64_stop_before_logical_operator;
+        
+        int cast_size, cast_unsigned;
         is_unsigned = rhs_current_operand_is_unsigned_now ();
+        
+        if (source_starts_integer_cast_size_now (tok.caret, &cast_size, &cast_unsigned) && cast_size == (DATA_LLONG & 0x1f) && cast_unsigned) {
+            is_unsigned = 1;
+        }
         
         old_assignment64_stop_before_condition_operator = assignment64_stop_before_condition_operator;
         assignment64_stop_before_condition_operator = 1;
@@ -36280,7 +36307,11 @@ static void emit_statement_jump_if_false (int label) {
              * stop at the nested == and leave the parser expecting the closing
              * ')'.  That is what produced the false "expected )" diagnostic.
              */
+            old_assignment64_stop_before_logical_operator = assignment64_stop_before_logical_operator;
+            assignment64_stop_before_logical_operator = assignment64_expression_depth + 1;
+            
             emit_load_assignment_rhs_expression_to_pair ("eax", "edx", is_unsigned);
+            assignment64_stop_before_logical_operator = old_assignment64_stop_before_logical_operator;
             
             if (state->ofp) {
             
@@ -36314,7 +36345,7 @@ static void emit_statement_jump_if_false (int label) {
             
             }
             
-            emit_statement_test_eax_jump_if_false (label);
+            emit_statement_eax_truth_jump_if_false_and_tail (label);
             return;
         
         }
