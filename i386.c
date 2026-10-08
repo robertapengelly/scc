@@ -35861,6 +35861,160 @@ static int emit_statement_direct_compare_jump_if_false_now (int label) {
 
 }
 
+static int source_condition_starts_wide_member_now (const char *p) {
+
+    char name[128];
+    
+    struct local_symbol *sym;
+    const char *owner_tag;
+    
+    int owner_size;
+    int member_size = 0;
+    int member_pointer_depth = 0;
+    int member_is_array = 0;
+    int member_is_floating = 0;
+    int member_seen = 0;
+    int depth = 0;
+    int n;
+    
+    if (!p) {
+        return 0;
+    }
+    
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n' || *p == '(') {
+    
+        if (*p == '(') {
+            depth++;
+        }
+        
+        p++;
+    
+    }
+    
+    if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
+        return 0;
+    }
+    
+    n = 0;
+    
+    while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_') {
+    
+        if (n + 1 >= (int) sizeof (name)) {
+            return 0;
+        }
+        
+        name[n++] = *p++;
+    
+    }
+    
+    name[n] = 0;
+    
+    if ((sym = find_local_symbol (name))) {
+    
+        owner_tag = sym->pointer_depth ? sym->pointed_tag_name : sym->tag_name;
+        owner_size = sym->pointer_depth ? sym->pointed_size : (sym->is_array ? sym->array_element_size : sym->size);
+    
+    } else {
+    
+        int i = find_global_symbol (name);
+        
+        if (i < 0) {
+            return 0;
+        }
+        
+        owner_tag = global_symbols[i].tag_name;
+        owner_size = global_symbols[i].pointer_depth ? global_symbols[i].pointed_size : (global_symbols[i].is_array ? global_symbols[i].array_element_size : global_symbols[i].size);
+    
+    }
+    
+    for (;;) {
+    
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+        
+        if (*p == '[') {
+        
+            int brackets = 1;
+            p++;
+            
+            while (*p && brackets) {
+            
+                if (*p == '[') {
+                    brackets++;
+                } else if (*p == ']') {
+                    brackets--;
+                }
+                
+                p++;
+            
+            }
+            
+            if (brackets) {
+                return 0;
+            }
+            
+            continue;
+        
+        }
+        
+        if (*p != '.' && !(p[0] == '-' && p[1] == '>')) {
+            break;
+        }
+        
+        p += *p == '.' ? 1 : 2;
+        
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+        
+        if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
+            return 0;
+        }
+        
+        n = 0;
+        
+        while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_') {
+        
+            if (n + 1 >= (int) sizeof (name)) {
+                return 0;
+            }
+            
+            name[n++] = *p++;
+        
+        }
+        
+        name[n] = 0;
+        
+        if (!find_member_info_ex_bounded (name, owner_size, owner_tag, 0, &member_size, 0, &member_pointer_depth, &member_is_array, &member_is_floating)) {
+            return 0;
+        }
+        
+        member_seen = 1;
+        
+        owner_tag = last_found_member_tag_name;
+        owner_size = member_size;
+    
+    }
+    
+    while (depth && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n' || *p == ')')) {
+    
+        if (*p == ')') {
+            depth--;
+        }
+        
+        p++;
+    
+    }
+    
+    if (depth) {
+        return 0;
+    }
+    
+    return member_seen && member_size == (DATA_LLONG & 0x1f) && !member_pointer_depth && !member_is_array && !member_is_floating;
+
+}
+
 static void emit_statement_jump_if_false (int label) {
 
     enum token_kind op;
@@ -35878,7 +36032,7 @@ static void emit_statement_jump_if_false (int label) {
     statement_condition_constant_known = 0;
     statement_condition_constant_value = 0;
     
-    if (tok.kind != TOK_XMARK && (current_expression_mentions_64bit_symbol_now () || source_starts_64bit_integer_cast_now (tok.caret))) {
+    if (tok.kind != TOK_XMARK && (current_expression_mentions_64bit_symbol_now () || source_starts_64bit_integer_cast_now (tok.caret) || source_condition_starts_wide_member_now (tok.caret))) {
         goto wide_condition;
     }
     
@@ -36398,7 +36552,7 @@ static void emit_statement_jump_if_false (int label) {
     
 wide_condition:
     
-    if (current_expression_mentions_64bit_symbol_now () || source_starts_64bit_integer_cast_now (tok.caret)) {
+    if (current_expression_mentions_64bit_symbol_now () || source_starts_64bit_integer_cast_now (tok.caret) || source_condition_starts_wide_member_now (tok.caret)) {
     
         int old_assignment64_stop_before_condition_operator;
         int old_assignment64_stop_before_logical_operator;
