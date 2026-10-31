@@ -3722,7 +3722,15 @@ void parse_type_spec (void) {
             }
             
             if (!aggregate_is_packed) {
-                aggregate_size = (int) align_up_long (aggregate_size, aggregate_align);
+            
+                int aligned_size = (int) align_up_long (aggregate_size, aggregate_align);
+                
+                if (!is_union && aligned_size > aggregate_size && aggregate_field_count < MAX_AGG_FIELDS) {
+                    aggregate_fields[aggregate_field_count++] = -(aligned_size - aggregate_size);
+                }
+                
+                aggregate_size = aligned_size;
+            
             }
             
             {
