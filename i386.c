@@ -12638,6 +12638,30 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
             
             }
             
+            if (tok.kind == TOK_ARROW || tok.kind == TOK_DOT) {
+            
+                postfix_copy_lvalue_size = get_global_symbol_pointed_size (name);
+                postfix_copy_lvalue_tag_name = get_global_symbol_tag_name (name);
+                
+                emit_apply_postfix_member_access_to_reg_now (lo);
+                
+                if (postfix_member_seen) {
+                
+                    if (postfix_member_size == (DATA_LLONG & 0x1f) && postfix_member_pointer_depth == 0) {
+                    
+                        const char *addr_reg = (strcmp (lo, "ecx") != 0 && strcmp (hi, "ecx") != 0) ? "ecx" : "esi";
+                        
+                        emit_copy_reg_now (addr_reg, lo);
+                        emit_load_pair_from_deref_reg_now (lo, hi, addr_reg);
+                    
+                    } else {
+                        emit_extend_pair_high_from_low (lo, hi, postfix_member_size, postfix_member_is_unsigned);
+                    }
+                
+                }
+            
+            }
+            
             free (name);
             return;
         
