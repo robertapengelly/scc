@@ -6186,6 +6186,17 @@ static void update_pending_param (const char *name, int size, int align, int is_
     if (pointer_depth > 0 && parsed_type_tag_name[0]) {
         pending_params[i].pointed_tag_name = xstrdup (parsed_type_tag_name);
     }
+    
+    if (pending_params[i].tag_name) {
+    
+        free (pending_params[i].tag_name);
+        pending_params[i].tag_name = 0;
+    
+    }
+    
+    if (pointer_depth == 0 && parsed_type_is_aggregate && parsed_type_tag_name[0]) {
+        pending_params[i].tag_name = xstrdup (parsed_type_tag_name);
+    }
 
 }
 
@@ -6240,6 +6251,10 @@ static void remove_duplicate_pending_params (void) {
                     free (pending_params[j].pointed_tag_name);
                 }
                 
+                if (pending_params[j].tag_name) {
+                    free (pending_params[j].tag_name);
+                }
+                
                 for (k = j; k + 1 < pending_param_count; k++) {
                     pending_params[k] = pending_params[k + 1];
                 }
@@ -6254,6 +6269,7 @@ static void remove_duplicate_pending_params (void) {
                 pending_params[pending_param_count].pointer_depth = 0;
                 pending_params[pending_param_count].pointed_size = 0;
                 pending_params[pending_param_count].pointed_tag_name = 0;
+                pending_params[pending_param_count].tag_name = 0;
                 
                 continue;
             
@@ -6334,8 +6350,6 @@ static void install_pending_params_as_locals (void) {
     
     for (i = 0; i < pending_param_count; i++) {
     
-        int slot_size;
-        
         if (!pending_params[i].name) {
             continue;
         }
@@ -6370,7 +6384,7 @@ static void install_pending_params_as_locals (void) {
         local_symbols[local_symbol_count].array_dimensions = 0;
         local_symbols[local_symbol_count].pointed_size = pending_params[i].pointed_size;
         local_symbols[local_symbol_count].pointed_tag_name = pending_params[i].pointed_tag_name ? xstrdup (pending_params[i].pointed_tag_name) : 0;
-        local_symbols[local_symbol_count].tag_name = 0;
+        local_symbols[local_symbol_count].tag_name = pending_params[i].tag_name ? xstrdup (pending_params[i].tag_name) : 0;
         local_symbols[local_symbol_count].used = 0;
         local_symbols[local_symbol_count].decl_line = pending_params[i].decl_line;
         local_symbols[local_symbol_count].decl_filename = pending_params[i].decl_filename ? xstrdup (pending_params[i].decl_filename) : 0;
@@ -6378,14 +6392,7 @@ static void install_pending_params_as_locals (void) {
         local_symbols[local_symbol_count].decl_caret_offset = pending_params[i].decl_caret_offset;
         
         local_symbol_count++;
-        slot_size = pending_params[i].size;
-        
-        if (slot_size < DATA_PTR) {
-            slot_size = DATA_PTR;
-        }
-        
-        slot_size = (int) align_up_long (slot_size, DATA_PTR);
-        offset += slot_size;
+        offset += DATA_PTR;
     
     }
 
@@ -6776,6 +6783,8 @@ static void parse_old_style_param_decls (void) {
 
 }
 
+static void format_intel_rbp_offset (char *buf, size_t bufsz, long offset);
+
 static void emit_extern_symbol (const char *name, int size, int is_function);
 static void emit_extern_reference_symbol (const char *name, int size);
 
@@ -6916,6 +6925,87 @@ static void emit_home_incoming_parameter_regs (void) {
 
 }
 
+/*
+ * Microsoft x64 passes aggregates larger than eight bytes indirectly.
+ * Keep named parameters as genuine by-value objects in the function body.
+ */
+static void emit_copy_indirect_aggregate_params (void) {
+
+    int offset;
+    int chunk;
+    int i;
+    
+    long local_offset;
+    long size;
+    
+    char memref[64];
+    
+    for (i = 0; i < local_symbol_count; i++) {
+    
+        if (local_symbols[i].pointer_depth || local_symbols[i].is_floating || local_symbols[i].size <= 8) {
+            continue;
+        }
+        
+        size = local_symbols[i].size;
+        local_offset = local_symbols[i].offset;
+        
+        current_local_stack_size = align_up_long (current_local_stack_size + size, local_symbols[i].align > 0 ? local_symbols[i].align : 8);
+        current_local_stack_size = align_up_long (current_local_stack_size, 8);
+        
+        if (current_local_stack_size > current_function_frame_size) {
+            current_function_frame_size = current_local_stack_size;
+        }
+        
+        local_symbols[i].offset = -(int) current_local_stack_size;
+        
+        if (!state->ofp) {
+            continue;
+        }
+        
+        if (state->syntax & ASM_SYNTAX_INTEL) {
+            fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov r10, qword [rbp + %ld]\n" : "    mov r10, qword ptr [rbp + %ld]\n", local_offset);
+        } else {
+            fprintf (state->ofp, "    movq %ld(%%rbp), %%r10\n", local_offset);
+        }
+        
+        for (offset = 0; offset < size; offset += chunk) {
+        
+            if (size - offset >= 8) {
+                chunk = 8;
+            } else if (size - offset >= 4) {
+                chunk = 4;
+            } else if (size - offset >= 2) {
+                chunk = 2;
+            } else {
+                chunk = 1;
+            }
+            
+            if (state->syntax & ASM_SYNTAX_INTEL) {
+            
+                const char *size_name = chunk == 8 ? "qword" : chunk == 4 ? "dword" : chunk == 2 ? "word" : "byte";
+                const char *reg_name = chunk == 8 ? "r11" : chunk == 4 ? "r11d" : chunk == 2 ? "r11w" : "r11b";
+                
+                format_intel_rbp_offset (memref, sizeof (memref), local_symbols[i].offset + offset);
+                
+                fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov %s, %s [r10 + %d]\n" : "    mov %s, %s ptr [r10 + %d]\n", reg_name, size_name, offset);
+                fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov %s %s, %s\n" : "    mov %s ptr %s, %s\n", size_name, memref, reg_name);
+            
+            } else {
+            
+                const char *suffix = chunk == 8 ? "q" : chunk == 4 ? "l" : chunk == 2 ? "w" : "b";
+                const char *reg_name = chunk == 8 ? "r11" : chunk == 4 ? "r11d" : chunk == 2 ? "r11w" : "r11b";
+                
+                fprintf (state->ofp, "    mov%s %d(%%r10), %%%s\n", suffix, offset, reg_name);
+                fprintf (state->ofp, "    mov%s %%%s, %ld(%%rbp)\n", suffix, reg_name, (long) local_symbols[i].offset + offset);
+            
+            }
+        
+        }
+    
+    }
+
+}
+
 static void emit_function_start (const char *name, int is_static) {
 
     const char *asm_name;
@@ -6963,7 +7053,9 @@ static void emit_function_start (const char *name, int is_static) {
         amd64_temp_stack_mod16 = 0;
         
         emit_home_incoming_parameter_regs ();
+        
         emit_deferred_function_frame_placeholder ();
+        emit_copy_indirect_aggregate_params ();
     
     } else {
     
@@ -6977,7 +7069,9 @@ static void emit_function_start (const char *name, int is_static) {
         fprintf (state->ofp, "    movq %%rsp, %%rbp\n");
         
         emit_home_incoming_parameter_regs ();
+        
         emit_deferred_function_frame_placeholder ();
+        emit_copy_indirect_aggregate_params ();
     
     }
 
@@ -10730,124 +10824,10 @@ static void emit_store_pair_to_global64 (const char *symbol, const char *lo, con
 
 static void emit_call_identifier_to_reg_now (const char *name, const char *reg, const char *name_start, const char *name_caret, unsigned long name_line);
 
-static int emit_push_aggregate_from_addr_reg_now (const char *reg, int size) {
+static int aggregate_argument_already_addressed_now (const char *reg, int size) {
 
-    int offset;
-    int chunk;
-    
-    if (!reg || size <= (DATA_PTR & 0x1f)) {
-        return 0;
-    }
-    
-    if (!state->ofp) {
-        return 1;
-    }
-    
-    for (offset = size; offset > 0; ) {
-    
-        if (offset >= 8) {
-        
-            chunk = 8;
-            offset -= 8;
-        
-        } else if (offset >= 4) {
-        
-            chunk = 4;
-            offset -= 4;
-        
-        } else if (offset >= 2) {
-        
-            chunk = 2;
-            offset -= 2;
-        
-        } else {
-        
-            chunk = 1;
-            offset -= 1;
-        
-        }
-        
-        if (state->syntax & ASM_SYNTAX_INTEL) {
-        
-            if (state->syntax & ASM_SYNTAX_NASM) {
-            
-                if (chunk == 8) {
-                    fprintf (state->ofp, "    push qword [%s + %d]\n", reg, offset);
-                } else if (chunk == 4) {
-                
-                    fprintf (state->ofp, "    sub rsp, 8\n");
-                    
-                    fprintf (state->ofp, "    xor rax, rax\n");
-                    fprintf (state->ofp, "    mov eax, dword [%s + %d]\n", reg, offset);
-                    fprintf (state->ofp, "    mov qword [rsp], rax\n");
-                
-                } else if (chunk == 2) {
-                
-                    fprintf (state->ofp, "    movzx edx, word [%s + %d]\n", reg, offset);
-                    fprintf (state->ofp, "    push rdx\n");
-                
-                } else {
-                
-                    fprintf (state->ofp, "    movzx edx, byte [%s + %d]\n", reg, offset);
-                    fprintf (state->ofp, "    push rdx\n");
-                
-                }
-            
-            } else {
-            
-                if (chunk == 8) {
-                    fprintf (state->ofp, "    push qword ptr [%s + %d]\n", reg, offset);
-                } else if (chunk == 4) {
-                
-                    fprintf (state->ofp, "    sub rsp, 8\n");
-                    
-                    fprintf (state->ofp, "    xor rax, rax\n");
-                    fprintf (state->ofp, "    mov eax, dword ptr [%s + %d]\n", reg, offset);
-                    fprintf (state->ofp, "    mov qword ptr [rsp], rax\n");
-                
-                } else if (chunk == 2) {
-                
-                    fprintf (state->ofp, "    movzx edx, word ptr [%s + %d]\n", reg, offset);
-                    fprintf (state->ofp, "    push rdx\n");
-                
-                } else {
-                
-                    fprintf (state->ofp, "    movzx edx, byte ptr [%s + %d]\n", reg, offset);
-                    fprintf (state->ofp, "    push rdx\n");
-                
-                }
-            
-            }
-        
-        } else {
-        
-            if (chunk == 8) {
-                fprintf (state->ofp, "    pushq %d(%%%s)\n", offset, reg);
-            } else if (chunk == 4) {
-            
-                fprintf (state->ofp, "    subq $8, %%rsp\n");
-                
-                fprintf (state->ofp, "    xorq %%rax, %%rax\n");
-                fprintf (state->ofp, "    movl %d(%%%s), %%eax\n", offset, reg);
-                fprintf (state->ofp, "    movq %%rax, (%%rsp)\n");
-            
-            } else if (chunk == 2) {
-            
-                fprintf (state->ofp, "    movzwl %d(%%%s), %%edx\n", offset, reg);
-                fprintf (state->ofp, "    pushq %%rdx\n");
-            
-            } else {
-            
-                fprintf (state->ofp, "    movzbl %d(%%%s), %%edx\n", offset, reg);
-                fprintf (state->ofp, "    pushq %%rdx\n");
-            
-            }
-        
-        }
-    
-    }
-    
-    return 1;
+    /* An aggregate larger than eight bytes is already addressed by RAX. */
+    return reg && size > (DATA_PTR & 0x1f);
 
 }
 
@@ -24887,171 +24867,18 @@ static int current_argument_is_bare_identifier_now (void) {
 
 }
 
-static int emit_push_aggregate_argument_now (const char *name, struct local_symbol *sym) {
+static int emit_local_aggregate_argument_address_now (const char *name, struct local_symbol *sym) {
 
-    int size;
-    int offset;
-    int chunk;
-    
-    char memref[64];
-    
-    if (!name || !sym || sym->is_array || sym->pointer_depth > 0 || sym->is_floating) {
+    if (!name || !sym || sym->is_array || sym->pointer_depth > 0 || sym->is_floating || sym->size <= (DATA_PTR & 0x1f)) {
         return 0;
     }
     
-    /**
-     * Struct/union locals keep their real byte size here.  Masking with
-     * 0x1f is only valid for scalar DATA_* encodings; it turns e.g. a
-     * 72-byte struct cpu_flags argument into an 8-byte argument.
-     */
-    size = sym->size;
+    if (state->ofp) {
     
-    /*
-     * Do not treat plain 64-bit scalar locals as aggregate arguments.
-     * The old test used only size > 4, so a call such as:
-     *
-     *     bytearray_write_4_bytes (..., result, endianess)
-     *
-     * where result is uint_fast64_t/address_type pushed both halves of
-     * result.  The callee expects an unsigned long here, so the extra high
-     * word shifted the following arguments and pdld wrote broken relocation
-     * bytes.  Real structs/unions either carry an aggregate tag here, or are
-     * larger than the built-in DATA_LLONG scalar size.
-     */
-    if (size <= (DATA_PTR & 0x1f) || (size <= (DATA_LLONG & 0x1f) && !sym->tag_name)) {
-        return 0;
-    }
-    
-    if (!state->ofp) {
-        return 1;
-    }
-    
-    for (offset = size; offset > 0; ) {
-    
-        if (offset >= 8) {
-        
-            chunk = 8;
-            offset -= 8;
-        
-        } else if (offset >= 4) {
-        
-            chunk = 4;
-            offset -= 4;
-        
-        } else if (offset >= 2) {
-        
-            chunk = 2;
-            offset -= 2;
-        
+        if (sym->is_static && sym->static_label) {
+            emit_load_address_to_reg_now ("rax", sym->static_label);
         } else {
-        
-            chunk = 1;
-            offset -= 1;
-        
-        }
-        
-        if (state->syntax & ASM_SYNTAX_INTEL) {
-        
-            if (sym->is_static && sym->static_label) {
-            
-                if (chunk == 8) {
-                    fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    push qword [%s + %d]\n" : "    push qword ptr [%s + %d]\n"), asm_global_symbol_name (sym->static_label), offset);
-                } else if (chunk == 4) {
-                
-                    fprintf (state->ofp, "    sub rsp, 8\n");
-                    
-                    if (state->syntax & ASM_SYNTAX_NASM) {
-                    
-                        fprintf (state->ofp, "    xor rax, rax\n");
-                        fprintf (state->ofp, "    mov eax, dword [%s + %d]\n", asm_global_symbol_name (sym->static_label), offset);
-                        fprintf (state->ofp, "    mov qword [rsp], rax\n");
-                    
-                    } else {
-                    
-                        fprintf (state->ofp, "    xor rax, rax\n");
-                        fprintf (state->ofp, "    mov eax, dword ptr [%s + %d]\n", asm_global_symbol_name (sym->static_label), offset);
-                        fprintf (state->ofp, "    mov qword ptr [rsp], rax\n");
-                    
-                    }
-                
-                } else if (chunk == 2) {
-                    fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    movzx eax, word [%s + %d]\n" : "    movzx eax, word ptr [%s + %d]\n"), asm_global_symbol_name (sym->static_label), offset); fprintf (state->ofp, "    push rax\n");
-                } else {
-                    fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    movzx eax, byte [%s + %d]\n" : "    movzx eax, byte ptr [%s + %d]\n"), asm_global_symbol_name (sym->static_label), offset); fprintf (state->ofp, "    push rax\n");
-                }
-            
-            } else {
-            
-                format_intel_rbp_offset (memref, sizeof (memref), sym->offset + offset);
-                
-                if (chunk == 8) {
-                    fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    push qword %s\n" : "    push qword ptr %s\n"), memref);
-                } else if (chunk == 4) {
-                
-                    fprintf (state->ofp, "    sub rsp, 8\n");
-                    
-                    if (state->syntax & ASM_SYNTAX_NASM) {
-                    
-                        fprintf (state->ofp, "    xor rax, rax\n");
-                        fprintf (state->ofp, "    mov eax, dword %s\n", memref);
-                        fprintf (state->ofp, "    mov qword [rsp], rax\n");
-                    
-                    } else {
-                    
-                        fprintf (state->ofp, "    xor rax, rax\n");
-                        fprintf (state->ofp, "    mov eax, dword ptr %s\n", memref);
-                        fprintf (state->ofp, "    mov qword ptr [rsp], rax\n");
-                    
-                    }
-                
-                } else if (chunk == 2) {
-                    fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    movzx eax, word %s\n" : "    movzx eax, word ptr %s\n"), memref); fprintf (state->ofp, "    push rax\n");
-                } else {
-                    fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    movzx eax, byte %s\n" : "    movzx eax, byte ptr %s\n"), memref); fprintf (state->ofp, "    push rax\n");
-                }
-            
-            }
-        
-        } else {
-        
-            if (sym->is_static && sym->static_label) {
-            
-                if (chunk == 8) {
-                    fprintf (state->ofp, "    pushq %s+%d(%%rip)\n", asm_global_symbol_name (sym->static_label), offset);
-                } else if (chunk == 4) {
-                
-                    fprintf (state->ofp, "    subq $8, %%rsp\n");
-                    
-                    fprintf (state->ofp, "    xorq %%rax, %%rax\n");
-                    fprintf (state->ofp, "    movl %s+%d(%%rip), %%eax\n", asm_global_symbol_name (sym->static_label), offset);
-                    fprintf (state->ofp, "    movq %%rax, (%%rsp)\n");
-                
-                } else if (chunk == 2) {
-                    fprintf (state->ofp, "    movzwl %s+%d(%%rip), %%eax\n", asm_global_symbol_name (sym->static_label), offset); fprintf (state->ofp, "    pushq %%rax\n");
-                } else {
-                    fprintf (state->ofp, "    movzbl %s+%d(%%rip), %%eax\n", asm_global_symbol_name (sym->static_label), offset); fprintf (state->ofp, "    pushq %%rax\n");
-                }
-            
-            } else {
-            
-                if (chunk == 8) {
-                    fprintf (state->ofp, "    pushq %ld(%%rbp)\n", sym->offset + offset);
-                } else if (chunk == 4) {
-                
-                    fprintf (state->ofp, "    subq $8, %%rsp\n");
-                    
-                    fprintf (state->ofp, "    xorq %%rax, %%rax\n");
-                    fprintf (state->ofp, "    movl %ld(%%rbp), %%eax\n", sym->offset + offset);
-                    fprintf (state->ofp, "    movq %%rax, (%%rsp)\n");
-                
-                } else if (chunk == 2) {
-                    fprintf (state->ofp, "    movzwl %ld(%%rbp), %%eax\n", sym->offset + offset); fprintf (state->ofp, "    pushq %%rax\n");
-                } else {
-                    fprintf (state->ofp, "    movzbl %ld(%%rbp), %%eax\n", sym->offset + offset); fprintf (state->ofp, "    pushq %%rax\n");
-                }
-            
-            }
-        
+            emit_load_local_address_to_reg_now ("rax", sym->offset);
         }
     
     }
@@ -25060,150 +24887,74 @@ static int emit_push_aggregate_argument_now (const char *name, struct local_symb
 
 }
 
-static int emit_push_global_aggregate_argument_now (const char *name) {
+static int emit_global_aggregate_argument_address_now (const char *name) {
 
-    int size;
-    int offset;
-    int chunk;
-
-    const char *tag_name;
-
-    if (!name) {
+    if (!name || get_global_symbol_kind (name) != GLOBAL_SYMBOL_OBJECT || get_global_symbol_array (name) || get_global_symbol_pointer_depth (name) > 0 || get_global_symbol_floating (name) || get_global_symbol_size (name) <= (DATA_PTR & 0x1f) || !get_global_symbol_tag_name (name)) {
         return 0;
     }
     
-    if (get_global_symbol_kind (name) != GLOBAL_SYMBOL_OBJECT) {
-        return 0;
-    }
-    
-    if (get_global_symbol_array (name)) {
-        return 0;
-    }
-    
-    if (get_global_symbol_pointer_depth (name) > 0) {
-        return 0;
-    }
-    
-    if (get_global_symbol_floating (name)) {
-        return 0;
-    }
-    
-    size = get_global_symbol_size (name);
-    tag_name = get_global_symbol_tag_name (name);
-
-    /*
-     * Only tagged aggregate objects are passed by value here.  Untagged
-     * objects include scalar values and arrays whose decay metadata was not
-     * visible during the self-hosting pass; those must use normal expression
-     * loading so arrays decay to one address instead of multiple stack words.
-     */
-    if (!tag_name || !tag_name[0]) {
-        return 0;
-    }
-
-    if (size <= (DATA_PTR & 0x1f)) {
-        return 0;
-    }
-    
-    if (!state->ofp) {
-        return 1;
-    }
-    
-    for (offset = size; offset > 0; ) {
-    
-        if (offset >= 8) {
-        
-            chunk = 8;
-            offset -= 8;
-        
-        } else if (offset >= 4) {
-        
-            chunk = 4;
-            offset -= 4;
-        
-        } else if (offset >= 2) {
-        
-            chunk = 2;
-            offset -= 2;
-        
-        } else {
-        
-            chunk = 1;
-            offset -= 1;
-        
-        }
-        
-        if (state->syntax & ASM_SYNTAX_INTEL) {
-        
-            if (chunk == 8) {
-            
-                fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ?
-                    "    push qword [%s + %d]\n" :
-                    "    push qword ptr [%s + %d]\n"), asm_global_symbol_name (name), offset);
-            
-            } else if (chunk == 4) {
-            
-                fprintf (state->ofp, "    sub rsp, 8\n");
-                
-                if (state->syntax & ASM_SYNTAX_NASM) {
-                
-                    fprintf (state->ofp, "    xor rax, rax\n");
-                    fprintf (state->ofp, "    mov eax, dword [%s + %d]\n", asm_global_symbol_name (name), offset);
-                    fprintf (state->ofp, "    mov qword [rsp], rax\n");
-                
-                } else {
-                
-                    fprintf (state->ofp, "    xor rax, rax\n");
-                    fprintf (state->ofp, "    mov eax, dword ptr [%s + %d]\n", asm_global_symbol_name (name), offset);
-                    fprintf (state->ofp, "    mov qword ptr [rsp], rax\n");
-                
-                }
-             
-            } else if (chunk == 2) {
-            
-                fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ?
-                    "    movzx eax, word [%s + %d]\n" :
-                    "    movzx eax, word ptr [%s + %d]\n"), asm_global_symbol_name (name), offset);
-                fprintf (state->ofp, "    push rax\n");
-            
-            } else {
-            
-                fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ?
-                    "    movzx eax, byte [%s + %d]\n" :
-                    "    movzx eax, byte ptr [%s + %d]\n"), asm_global_symbol_name (name), offset);
-                fprintf (state->ofp, "    push rax\n");
-            
-            }
-        
-        } else {
-        
-            if (chunk == 8) {
-                fprintf (state->ofp, "    pushq %s+%d(%%rip)\n", asm_global_symbol_name (name), offset);
-            } else if (chunk == 4) {
-            
-                fprintf (state->ofp, "    subq $8, %%rsp\n");
-                
-                fprintf (state->ofp, "    xorq %%rax, %%rax\n");
-                fprintf (state->ofp, "    movl %s+%d(%%rip), %%eax\n", asm_global_symbol_name (name), offset);
-                fprintf (state->ofp, "    movq %%rax, (%%rsp)\n");
-            
-            } else if (chunk == 2) {
-            
-                fprintf (state->ofp, "    movzwl %s+%d(%%rip), %%eax\n", asm_global_symbol_name (name), offset);
-                fprintf (state->ofp, "    pushq %%rax\n");
-            
-            } else {
-            
-                fprintf (state->ofp, "    movzbl %s+%d(%%rip), %%eax\n", asm_global_symbol_name (name), offset);
-                fprintf (state->ofp, "    pushq %%rax\n");
-            
-            }
-        
-        }
-    
+    if (state->ofp) {
+        emit_load_address_to_reg_now ("rax", name);
     }
     
     return 1;
+
+}
+
+static void emit_copy_aggregate_arg_to_stack_now (int size, int stack_offset) {
+
+    int offset;
+    int chunk;
+    
+    if (!state->ofp || size <= (DATA_PTR & 0x1f)) {
+        return;
+    }
+    
+    if (state->syntax & ASM_SYNTAX_INTEL) {
+    
+        fprintf (state->ofp, "    mov r10, rax\n");
+        fprintf (state->ofp, "    lea rax, [rsp + %d]\n", stack_offset);
+    
+    } else {
+    
+        fprintf (state->ofp, "    movq %%rax, %%r10\n");
+        fprintf (state->ofp, "    leaq %d(%%rsp), %%rax\n", stack_offset);
+    
+    }
+    
+    for (offset = 0; offset < size; offset += chunk) {
+    
+        const char *size_name;
+        const char *reg_name;
+        const char *suffix;
+        
+        if (size - offset >= 8) {
+            chunk = 8;
+        } else if (size - offset >= 4) {
+            chunk = 4;
+        } else if (size - offset >= 2) {
+            chunk = 2;
+        } else {
+            chunk = 1;
+        }
+        
+        size_name = chunk == 8 ? "qword" : chunk == 4 ? "dword" : chunk == 2 ? "word" : "byte";
+        reg_name = chunk == 8 ? "r11" : chunk == 4 ? "r11d" : chunk == 2 ? "r11w" : "r11b";
+        suffix = chunk == 8 ? "q" : chunk == 4 ? "l" : chunk == 2 ? "w" : "b";
+        
+        if (state->syntax & ASM_SYNTAX_INTEL) {
+        
+            fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov %s, %s [r10 + %d]\n" : "    mov %s, %s ptr [r10 + %d]\n", reg_name, size_name, offset);
+            fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov %s [rax + %d], %s\n" : "    mov %s ptr [rax + %d], %s\n", size_name, offset, reg_name);
+        
+        } else {
+        
+            fprintf (state->ofp, "    mov%s %d(%%r10), %%%s\n", suffix, offset, reg_name);
+            fprintf (state->ofp, "    mov%s %%%s, %d(%%rax)\n", suffix, reg_name, offset);
+        
+        }
+    
+    }
 
 }
 
@@ -25228,6 +24979,10 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
     int *new_arg_tmp_floating = 0;
     int *arg_tmp_float_sizes = 0;
     int *new_arg_tmp_float_sizes = 0;
+    int *arg_tmp_aggregate_sizes = 0;
+    int *new_arg_tmp_aggregate_sizes = 0;
+    int aggregate_copy_base = 0;
+    int aggregate_copy_size = 0;
     
     int arg_saved_stack_mod16 = 0;
     
@@ -25298,9 +25053,9 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
                 get_token ();
             
             } else if (tok.kind == TOK_IDENT && tok.ident && current_argument_is_bare_identifier_now () &&
-                       !find_local_symbol (tok.ident) &&
-                       get_global_symbol_kind (tok.ident) == GLOBAL_SYMBOL_OBJECT &&
-                       get_global_symbol_array (tok.ident)) {
+                !find_local_symbol (tok.ident) &&
+                    get_global_symbol_kind (tok.ident) == GLOBAL_SYMBOL_OBJECT &&
+                        get_global_symbol_array (tok.ident)) {
                 
                 arg_bytes = DATA_PTR & 0x1f;
                 arg_is_floating = 0;
@@ -25308,7 +25063,7 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
                 emit_load_address_to_reg_now ("rax", tok.ident);
                 get_token ();
             
-            } else if (tok.kind == TOK_IDENT && tok.ident && current_argument_is_bare_identifier_now () && find_local_symbol (tok.ident) && emit_push_aggregate_argument_now (tok.ident, find_local_symbol (tok.ident))) {
+            } else if (tok.kind == TOK_IDENT && tok.ident && current_argument_is_bare_identifier_now () && find_local_symbol (tok.ident) && emit_local_aggregate_argument_address_now (tok.ident, find_local_symbol (tok.ident))) {
             
                 struct local_symbol *arg_sym = find_local_symbol (tok.ident);
                 
@@ -25317,7 +25072,7 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
                 
                 get_token ();
             
-            } else if (tok.kind == TOK_IDENT && tok.ident && current_argument_is_bare_identifier_now () && !find_local_symbol (tok.ident) && emit_push_global_aggregate_argument_now (tok.ident)) {
+            } else if (tok.kind == TOK_IDENT && tok.ident && current_argument_is_bare_identifier_now () && !find_local_symbol (tok.ident) && emit_global_aggregate_argument_address_now (tok.ident)) {
             
                 arg_bytes = get_global_symbol_size (tok.ident);
                 arg_is_floating = 0;
@@ -25325,8 +25080,8 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
                 get_token ();
             
             } else if (tok.kind == TOK_IDENT && tok.ident && token_identifier_is_function_call_rhs_now () &&
-                       get_global_symbol_kind (tok.ident) == GLOBAL_SYMBOL_FUNCTION &&
-                       get_global_symbol_size (tok.ident) > (DATA_LLONG & 0x1f)) {
+                get_global_symbol_kind (tok.ident) == GLOBAL_SYMBOL_FUNCTION &&
+                    get_global_symbol_size (tok.ident) > (DATA_LLONG & 0x1f)) {
             
                 char *arg_call_name = xstrdup (tok.ident);
                 
@@ -25394,12 +25149,12 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
                     if (!arg_is_floating && !arg_starts_address_of && !rhs_last_pointer_depth && postfix_member_seen && postfix_member_pointer_depth == 0 && !postfix_value_is_array && postfix_member_size > (DATA_PTR & 0x1f)) {
                     
                         arg_bytes = postfix_member_size;
-                        emit_push_aggregate_from_addr_reg_now ("rax", arg_bytes);
+                        aggregate_argument_already_addressed_now ("rax", arg_bytes);
                     
                     } else if (!arg_is_floating && !arg_starts_address_of && !rhs_last_pointer_depth && !postfix_value_is_array && postfix_member_size > (DATA_PTR & 0x1f)) {
                     
                         arg_bytes = postfix_member_size;
-                        emit_push_aggregate_from_addr_reg_now ("rax", arg_bytes);
+                        aggregate_argument_already_addressed_now ("rax", arg_bytes);
                     
                     } else if (arg_is_floating) {
                         /* Keep ST(0) live; amd64_emit_move_st0_to_arg() places it. */
@@ -25445,6 +25200,15 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
                     arg_tmp_float_sizes[argc] = arg_is_floating ? arg_bytes : 0;
                 
                 }
+                
+                new_arg_tmp_aggregate_sizes = (int *) xrealloc (arg_tmp_aggregate_sizes, sizeof (*arg_tmp_aggregate_sizes) * (argc + 1));
+                
+                if (new_arg_tmp_aggregate_sizes) {
+                
+                    arg_tmp_aggregate_sizes = new_arg_tmp_aggregate_sizes;
+                    arg_tmp_aggregate_sizes[argc] = !arg_is_floating && arg_bytes > (DATA_PTR & 0x1f) ? arg_bytes : 0;
+                
+                }
             
             }
             
@@ -25487,7 +25251,17 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
             amd64_call_stack_bytes += (argc - 4) * 8;
         }
         
-        amd64_call_stack_bytes += DATA_PTR & 0x1f;
+        aggregate_copy_base = (int) align_up_long (amd64_call_stack_bytes, 16);
+        
+        for (i = 0; i < argc; i++) {
+        
+            if (arg_tmp_aggregate_sizes && arg_tmp_aggregate_sizes[i]) {
+                aggregate_copy_size += (int) align_up_long (arg_tmp_aggregate_sizes[i], 16);
+            }
+        
+        }
+        
+        amd64_call_stack_bytes = aggregate_copy_base + aggregate_copy_size + (DATA_PTR & 0x1f);
         
         amd64_call_stack_bytes = amd64_align_call_stack_bytes (amd64_call_stack_bytes);
         amd64_emit_sub_rsp_bytes (amd64_call_stack_bytes);
@@ -25514,6 +25288,23 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
                 
                 while ((ch = fgetc (arg_tmp_ofps[i])) != EOF) {
                     fputc (ch, state->ofp);
+                }
+                
+                if (arg_tmp_aggregate_sizes && arg_tmp_aggregate_sizes[i]) {
+                
+                    int copy_offset = aggregate_copy_base;
+                    int j;
+                    
+                    for (j = 0; j < i; j++) {
+                    
+                        if (arg_tmp_aggregate_sizes[j]) {
+                            copy_offset += (int) align_up_long (arg_tmp_aggregate_sizes[j], 16);
+                        }
+                    
+                    }
+                    
+                    emit_copy_aggregate_arg_to_stack_now (arg_tmp_aggregate_sizes[i], copy_offset);
+                
                 }
                 
                 if (arg_tmp_floating && arg_tmp_floating[i]) {
@@ -25610,6 +25401,10 @@ static void emit_call_pointer_in_reg_now (const char *fn_reg, const char *result
     
     if (arg_tmp_float_sizes) {
         free (arg_tmp_float_sizes);
+    }
+    
+    if (arg_tmp_aggregate_sizes) {
+        free (arg_tmp_aggregate_sizes);
     }
 
 }
@@ -27104,6 +26899,10 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
     int *new_arg_tmp_floating = 0;
     int *arg_tmp_float_sizes = 0;
     int *new_arg_tmp_float_sizes = 0;
+    int *arg_tmp_aggregate_sizes = 0;
+    int *new_arg_tmp_aggregate_sizes = 0;
+    int aggregate_copy_base = 0;
+    int aggregate_copy_size = 0;
     
     int arg_saved_stack_mod16 = 0;
     int amd64_call_stack_bytes = 0;
@@ -27243,7 +27042,7 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                 emit_load_address_to_reg_now ("rax", tok.ident);
                 get_token ();
             
-            } else if (!use_inline && tok.kind == TOK_IDENT && tok.ident && current_argument_is_bare_identifier_now () && find_local_symbol (tok.ident) && emit_push_aggregate_argument_now (tok.ident, find_local_symbol (tok.ident))) {
+            } else if (!use_inline && tok.kind == TOK_IDENT && tok.ident && current_argument_is_bare_identifier_now () && find_local_symbol (tok.ident) && emit_local_aggregate_argument_address_now (tok.ident, find_local_symbol (tok.ident))) {
             
                 struct local_symbol *arg_sym = find_local_symbol (tok.ident);
                 
@@ -27252,7 +27051,7 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                 
                 get_token ();
             
-            } else if (!use_inline && tok.kind == TOK_IDENT && tok.ident && current_argument_is_bare_identifier_now () && !find_local_symbol (tok.ident) && emit_push_global_aggregate_argument_now (tok.ident)) {
+            } else if (!use_inline && tok.kind == TOK_IDENT && tok.ident && current_argument_is_bare_identifier_now () && !find_local_symbol (tok.ident) && emit_global_aggregate_argument_address_now (tok.ident)) {
             
                 arg_bytes = get_global_symbol_size (tok.ident);
                 arg_is_floating = 0;
@@ -27339,12 +27138,12 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                     } else if (!use_inline && !arg_is_floating && !arg_starts_address_of && !rhs_last_pointer_depth && postfix_member_seen && postfix_member_pointer_depth == 0 && !postfix_value_is_array && postfix_member_size > (DATA_PTR & 0x1f)) {
                     
                         arg_bytes = postfix_member_size;
-                        emit_push_aggregate_from_addr_reg_now ("rax", arg_bytes);
+                        aggregate_argument_already_addressed_now ("rax", arg_bytes);
                     
                     } else if (!use_inline && !arg_is_floating && !arg_starts_address_of && !rhs_last_pointer_depth && !postfix_value_is_array && postfix_member_size > (DATA_PTR & 0x1f)) {
                     
                         arg_bytes = postfix_member_size;
-                        emit_push_aggregate_from_addr_reg_now ("rax", arg_bytes);
+                        aggregate_argument_already_addressed_now ("rax", arg_bytes);
                     
                     } else if (use_inline) {
                     
@@ -27405,6 +27204,22 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                 
                     arg_tmp_float_sizes = new_arg_tmp_float_sizes;
                     arg_tmp_float_sizes[argc] = arg_is_floating ? arg_bytes : 0;
+                
+                }
+                
+                if (!use_inline && !arg_is_floating && get_global_symbol_has_prototype (name) &&
+                    argc < get_global_symbol_param_count (name) &&
+                    get_global_symbol_param_size (name, argc) > (DATA_PTR & 0x1f) &&
+                    get_global_symbol_param_pointer_depth (name, argc) == 0) {
+                    arg_bytes = get_global_symbol_param_size (name, argc);
+                }
+                
+                new_arg_tmp_aggregate_sizes = (int *) xrealloc (arg_tmp_aggregate_sizes, sizeof (*arg_tmp_aggregate_sizes) * (argc + 1));
+                
+                if (new_arg_tmp_aggregate_sizes) {
+                
+                    arg_tmp_aggregate_sizes = new_arg_tmp_aggregate_sizes;
+                    arg_tmp_aggregate_sizes[argc] = !arg_is_floating && arg_bytes > (DATA_PTR & 0x1f) ? arg_bytes : 0;
                 
                 }
 
@@ -27521,6 +27336,13 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
         
         }
         
+        if (arg_tmp_aggregate_sizes) {
+        
+            free (arg_tmp_aggregate_sizes);
+            arg_tmp_aggregate_sizes = 0;
+        
+        }
+        
         return;
     
     }
@@ -27558,6 +27380,18 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
             amd64_call_stack_bytes += (effective_argc - 4) * 8;
         }
         
+        aggregate_copy_base = (int) align_up_long (amd64_call_stack_bytes, 16);
+        
+        for (i = 0; i < argc; i++) {
+        
+            if (arg_tmp_aggregate_sizes && arg_tmp_aggregate_sizes[i]) {
+                aggregate_copy_size += (int) align_up_long (arg_tmp_aggregate_sizes[i], 16);
+            }
+        
+        }
+        
+        amd64_call_stack_bytes = aggregate_copy_base + aggregate_copy_size;
+        
         amd64_call_stack_bytes = amd64_align_call_stack_bytes (amd64_call_stack_bytes);
         amd64_emit_sub_rsp_bytes (amd64_call_stack_bytes);
         
@@ -27580,6 +27414,23 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                     
                     while ((ch = fgetc (arg_tmp_ofps[i])) != EOF) {
                         fputc (ch, state->ofp);
+                    }
+                    
+                    if (arg_tmp_aggregate_sizes && arg_tmp_aggregate_sizes[i]) {
+                    
+                        int copy_offset = aggregate_copy_base;
+                        int j;
+                        
+                        for (j = 0; j < i; j++) {
+                        
+                            if (arg_tmp_aggregate_sizes[j]) {
+                                copy_offset += (int) align_up_long (arg_tmp_aggregate_sizes[j], 16);
+                            }
+                        
+                        }
+                        
+                        emit_copy_aggregate_arg_to_stack_now (arg_tmp_aggregate_sizes[i], copy_offset);
+                    
                     }
                     
                     if (arg_tmp_floating && arg_tmp_floating[i]) {
@@ -27750,6 +27601,10 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
         free (arg_tmp_ofps);
         arg_tmp_ofps = 0;
     
+    }
+    
+    if (arg_tmp_aggregate_sizes) {
+        free (arg_tmp_aggregate_sizes);
     }
 
 }

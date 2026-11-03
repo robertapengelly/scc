@@ -358,8 +358,9 @@ struct pending_param {
     int pointed_is_unsigned;
     
     char *pointed_tag_name;
-    int knr_declared;
+    char *tag_name;
     
+    int knr_declared;
     unsigned long decl_line;
     
     char *decl_filename;

@@ -897,6 +897,13 @@ void clear_pending_params (void) {
             pending_params[i].pointed_tag_name = 0;
         
         }
+        
+        if (pending_params[i].tag_name) {
+        
+            free (pending_params[i].tag_name);
+            pending_params[i].tag_name = 0;
+        
+        }
     
     }
     
@@ -2954,6 +2961,7 @@ void add_pending_param (const char *name, int size, int align, int is_unsigned, 
     pending_params[pending_param_count].pointed_is_floating = pointer_depth > 0 ? (parsed_type_is_floating ? 1 : 0) : 0;
     pending_params[pending_param_count].pointed_is_unsigned = pointer_depth > 0 ? (pointed_is_unsigned ? 1 : 0) : 0;
     pending_params[pending_param_count].pointed_tag_name = (pointer_depth > 0 && parsed_type_tag_name[0]) ? xstrdup (parsed_type_tag_name) : 0;
+    pending_params[pending_param_count].tag_name = (pointer_depth == 0 && parsed_type_is_aggregate && parsed_type_tag_name[0]) ? xstrdup (parsed_type_tag_name) : 0;
     pending_params[pending_param_count].decl_line = last_declarator_name_line;
     pending_params[pending_param_count].decl_filename = get_filename () ? xstrdup (get_filename ()) : 0;
     pending_params[pending_param_count].decl_start = last_declarator_name_start ? xstrdup (last_declarator_name_start) : 0;

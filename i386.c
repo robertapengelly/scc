@@ -5774,6 +5774,17 @@ static void update_pending_param (const char *name, int size, int align, int is_
     if (pointer_depth > 0 && parsed_type_tag_name[0]) {
         pending_params[i].pointed_tag_name = xstrdup (parsed_type_tag_name);
     }
+    
+    if (pending_params[i].tag_name) {
+    
+        free (pending_params[i].tag_name);
+        pending_params[i].tag_name = 0;
+    
+    }
+    
+    if (pointer_depth == 0 && parsed_type_is_aggregate && parsed_type_tag_name[0]) {
+        pending_params[i].tag_name = xstrdup (parsed_type_tag_name);
+    }
 
 }
 
@@ -5828,6 +5839,10 @@ static void remove_duplicate_pending_params (void) {
                     free (pending_params[j].pointed_tag_name);
                 }
                 
+                if (pending_params[j].tag_name) {
+                    free (pending_params[j].tag_name);
+                }
+                
                 for (k = j; k + 1 < pending_param_count; k++) {
                     pending_params[k] = pending_params[k + 1];
                 }
@@ -5842,6 +5857,7 @@ static void remove_duplicate_pending_params (void) {
                 pending_params[pending_param_count].pointer_depth = 0;
                 pending_params[pending_param_count].pointed_size = 0;
                 pending_params[pending_param_count].pointed_tag_name = 0;
+                pending_params[pending_param_count].tag_name = 0;
                 
                 continue;
             
@@ -5958,7 +5974,7 @@ static void install_pending_params_as_locals (void) {
         local_symbols[local_symbol_count].array_dimensions = 0;
         local_symbols[local_symbol_count].pointed_size = pending_params[i].pointed_size;
         local_symbols[local_symbol_count].pointed_tag_name = pending_params[i].pointed_tag_name ? xstrdup (pending_params[i].pointed_tag_name) : 0;
-        local_symbols[local_symbol_count].tag_name = 0;
+        local_symbols[local_symbol_count].tag_name = pending_params[i].tag_name ? xstrdup (pending_params[i].tag_name) : 0;
         local_symbols[local_symbol_count].used = 0;
         local_symbols[local_symbol_count].decl_line = pending_params[i].decl_line;
         local_symbols[local_symbol_count].decl_filename = pending_params[i].decl_filename ? xstrdup (pending_params[i].decl_filename) : 0;
