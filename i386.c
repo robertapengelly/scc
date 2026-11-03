@@ -14851,12 +14851,100 @@ static int emit_load_address_of_parenthesized_postfix_to_reg_now (const char *re
     
     if (tok.kind == TOK_LPAREN) {
     
-        int64_s offset_value;
+        const char *p = tok.caret;
         
-        if (parse_constexpr_null_member_address_after_lparen (&offset_value)) {
+        int parenthesis_depth = 0;
+        int saw_cast_pointer = 0;
+        int saw_subscript = 0;
         
-            emit_load_const32_to_reg_now (reg, offset_value);
-            return 1;
+        /* A parenthesized cast may be the base of an indexed lvalue. */
+        while (p && *p && *p != ';') {
+        
+            if (*p == '(') {
+                parenthesis_depth++;
+            } else if (*p == ')') {
+            
+                if (parenthesis_depth == 0) {
+                
+                    const char *next = p + 1;
+                    
+                    while (*next == ' ' || *next == '\t' || *next == '\r' || *next == '\n') {
+                        next++;
+                    }
+                    
+                    if (*next == '[') {
+                        saw_subscript = 1;
+                    }
+                    
+                    break;
+                
+                }
+                
+                parenthesis_depth--;
+            
+            } else if (*p == '*' && parenthesis_depth > 0) {
+                saw_cast_pointer = 1;
+            } else if (*p == '[') {
+            
+                saw_subscript = 1;
+                break;
+            
+            } else if (*p == '-' && p[1] == '>') {
+                break;
+            }
+            
+            p++;
+        
+        }
+        
+        if (saw_cast_pointer && saw_subscript) {
+        
+            int parens = 0;
+            int cast_size = 0;
+            int cast_is_unsigned = 0;
+            int cast_is_pointer = 0;
+            int elem_size, i;
+            
+            while (tok.kind == TOK_LPAREN) {
+            
+                parens++;
+                get_token ();
+            
+            }
+            
+            if (token_starts_type_name () && parse_cast_type_name (&cast_size, &cast_is_unsigned, &cast_is_pointer) && cast_is_pointer) {
+            
+                elem_size = last_cast_type_object_size;
+                
+                if (elem_size <= 0) {
+                    elem_size = DATA_INT & 0x1f;
+                }
+                
+                emit_load_assignment_rhs_to_reg (reg);
+                expect (TOK_RPAREN, ")");
+                
+                emit_parse_postfix_subscript_scaled_address_to_reg_now (reg, elem_size);
+                
+                for (i = 1; i < parens; i++) {
+                    expect (TOK_RPAREN, ")");
+                }
+                
+                return 1;
+            
+            }
+        
+        }
+        
+        {
+        
+            int64_s offset_value;
+            
+            if (parse_constexpr_null_member_address_after_lparen (&offset_value)) {
+            
+                emit_load_const32_to_reg_now (reg, offset_value);
+                return 1;
+            
+            }
         
         }
     
