@@ -18842,8 +18842,9 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                 }
                 
                 emit_apply_integer_cast_to_reg_now (reg, cast_base_size, cast_is_unsigned);
-                
                 clear_rhs_last_pointer_info ();
+                
+                rhs_last_scalar_is_unsigned = cast_is_unsigned ? 1 : 0;
                 rhs_last_explicit_integer_cast_signedness = cast_is_unsigned ? 1 : 0;
             
             }
@@ -25966,7 +25967,7 @@ static int emit_load_assignment_binary_expression_prec_to_reg (const char *reg, 
         get_token ();
         rhs_is_unsigned = rhs_current_operand_is_unsigned_now ();
         
-        if (rhs_is_unsigned) {
+        if (rhs_is_unsigned && op != TOK_LSH && op != TOK_RSH) {
             is_unsigned = 1;
         }
         
@@ -25983,7 +25984,7 @@ static int emit_load_assignment_binary_expression_prec_to_reg (const char *reg, 
         emit_push_reg_now ("eax");
         rhs_is_unsigned = emit_load_assignment_binary_expression_prec_to_reg ("edx", prec + 1);
         
-        if (rhs_is_unsigned) {
+        if (rhs_is_unsigned && op != TOK_LSH && op != TOK_RSH) {
             is_unsigned = 1;
         }
         
@@ -26042,6 +26043,8 @@ static int emit_load_assignment_binary_expression_prec_to_reg (const char *reg, 
     }
     
     set_rhs_last_pointer_info (expr_pointer_depth, expr_pointed_size);
+    rhs_last_scalar_is_unsigned = is_unsigned;
+    
     return is_unsigned;
 
 }
