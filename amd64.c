@@ -28301,40 +28301,6 @@ static void emit_compare_rax_rdx_to_reg (enum token_kind op, const char *reg, in
 
 static int rhs_current_operand_is_unsigned_now (void);
 
-static int source_lhs_has_char_pointer_cast_before_now (const char *p) {
-
-    const char *q;
-    int limit = 160;
-    
-    if (!p) {
-        return 0;
-    }
-    
-    q = p;
-    
-    while (limit-- > 0 && q > tok.start) {
-    
-        q--;
-        
-        if (*q != '(') {
-            continue;
-        }
-        
-        if ((strncmp (q, "(char", 5) == 0 || strncmp (q, "(unsigned char", 14) == 0 || strncmp (q, "(signed char", 12) == 0)
-            && strchr (q, '*') && strchr (q, ')') && strchr (q, '*') < p && strchr (q, ')') < p) {
-            return 1;
-        }
-        
-        if (*q == ';' || *q == ',' || *q == '\n') {
-            break;
-        }
-    
-    }
-    
-    return 0;
-
-}
-
 static int arithmetic_operator_precedence_now (enum token_kind op) {
 
     if (op == TOK_PIPE) {
@@ -28429,11 +28395,6 @@ static int emit_load_assignment_binary_expression_prec_to_reg (const char *reg, 
         
         lhs_pointer_depth = expr_pointer_depth;
         lhs_pointed_size = expr_pointed_size;
-        
-        if ((op == TOK_PLUS || op == TOK_MINUS) && lhs_pointer_depth > 0 &&
-            source_lhs_has_char_pointer_cast_before_now (tok.caret)) {
-            lhs_pointed_size = DATA_CHAR & 0x1f;
-        }
         
         get_token ();
         rhs_is_unsigned = rhs_current_operand_is_unsigned_now ();
