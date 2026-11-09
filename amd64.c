@@ -17357,6 +17357,7 @@ static int emit_parse_postfix_copy_source_address_now (const char *reg, struct l
         if (tok.kind == TOK_LBRACK) {
         
             int elem_size = last_elem_size;
+            int member_seen = postfix_member_seen;
             
             if (!have_address) {
             
@@ -17419,9 +17420,10 @@ static int emit_parse_postfix_copy_source_address_now (const char *reg, struct l
              * storage size as the scalar load width (e.g. UINT8 Length[2]
              * becomes a 16-bit load for Length[i]).
              */
-            if (postfix_member_seen) {
+            if (member_seen) {
             
                 postfix_member_size = index_step_size (elem_size);
+                postfix_member_seen = 1;
                 
                 if (postfix_member_pointer_depth > 0) {
                     postfix_member_pointer_depth--;
