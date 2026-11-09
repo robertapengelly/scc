@@ -9054,6 +9054,13 @@ static void parse_block (void) {
                 ensure_block_stack_allocated (block_stack_start, &block_stack_bytes, &block_stack_emitted);
             }
             
+            if (!declaration_phase) {
+            
+                emit_local_initializers (inits, init_count);
+                init_count = 0;
+            
+            }
+            
             if (fallthrough_switch_depth > 0 && fallthrough_case_active[fallthrough_switch_depth - 1]) {
             
                 fallthrough_case_has_statement[fallthrough_switch_depth - 1] = 1;
