@@ -14217,6 +14217,44 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
                     source_size = DATA_INT & 0x1f;
                 }
                 
+                if (tok.kind == TOK_INCR || tok.kind == TOK_DECR) {
+                
+                    enum token_kind op = tok.kind;
+                    
+                    int size = index_step_size (source_size);
+                    int step = postfix_member_pointer_depth > 0 ? postfix_member_pointed_size : 1;
+                    
+                    const char *width = size == 1 ? "byte" : (size == 2 ? "word" : (size == 8 ? "qword" : "dword"));
+                    const char *suffix = size == 1 ? "b" : (size == 2 ? "w" : (size == 8 ? "q" : "l"));
+                    
+                    if (step <= 0) {
+                        step = 1;
+                    }
+                    
+                    get_token ();
+                    
+                    emit_push_reg_now ("r8");
+                    emit_copy_reg_now ("r8", lo);
+                    
+                    emit_load_postfix_lvalue_address_to_pair_ex_now (lo, hi, source_size, postfix_member_is_unsigned);
+                    
+                    if (state->ofp) {
+                    
+                        if (state->syntax & ASM_SYNTAX_INTEL) {
+                            fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    %s %s [r8], %d\n" : "    %s %s ptr [r8], %d\n", op == TOK_INCR ? "add" : "sub", width, step);
+                        } else {
+                            fprintf (state->ofp, "    %s%s $%d, (%%r8)\n", op == TOK_INCR ? "add" : "sub", suffix, step);
+                        }
+                    
+                    }
+                    
+                    emit_pop_reg_now ("r8");
+                    
+                    free (name);
+                    return;
+                
+                }
+                
                 if (is_assignment_operator (tok.kind)) {
                 
                     enum token_kind assign_op = tok.kind;
