@@ -871,6 +871,7 @@ void clear_pending_params (void) {
         pending_params[i].is_floating = 0;
         pending_params[i].pointer_depth = 0;
         pending_params[i].pointed_size = 0;
+        pending_params[i].scalar_pointed_size = 0;
         pending_params[i].pointed_is_floating = 0;
         pending_params[i].pointed_is_unsigned = 0;
         pending_params[i].knr_declared = 0;
@@ -2958,6 +2959,7 @@ void add_pending_param (const char *name, int size, int align, int is_unsigned, 
     pending_params[pending_param_count].knr_declared = 0;
     pending_params[pending_param_count].pointer_depth = pointer_depth;
     pending_params[pending_param_count].pointed_size = pointed_size > 0 ? pointed_size : 0;
+    pending_params[pending_param_count].scalar_pointed_size = parsed_type_size;
     pending_params[pending_param_count].pointed_is_floating = pointer_depth > 0 ? (parsed_type_is_floating ? 1 : 0) : 0;
     pending_params[pending_param_count].pointed_is_unsigned = pointer_depth > 0 ? (pointed_is_unsigned ? 1 : 0) : 0;
     pending_params[pending_param_count].pointed_tag_name = (pointer_depth > 0 && parsed_type_tag_name[0]) ? xstrdup (parsed_type_tag_name) : 0;

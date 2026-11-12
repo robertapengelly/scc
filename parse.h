@@ -183,6 +183,7 @@ struct local_symbol {
     
     int pointer_depth;
     int pointed_size;
+    int scalar_pointed_size;
     int pointed_is_floating;
     int pointed_is_unsigned;
     
@@ -254,6 +255,7 @@ struct global_symbol_entry {
     int is_floating;
     int pointer_depth;
     int pointed_size;
+    int scalar_pointed_size;
     int pointed_is_floating;
     int pointed_is_unsigned;
     int returns_void;
@@ -354,6 +356,7 @@ struct pending_param {
     
     int pointer_depth;
     int pointed_size;
+    int scalar_pointed_size;
     int pointed_is_floating;
     int pointed_is_unsigned;
     

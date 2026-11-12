@@ -918,7 +918,7 @@ static int get_global_function_returns_floating (const char *name) {
 
 }
 
-static void set_global_symbol_pointer_info (const char *name, int pointer_depth, int pointed_size) {
+static void set_global_symbol_pointer_info (const char *name, int pointer_depth, int pointed_size, int scalar_size) {
 
     int i = find_global_symbol (name);
     
@@ -930,6 +930,7 @@ static void set_global_symbol_pointer_info (const char *name, int pointer_depth,
     
         global_symbols[i].pointer_depth = pointer_depth;
         global_symbols[i].pointed_size = pointed_size;
+        global_symbols[i].scalar_pointed_size = scalar_size;
         
         global_symbols[i].pointed_is_floating = pointer_depth > 0 ? (parsed_type_is_floating ? 1 : 0) : 0;
         global_symbols[i].pointed_is_unsigned = pointer_depth > 0 ? (parsed_type_is_unsigned ? 1 : 0) : 0;
@@ -6173,6 +6174,7 @@ static void update_pending_param (const char *name, int size, int align, int is_
     pending_params[i].is_floating = is_floating ? 1 : 0;
     pending_params[i].pointer_depth = pointer_depth;
     pending_params[i].pointed_size = pointed_size > 0 ? pointed_size : 0;
+    pending_params[i].scalar_pointed_size = parsed_type_size;
     pending_params[i].pointed_is_floating = pointer_depth > 0 ? (parsed_type_is_floating ? 1 : 0) : 0;
     pending_params[i].pointed_is_unsigned = pointer_depth > 0 ? (pointed_is_unsigned ? 1 : 0) : 0;
     
@@ -6312,7 +6314,7 @@ static void copy_pending_params_to_global_symbol (const char *name) {
 
 }
 
-static void set_local_symbol_pointer_info (const char *name, int pointer_depth, int pointed_size) {
+static void set_local_symbol_pointer_info (const char *name, int pointer_depth, int pointed_size, int scalar_size) {
 
     struct local_symbol *sym = peek_local_symbol (name);
     
@@ -6324,6 +6326,7 @@ static void set_local_symbol_pointer_info (const char *name, int pointer_depth, 
     
         sym->pointer_depth = pointer_depth;
         sym->pointed_size = pointed_size;
+        sym->scalar_pointed_size = scalar_size;
         
         sym->pointed_is_floating = pointer_depth > 0 ? (parsed_type_is_floating ? 1 : 0) : 0;
         sym->pointed_is_unsigned = pointer_depth > 0 ? (parsed_type_is_unsigned ? 1 : 0) : 0;
@@ -6383,6 +6386,7 @@ static void install_pending_params_as_locals (void) {
         local_symbols[local_symbol_count].array_element_size = 0;
         local_symbols[local_symbol_count].array_dimensions = 0;
         local_symbols[local_symbol_count].pointed_size = pending_params[i].pointed_size;
+        local_symbols[local_symbol_count].scalar_pointed_size = pending_params[i].scalar_pointed_size;
         local_symbols[local_symbol_count].pointed_tag_name = pending_params[i].pointed_tag_name ? xstrdup (pending_params[i].pointed_tag_name) : 0;
         local_symbols[local_symbol_count].tag_name = pending_params[i].tag_name ? xstrdup (pending_params[i].tag_name) : 0;
         local_symbols[local_symbol_count].used = 0;
@@ -9477,7 +9481,7 @@ static void parse_block (void) {
                     
                         set_global_symbol_size (name, (declarator_has_function && !declarator_is_pointer && !declarator_function_is_pointer) ? parsed_type_size : ((declarator_has_function || declarator_is_pointer) ? DATA_PTR : declarator_object_size (parsed_type_size)));
                         set_global_symbol_pointer_info (name, declarator_effective_pointer_depth_now (),
-                            declarator_effective_pointed_size_now (parsed_type_size, object_fields, object_field_count));
+                            declarator_effective_pointed_size_now (parsed_type_size, object_fields, object_field_count), parsed_type_size);
                         set_global_symbol_tag_name (name, parsed_type_tag_name);
                         set_global_symbol_unsigned (name, declarator_is_pointer ? 0 : parsed_type_is_unsigned);
                         set_global_symbol_floating (name, (declarator_is_pointer || (declarator_has_function && declarator_function_is_pointer)) ? 0 : parsed_type_is_floating);
@@ -9537,7 +9541,7 @@ static void parse_block (void) {
                     set_local_symbol_array (name, declarator_has_array);
                     set_local_symbol_array_dimensions (name, declarator_has_array ? declarator_array_dimensions : 0);
                     set_local_symbol_array_element_size (name, declarator_array_element_size_now (declared_type_size));
-                    set_local_symbol_pointer_info (name, declared_pointer_depth, declared_pointed_size);
+                    set_local_symbol_pointer_info (name, declared_pointer_depth, declared_pointed_size, declared_type_size);
                     
                     if (!declarator_is_pointer && parsed_type_tag_name[0]) {
                     
@@ -9916,7 +9920,7 @@ static void parse_block (void) {
                     if (add_global_symbol (static_label, GLOBAL_SYMBOL_OBJECT, 0, name_start, name_caret, name_line)) {
                     
                         set_global_symbol_size (static_label, declarator_is_pointer ? DATA_PTR : declarator_object_size (declared_type_size));
-                        set_global_symbol_pointer_info (static_label, declared_pointer_depth, declared_pointed_size);
+                        set_global_symbol_pointer_info (static_label, declared_pointer_depth, declared_pointed_size, declared_type_size);
                         set_global_symbol_unsigned (static_label, (declarator_is_pointer || declarator_has_function) ? 0 : parsed_type_is_unsigned);
                         set_global_symbol_floating (static_label, (declarator_is_pointer || declarator_has_function) ? 0 : parsed_type_is_floating);
                         set_global_symbol_array (static_label, declarator_has_array);
@@ -9943,7 +9947,7 @@ static void parse_block (void) {
                     set_local_symbol_array (name, declarator_has_array);
                     set_local_symbol_array_dimensions (name, declarator_has_array ? declarator_array_dimensions : 0);
                     set_local_symbol_array_element_size (name, declarator_array_element_size_now (parsed_type_size));
-                    set_local_symbol_pointer_info (name, declared_pointer_depth, declared_pointed_size);
+                    set_local_symbol_pointer_info (name, declared_pointer_depth, declared_pointed_size, declared_type_size);
                     
                     if (!declarator_is_pointer && parsed_type_tag_name[0]) {
                     
@@ -11316,7 +11320,7 @@ static void emit_load_subscript_index_to_reg_now (const char *index_reg) {
 
 }
 
-static int emit_parse_postfix_subscript_scaled_address_to_reg_now (const char *reg, int elem_size) {
+static int emit_parse_postfix_subscript_scaled_address_ex_to_reg_now (const char *reg, int elem_size, int pointer_depth, int scalar_size, int *final_elem_size) {
 
     const char *index_reg;
     int saw_subscript = 0;
@@ -11338,15 +11342,32 @@ static int emit_parse_postfix_subscript_scaled_address_to_reg_now (const char *r
         emit_pop_reg_now (reg);
         
         if (tok.kind == TOK_LBRACK) {
+        
             emit_load_indexed_pointer_to_reg_now (reg, index_reg);
+            
+            if (pointer_depth > 0) {
+            
+                pointer_depth--;
+                elem_size = pointer_depth > 1 ? (DATA_PTR & 0x1f) : index_step_size (scalar_size);
+            
+            }
+        
         } else {
             emit_add_indexed_scaled_address_to_reg_now (reg, index_reg, elem_size);
         }
     
     }
     
+    if (final_elem_size) {
+        *final_elem_size = elem_size;
+    }
+    
     return saw_subscript;
 
+}
+
+static int emit_parse_postfix_subscript_scaled_address_to_reg_now (const char *reg, int elem_size) {
+    return emit_parse_postfix_subscript_scaled_address_ex_to_reg_now (reg, elem_size, 0, 0, 0);
 }
 
 static int emit_parse_postfix_subscripts_to_reg_now (const char *reg, int elem_size, int pointer_depth, int pointed_size) {
@@ -11486,7 +11507,7 @@ static int emit_parse_postfix_subscripts_to_reg_dims_now (const char *reg, int e
                 }
                 
                 if (pointed_size > 0) {
-                    elem_size = (pointer_depth > 1) ? (DATA_PTR & 0x1f) : index_step_size (pointed_size);
+                    elem_size = (pointer_depth > 1) ? (DATA_PTR & 0x1f) : index_step_size (scalar_elem_size > 0 ? scalar_elem_size : pointed_size);
                 }
             
             }
@@ -17396,11 +17417,15 @@ static int emit_parse_postfix_copy_source_address_now (const char *reg, struct l
         
             int elem_size = last_elem_size;
             int member_seen = postfix_member_seen;
+            int pointer_depth = 0, scalar_size = 0;
             
             if (!have_address) {
             
                 if (src) {
                 
+                    pointer_depth = src->pointer_depth;
+                    scalar_size = src->scalar_pointed_size;
+                    
                     if (src->is_array) {
                         emit_load_symbol_address_for_copy_now (reg, src, src_name);
                     } else if (src->is_static && src->static_label) {
@@ -17420,6 +17445,9 @@ static int emit_parse_postfix_copy_source_address_now (const char *reg, struct l
                 
                 } else {
                 
+                    pointer_depth = get_global_symbol_pointer_depth (src_name);
+                    scalar_size = global_symbols[find_global_symbol (src_name)].scalar_pointed_size;
+                    
                     if (get_global_symbol_array (src_name)) {
                         emit_load_address_to_reg_now (reg, src_name);
                     } else {
@@ -17446,7 +17474,11 @@ static int emit_parse_postfix_copy_source_address_now (const char *reg, struct l
             
             }
             
-            emit_parse_postfix_subscript_scaled_address_to_reg_now (reg, elem_size);
+            if (pointer_depth > 0 && scalar_size > 0) {
+                emit_parse_postfix_subscript_scaled_address_ex_to_reg_now (reg, elem_size, pointer_depth, scalar_size, &elem_size);
+            } else {
+                emit_parse_postfix_subscript_scaled_address_to_reg_now (reg, elem_size);
+            }
             
             last_elem_size = elem_size;
             last_lvalue_size = elem_size;
@@ -22128,7 +22160,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                         emit_load_local_to_reg (reg, src->offset, DATA_PTR);
                     }
                     
-                    saw_subscript = emit_parse_postfix_subscripts_to_reg_dims_now (reg, elem_size, src->pointed_size, src->pointer_depth, src->pointed_size, src->array_dimensions, src->pointer_depth > 0 ? src->pointed_is_unsigned : src->is_unsigned, &final_subscript_elem_size);
+                    saw_subscript = emit_parse_postfix_subscripts_to_reg_dims_now (reg, elem_size, src->scalar_pointed_size, src->pointer_depth, src->pointed_size, src->array_dimensions, src->pointer_depth > 0 ? src->pointed_is_unsigned : src->is_unsigned, &final_subscript_elem_size);
                     
                     postfix_copy_lvalue_size = index_step_size (final_subscript_elem_size);
                     postfix_copy_lvalue_tag_name = src->is_array ? (src->tag_name ? src->tag_name : src->pointed_tag_name) : src->pointed_tag_name;
@@ -22196,7 +22228,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                         emit_load_global_to_reg (reg, name, DATA_PTR);
                     }
                     
-                    saw_subscript = emit_parse_postfix_subscripts_to_reg_dims_now (reg, elem_size, get_global_symbol_pointed_size (name), get_global_symbol_pointer_depth (name), get_global_symbol_pointed_size (name), get_global_symbol_array_dimensions (name), get_global_symbol_pointer_depth (name) > 0 ? get_global_symbol_pointed_is_unsigned (name) : get_global_symbol_unsigned (name), &final_subscript_elem_size);
+                    saw_subscript = emit_parse_postfix_subscripts_to_reg_dims_now (reg, elem_size, global_symbols[find_global_symbol (name)].scalar_pointed_size, get_global_symbol_pointer_depth (name), get_global_symbol_pointed_size (name), get_global_symbol_array_dimensions (name), get_global_symbol_pointer_depth (name) > 0 ? get_global_symbol_pointed_is_unsigned (name) : get_global_symbol_unsigned (name), &final_subscript_elem_size);
                     
                     postfix_copy_lvalue_size = index_step_size (final_subscript_elem_size);
                     postfix_copy_lvalue_tag_name = get_global_symbol_array (name) ? get_global_symbol_tag_name (name) : 0;
@@ -36569,7 +36601,7 @@ static void parse_for_init_declaration (int scope_start, long stack_start, long 
         set_local_symbol_array_dimensions (name, declarator_has_array ? declarator_array_dimensions : 0);
         set_local_symbol_array_element_size (name, declarator_array_element_size_now (parsed_type_size));
         set_local_symbol_pointer_info (name, declarator_effective_pointer_depth_now (),
-            declarator_effective_pointed_size_now (parsed_type_size, object_fields, object_field_count));
+            declarator_effective_pointed_size_now (parsed_type_size, object_fields, object_field_count), parsed_type_size);
         
         if (!declarator_is_pointer && parsed_type_tag_name[0]) {
         
@@ -42258,7 +42290,7 @@ static void parse_external_after_type (void) {
                     
                     set_global_symbol_size (name, declarator_is_pointer ? DATA_PTR : (parsed_type_is_void ? DATA_VOID : parsed_type_size));
                     set_global_symbol_pointer_info (name, declarator_effective_pointer_depth_now (),
-                        declarator_effective_pointed_size_now (parsed_type_size, object_fields, object_field_count));
+                        declarator_effective_pointed_size_now (parsed_type_size, object_fields, object_field_count), parsed_type_size);
                     set_global_symbol_tag_name (name, parsed_type_tag_name);
                     set_global_symbol_unsigned (name, declarator_is_pointer ? 0 : parsed_type_is_unsigned);
                     set_global_symbol_floating (name, declarator_is_pointer ? 0 : parsed_type_is_floating);
@@ -42284,7 +42316,7 @@ static void parse_external_after_type (void) {
                 
                     set_global_symbol_size (name, declarator_is_pointer ? DATA_PTR : declarator_object_size (parsed_type_size));
                     set_global_symbol_pointer_info (name, declarator_effective_pointer_depth_now (),
-                        declarator_effective_pointed_size_now (parsed_type_size, object_fields, object_field_count));
+                        declarator_effective_pointed_size_now (parsed_type_size, object_fields, object_field_count), parsed_type_size);
                     set_global_symbol_tag_name (name, parsed_type_tag_name);
                     set_global_symbol_unsigned (name, declarator_is_pointer ? 0 : parsed_type_is_unsigned);
                     set_global_symbol_array (name, declarator_has_array);
@@ -42301,7 +42333,7 @@ static void parse_external_after_type (void) {
                 
                     set_global_symbol_size (name, declarator_is_pointer ? DATA_PTR : declarator_object_size (parsed_type_size));
                     set_global_symbol_pointer_info (name, declarator_effective_pointer_depth_now (),
-                        declarator_effective_pointed_size_now (parsed_type_size, object_fields, object_field_count));
+                        declarator_effective_pointed_size_now (parsed_type_size, object_fields, object_field_count), parsed_type_size);
                     set_global_symbol_tag_name (name, parsed_type_tag_name);
                     set_global_symbol_unsigned (name, declarator_is_pointer ? 0 : parsed_type_is_unsigned);
                     set_global_symbol_floating (name, declarator_is_pointer ? 0 : parsed_type_is_floating);
