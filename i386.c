@@ -33458,8 +33458,11 @@ static int emit_statement_ident_immediate_compare_jump_if_false_now (int label) 
     get_token ();
     
     rhs_signedness = rhs_current_operand_signedness_for_warning_now ();
+    
     rhs_report_start = tok.report_start;
     rhs_report_caret = tok.report_caret;
+    
+    rhs_last_explicit_integer_cast_signedness = -1;
     
     if (rhs_current_operand_is_unsigned_now ()) {
         is_unsigned = 1;
