@@ -28719,10 +28719,10 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
             
             if (rhs_last_pointer_depth > 0) {
                 rhs_signedness = -1;
-            } else if (postfix_member_seen) {
-                rhs_signedness = postfix_member_is_unsigned ? 1 : 0;
             } else if (rhs_last_explicit_integer_cast_signedness >= 0) {
                 rhs_signedness = rhs_last_explicit_integer_cast_signedness;
+            } else if (postfix_member_seen) {
+                rhs_signedness = postfix_member_is_unsigned ? 1 : 0;
             }
         
         }
@@ -35692,6 +35692,8 @@ static int emit_statement_ident_immediate_compare_jump_if_false_now (int label) 
     
     if (rhs_last_pointer_depth > 0) {
         rhs_signedness = -1;
+    } else if (rhs_last_explicit_integer_cast_signedness >= 0) {
+        rhs_signedness = rhs_last_explicit_integer_cast_signedness;
     } else if (postfix_member_seen) {
         rhs_signedness = postfix_member_is_unsigned ? 1 : 0;
     }
