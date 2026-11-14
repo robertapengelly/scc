@@ -18862,10 +18862,14 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         
         if (tok.kind != TOK_LPAREN && current_integer_expr_is_foldable_now ()) {
         
+            int is_unsigned = rhs_current_operand_is_unsigned_now ();
             int64_s v = const64_from_current_foldable_expr ();
+            
             expect (TOK_RPAREN, ")");
             
             emit_load_const32_to_reg_now (reg, v);
+            rhs_last_scalar_is_unsigned = is_unsigned;
+            
             return;
         
         }
