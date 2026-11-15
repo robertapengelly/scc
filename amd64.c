@@ -28417,7 +28417,13 @@ static int emit_load_assignment_binary_expression_prec_to_reg (const char *reg, 
     int expr_pointed_size;
     
     is_unsigned = rhs_current_operand_is_unsigned_now ();
+    rhs_last_explicit_integer_cast_signedness = -1;
+    
     emit_load_assignment_rhs_to_reg (reg);
+    
+    if (rhs_last_explicit_integer_cast_signedness >= 0) {
+        is_unsigned = rhs_last_explicit_integer_cast_signedness;
+    }
     
     /*
      * Some statement-condition paths can leave a postfix member chain after
