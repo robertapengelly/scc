@@ -10100,7 +10100,7 @@ static int emit_parse_postfix_subscripts_to_reg_dims_now (const char *reg, int e
     
         int dims_before = array_dimensions;
         
-        saw_subscript = 1;
+        saw_subscript++;
         get_token ();
         
         emit_push_reg_now (reg);
@@ -13832,7 +13832,9 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
             if (tok.kind == TOK_LBRACK) {
             
                 enum token_kind assign_op;
+                
                 int subscript_elem_size;
+                int subscript_count = 0;
                 
                 postfix_value_is_array = 0;
                 
@@ -13857,6 +13859,8 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
                 if (pointer_depth > 1) {
                 
                     emit_parse_postfix_subscripts_to_reg_now (reg, subscript_elem_size, pointer_depth, elem_size);
+                    
+                    subscript_count = emit_parse_postfix_subscripts_to_reg_now (reg, subscript_elem_size, pointer_depth, elem_size);
                     subscript_elem_size = index_step_size (elem_size);
                     
                     if (!is_assignment_operator (tok.kind)) {
@@ -13870,9 +13874,9 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
                     }
                 
                 } else if (array_dimensions > 1) {
-                    emit_parse_postfix_subscripts_to_reg_dims_now (reg, subscript_elem_size, last_found_member_scalar_elem_size, pointer_depth, elem_size, array_dimensions, is_unsigned, &subscript_elem_size);
+                    subscript_count = emit_parse_postfix_subscripts_to_reg_dims_now (reg, subscript_elem_size, last_found_member_scalar_elem_size, pointer_depth, elem_size, array_dimensions, is_unsigned, &subscript_elem_size);
                 } else {
-                    emit_parse_postfix_subscript_scaled_address_to_reg_now (reg, subscript_elem_size);
+                    subscript_count = emit_parse_postfix_subscript_scaled_address_to_reg_now (reg, subscript_elem_size);
                 }
                 
                 if (tok.kind == TOK_ARROW && subscript_elem_size <= (DATA_PTR & 0x1f)) {
@@ -13986,6 +13990,10 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
                  * instruction.types[instruction.operands].
                  */
                 postfix_member_size = subscript_elem_size;
+                
+                if (is_array && array_dimensions > subscript_count) {
+                    postfix_value_is_array = 1;
+                }
                 
                 /*
                  * Subscript of an array member whose element type is a pointer
@@ -21036,6 +21044,10 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                 emit_apply_postfix_member_access_to_reg_now (reg);
                 postfix_copy_lvalue_tag_name = 0;
                 
+                if (!postfix_member_seen && src->is_array && src->array_dimensions > saw_subscript) {
+                    postfix_value_is_array = 1;
+                }
+                
                 if (!postfix_member_seen && emit_store_assignment_to_aggregate_address_now (reg, elem_size, name_start, name_caret, name_line)) {
                 
                     free (name);
@@ -21122,6 +21134,10 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                 
                 emit_apply_postfix_member_access_to_reg_now (reg);
                 postfix_copy_lvalue_tag_name = 0;
+                
+                if (!postfix_member_seen && get_global_symbol_array (name) && get_global_symbol_array_dimensions (name) > saw_subscript) {
+                    postfix_value_is_array = 1;
+                }
                 
                 if (!postfix_member_seen && emit_store_assignment_to_aggregate_address_now (reg, elem_size, name_start, name_caret, name_line)) {
                 
