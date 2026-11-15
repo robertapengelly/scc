@@ -26650,6 +26650,59 @@ static int is_assignment64_binary_operator (enum token_kind k) {
 
 }
 
+static int assignment64_operator_precedence_now (enum token_kind op) {
+
+    switch (op) {
+
+        case TOK_LOGOR:
+        
+            return 1;
+        
+        case TOK_LOGAND:
+        
+            return 2;
+        
+        case TOK_PIPE:
+        
+            return 3;
+        
+        case TOK_CARET:
+        
+            return 4;
+        
+        case TOK_AMPER:
+        
+            return 5;
+        
+        case TOK_EQEQ:      case TOK_NOTEQ:
+        
+            return 6;
+        
+        case TOK_LESS:      case TOK_LTEQ:
+        case TOK_GREATER:   case TOK_GTEQ:
+        
+            return 7;
+        
+        case TOK_LSH:       case TOK_RSH:
+        
+            return 8;
+        
+        case TOK_PLUS:      case TOK_MINUS:
+        
+            return 9;
+        
+        case TOK_STAR:      case TOK_BSLASH:    case TOK_MOD:
+        
+            return 10;
+        
+        default:
+        
+            return 0;
+
+    }
+
+}
+
 static void emit_assignment64_bool_result_to_pair_now (const char *lo, const char *hi) {
 
     if (!state->ofp) {
@@ -26796,14 +26849,14 @@ static void emit_load_assignment_rhs_expression_to_pair_prec_internal (const cha
     emit_load_assignment_rhs_to_pair (lo, hi);
     
     while (is_assignment64_binary_operator (tok.kind) &&
-        (min_prec == 1 || (is_arithmetic_binary_operator (tok.kind) && arithmetic_operator_precedence_now (tok.kind) >= min_prec)) &&
+        assignment64_operator_precedence_now (tok.kind) >= min_prec &&
             !(assignment64_stop_before_condition_operator && is_assignment64_condition_stop_operator (tok.kind)) &&
                 !(assignment64_stop_before_logical_operator == assignment64_expression_depth &&
                     (tok.kind == TOK_LOGAND || tok.kind == TOK_LOGOR))) {
     
         op = tok.kind;
         
-        prec = arithmetic_operator_precedence_now (op);
+        prec = assignment64_operator_precedence_now (op);
         get_token ();
         
         if (!current_pair_is_eax_edx) {
@@ -26870,11 +26923,7 @@ static void emit_load_assignment_rhs_expression_to_pair_prec_internal (const cha
             emit_push_reg_now ("eax");
             emit_push_reg_now ("edx");
             
-            if (is_arithmetic_binary_operator (op)) {
-                emit_load_assignment_rhs_expression_to_pair_prec_internal ("ebx", "ecx", is_unsigned, prec + 1);
-            } else {
-                emit_load_assignment_rhs_to_pair ("ebx", "ecx");
-            }
+            emit_load_assignment_rhs_expression_to_pair_prec_internal ("ebx", "ecx", is_unsigned, prec + 1);
             
             emit_pop_reg_now ("edx");
             emit_pop_reg_now ("eax");
