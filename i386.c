@@ -26776,9 +26776,10 @@ static void emit_assignment64_compare_op_to_pair_now (enum token_kind op, const 
 
 }
 
-static void emit_load_assignment_rhs_expression_to_pair_internal (const char *lo, const char *hi, int is_unsigned) {
+static void emit_load_assignment_rhs_expression_to_pair_prec_internal (const char *lo, const char *hi, int is_unsigned, int min_prec) {
 
     enum token_kind op;
+    int prec;
     
     int result_pair_is_eax_edx = (strcmp (lo, "eax") == 0 && strcmp (hi, "edx") == 0);
     int current_pair_is_eax_edx = result_pair_is_eax_edx;
@@ -26795,11 +26796,14 @@ static void emit_load_assignment_rhs_expression_to_pair_internal (const char *lo
     emit_load_assignment_rhs_to_pair (lo, hi);
     
     while (is_assignment64_binary_operator (tok.kind) &&
-        !(assignment64_stop_before_condition_operator && is_assignment64_condition_stop_operator (tok.kind)) &&
-            !(assignment64_stop_before_logical_operator == assignment64_expression_depth &&
-                (tok.kind == TOK_LOGAND || tok.kind == TOK_LOGOR))) {
+        (min_prec == 1 || (is_arithmetic_binary_operator (tok.kind) && arithmetic_operator_precedence_now (tok.kind) >= min_prec)) &&
+            !(assignment64_stop_before_condition_operator && is_assignment64_condition_stop_operator (tok.kind)) &&
+                !(assignment64_stop_before_logical_operator == assignment64_expression_depth &&
+                    (tok.kind == TOK_LOGAND || tok.kind == TOK_LOGOR))) {
     
         op = tok.kind;
+        
+        prec = arithmetic_operator_precedence_now (op);
         get_token ();
         
         if (!current_pair_is_eax_edx) {
@@ -26866,7 +26870,11 @@ static void emit_load_assignment_rhs_expression_to_pair_internal (const char *lo
             emit_push_reg_now ("eax");
             emit_push_reg_now ("edx");
             
-            emit_load_assignment_rhs_to_pair ("ebx", "ecx");
+            if (is_arithmetic_binary_operator (op)) {
+                emit_load_assignment_rhs_expression_to_pair_prec_internal ("ebx", "ecx", is_unsigned, prec + 1);
+            } else {
+                emit_load_assignment_rhs_to_pair ("ebx", "ecx");
+            }
             
             emit_pop_reg_now ("edx");
             emit_pop_reg_now ("eax");
@@ -26903,7 +26911,7 @@ static void emit_load_assignment_rhs_expression_to_pair_internal (const char *lo
     
     }
     
-    if (tok.kind == TOK_QMARK) {
+    if (min_prec == 1 && tok.kind == TOK_QMARK) {
     
         int false_label = anon_label++;
         int end_label = anon_label++;
@@ -26987,6 +26995,10 @@ static void emit_load_assignment_rhs_expression_to_pair_internal (const char *lo
         rhs_last_expression_is_wide = 1;
     }
 
+}
+
+static void emit_load_assignment_rhs_expression_to_pair_internal (const char *lo, const char *hi, int is_unsigned) {
+    emit_load_assignment_rhs_expression_to_pair_prec_internal (lo, hi, is_unsigned, 1);
 }
 
 static void emit_load_assignment_rhs_expression_to_pair (const char *lo, const char *hi, int is_unsigned) {
