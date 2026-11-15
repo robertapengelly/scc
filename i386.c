@@ -11776,12 +11776,7 @@ static void emit_load_postfix_lvalue_address_to_pair_ex_now (const char *lo, con
     } else {
     
         emit_load_deref_reg_ex_now (lo, size, is_unsigned);
-        
-        if (state->syntax & ASM_SYNTAX_INTEL) {
-            fprintf (state->ofp, "    xor %s, %s\n", hi, hi);
-        } else {
-            fprintf (state->ofp, "    xorl %%%s, %%%s\n", hi, hi);
-        }
+        emit_extend_pair_high_from_low (lo, hi, size, is_unsigned);
     
     }
 
@@ -12824,7 +12819,7 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
                 
                 }
                 
-                emit_load_postfix_lvalue_address_to_pair_ex_now (lo, hi, source_size, src ? (src->pointer_depth > 0 ? src->pointed_is_unsigned : src->is_unsigned) : (get_global_symbol_pointer_depth (name) > 0 ? get_global_symbol_pointed_is_unsigned (name) : get_global_symbol_unsigned (name)));
+                emit_load_postfix_lvalue_address_to_pair_ex_now (lo, hi, source_size, postfix_member_seen ? postfix_member_is_unsigned : (src ? (src->pointer_depth > 0 ? src->pointed_is_unsigned : src->is_unsigned) : (get_global_symbol_pointer_depth (name) > 0 ? get_global_symbol_pointed_is_unsigned (name) : get_global_symbol_unsigned (name))));
                 
                 free (name);
                 return;
