@@ -26396,6 +26396,27 @@ static void emit_integer_pair_to_floating_stack_now (const char *lo, const char 
 
 }
 
+static void emit_load_assignment_logical_operand_to_reg (const char *reg) {
+
+    if (current_expression_mentions_64bit_symbol_now () || tok.kind == TOK_CLLONG || tok.kind == TOK_CULLONG ||
+        source_starts_64bit_integer_cast_now (tok.start) || source_starts_64bit_integer_cast_now (tok.caret)) {
+    
+        int old_stop = assignment64_stop_before_logical_operator;
+        assignment64_stop_before_logical_operator = assignment64_expression_depth + 1;
+        
+        emit_load_assignment_rhs_expression_to_pair ("eax", "edx", rhs_current_operand_is_unsigned_now ());
+        assignment64_stop_before_logical_operator = old_stop;
+        
+        if (strcmp (reg, "eax") != 0) {
+            emit_mov_reg_to_reg_now (reg, "eax");
+        }
+    
+    } else {
+        emit_load_assignment_compare_expression_to_reg (reg);
+    }
+
+}
+
 static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
 
     int false_label;
@@ -26488,7 +26509,7 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
             get_token ();
             
             emit_test_reg_jump_zero_now (reg, false_label);
-            emit_load_assignment_compare_expression_to_reg (reg);
+            emit_load_assignment_logical_operand_to_reg (reg);
             emit_test_reg_jump_zero_now (reg, false_label);
             emit_mov_imm_to_reg_now (reg, 1);
             emit_statement_jump (end_label);
@@ -26509,7 +26530,7 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
             get_token ();
             
             emit_test_reg_jump_nonzero_now (reg, true_label);
-            emit_load_assignment_compare_expression_to_reg (reg);
+            emit_load_assignment_logical_operand_to_reg (reg);
             emit_test_reg_jump_nonzero_now (reg, true_label);
             emit_mov_imm_to_reg_now (reg, 0);
             emit_statement_jump (end_label);
