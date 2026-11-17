@@ -14976,6 +14976,8 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
                     emit_parse_postfix_subscript_scaled_address_to_reg_now (reg, subscript_elem_size);
                 }
                 
+                postfix_member_seen = 1;
+                
                 if (tok.kind == TOK_ARROW && subscript_elem_size <= (DATA_PTR & 0x1f)) {
                 
                     emit_load_deref_reg_now (reg, DATA_PTR & 0x1f);
@@ -20193,11 +20195,17 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             int subscript_pointer_depth = rhs_last_pointer_depth;
             int subscript_elem_size = rhs_last_pointed_size;
             
+            const char *subscript_tag_name = postfix_copy_lvalue_tag_name;
+            int subscript_object_size = postfix_copy_lvalue_size;
+            
             if (subscript_elem_size <= 0) {
                 subscript_elem_size = DATA_INT & 0x1f;
             }
             
             emit_parse_postfix_subscript_scaled_address_to_reg_now (reg, subscript_elem_size);
+            
+            postfix_copy_lvalue_size = subscript_object_size;
+            postfix_copy_lvalue_tag_name = subscript_tag_name;
             
             if (is_assignment_operator (tok.kind)) {
             
@@ -20277,7 +20285,10 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             
             }
             
-            emit_load_deref_reg_ex_now (reg, subscript_elem_size, pending_cast_subscript_is_unsigned >= 0 ? pending_cast_subscript_is_unsigned : 0);
+            if (tok.kind != TOK_DOT) {
+                emit_load_deref_reg_ex_now (reg, subscript_elem_size, pending_cast_subscript_is_unsigned >= 0 ? pending_cast_subscript_is_unsigned : 0);
+            }
+            
             pending_cast_subscript_is_unsigned = -1;
             
             if (subscript_pointer_depth > 0) {
@@ -21246,6 +21257,9 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                     clear_rhs_last_pointer_info ();
                 }
                 
+                postfix_copy_lvalue_size = lhs_sym->pointed_size;
+                postfix_copy_lvalue_tag_name = lhs_sym->pointed_tag_name;
+                
                 if (emit_handle_subscript_after_loaded_pointer_to_reg_now (reg, lhs_sym->pointer_depth > 0 ? lhs_sym->pointer_depth - 1 : 0, lhs_sym->pointed_size, lhs_sym->pointed_is_unsigned, 0)) {
                 
                     free (lhs_name);
@@ -21284,6 +21298,9 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                 } else {
                     clear_rhs_last_pointer_info ();
                 }
+                
+                postfix_copy_lvalue_size = get_global_symbol_pointed_size (lhs_name);
+                postfix_copy_lvalue_tag_name = get_global_symbol_tag_name (lhs_name);
                 
                 if (emit_handle_subscript_after_loaded_pointer_to_reg_now (reg, get_global_symbol_pointer_depth (lhs_name) > 0 ? get_global_symbol_pointer_depth (lhs_name) - 1 : 0, get_global_symbol_pointed_size (lhs_name), get_global_symbol_pointed_is_unsigned (lhs_name), 0)) {
                 
