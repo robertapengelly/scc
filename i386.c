@@ -36468,6 +36468,24 @@ static void emit_statement_jump_if_false (int label) {
         
         }
         
+        while (is_arithmetic_binary_operator (tok.kind)) {
+        
+            int prec = arithmetic_operator_precedence_now (tok.kind);
+            
+            op = tok.kind;
+            get_token ();
+            
+            emit_push_reg_now ("eax");
+            
+            if (emit_load_assignment_binary_expression_prec_to_reg ("edx", prec + 1)) {
+                is_unsigned = 1;
+            }
+            
+            emit_pop_reg_now ("eax");
+            emit_assignment_binary_op (op, is_unsigned);
+        
+        }
+        
         if (token_is_statement_compare_operator (tok.kind)) {
         
             op = tok.kind;
