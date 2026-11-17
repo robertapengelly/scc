@@ -14636,7 +14636,7 @@ static void emit_store_reg_to_deref_reg_now (const char *addr_reg, const char *v
 
 }
 
-static int emit_handle_subscript_after_loaded_pointer_to_reg_now (const char *reg, int pointer_depth, int pointed_size, int pointed_is_unsigned) {
+static int emit_handle_subscript_after_loaded_pointer_to_reg_now (const char *reg, int pointer_depth, int pointed_size, int pointed_is_unsigned, const char *object_tag_name) {
 
     int subscript_elem_size;
     
@@ -14651,6 +14651,95 @@ static int emit_handle_subscript_after_loaded_pointer_to_reg_now (const char *re
     }
     
     emit_parse_postfix_subscript_scaled_address_to_reg_now (reg, subscript_elem_size);
+    
+    if (tok.kind == TOK_DOT && pointer_depth == 1 && object_tag_name) {
+    
+        char *member;
+        
+        const char *member_start;
+        const char *member_caret;
+        
+        unsigned long member_line;
+        
+        int member_offset = 0;
+        int member_size = DATA_INT & 0x1f;
+        int member_elem_size = DATA_INT & 0x1f;
+        int member_pointer_depth = 0;
+        int member_is_array = 0;
+        int member_is_floating = 0;
+        int member_is_unsigned;
+        
+        enum token_kind op;
+        
+        get_token ();
+        
+        member_start = tok.start;
+        member_caret = tok.caret;
+        member_line = get_line_number ();
+        
+        if (tok.kind != TOK_IDENT) {
+        
+            report_line_at (get_filename (), member_line, REPORT_ERROR, member_start, member_caret, "expected member name after .");
+            return 1;
+        
+        }
+        
+        member = xstrdup (tok.ident);
+        get_token ();
+        
+        if (!find_member_info_ex_bounded (member, pointed_size, object_tag_name, &member_offset, &member_size, &member_elem_size, &member_pointer_depth, &member_is_array, &member_is_floating)) {
+        
+            report_line_at (get_filename (), member_line, REPORT_ERROR, member_start, member_caret, "unknown member '%s'", member);
+            
+            free (member);
+            return 1;
+        
+        }
+        
+        member_is_unsigned = last_found_member_is_unsigned;
+        free (member);
+        
+        if (is_assignment_operator (tok.kind)) {
+        
+            op = tok.kind;
+            get_token ();
+            
+            emit_push_reg_now (reg);
+            
+            if (op == TOK_ASSIGN && member_is_floating) {
+            
+                emit_load_floating_rhs_expression_now (member_size);
+                emit_pop_reg_now ("edx");
+                
+                emit_store_floating_member_to_addr_reg_now ("edx", member_offset, member_size);
+                return 1;
+            
+            }
+            
+            if (op == TOK_ASSIGN) {
+                emit_load_assignment_rhs_expression_to_reg (reg);
+            } else {
+            
+                emit_load_member_from_addr_reg_ex_now (reg, reg, member_offset, member_size, member_is_unsigned);
+                emit_push_reg_now (reg);
+                
+                emit_load_assignment_rhs_expression_to_reg ("edx");
+                emit_pop_reg_now (reg);
+                
+                emit_assignment_binary_op (op, 0);
+            
+            }
+            
+            emit_pop_reg_now ("edx");
+            emit_store_member_to_addr_reg_now ("edx", member_offset, reg, member_size);
+        
+        } else {
+            emit_load_member_from_addr_reg_ex_now (reg, reg, member_offset, member_size, member_is_unsigned);
+        }
+        
+        return 1;
+    
+    }
     
     if (is_assignment_operator (tok.kind)) {
     
@@ -20006,7 +20095,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                     clear_rhs_last_pointer_info ();
                 }
                 
-                if (emit_handle_subscript_after_loaded_pointer_to_reg_now (reg, lhs_sym->pointer_depth > 0 ? lhs_sym->pointer_depth - 1 : 0, lhs_sym->pointed_size, lhs_sym->pointed_is_unsigned)) {
+                if (emit_handle_subscript_after_loaded_pointer_to_reg_now (reg, lhs_sym->pointer_depth > 0 ? lhs_sym->pointer_depth - 1 : 0, lhs_sym->pointed_size, lhs_sym->pointed_is_unsigned, 0)) {
                 
                     free (lhs_name);
                     return;
@@ -20046,7 +20135,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                     clear_rhs_last_pointer_info ();
                 }
                 
-                if (emit_handle_subscript_after_loaded_pointer_to_reg_now (reg, get_global_symbol_pointer_depth (lhs_name) > 0 ? get_global_symbol_pointer_depth (lhs_name) - 1 : 0, get_global_symbol_pointed_size (lhs_name), get_global_symbol_pointed_is_unsigned (lhs_name))) {
+                if (emit_handle_subscript_after_loaded_pointer_to_reg_now (reg, get_global_symbol_pointer_depth (lhs_name) > 0 ? get_global_symbol_pointer_depth (lhs_name) - 1 : 0, get_global_symbol_pointed_size (lhs_name), get_global_symbol_pointed_is_unsigned (lhs_name), 0)) {
                 
                     free (lhs_name);
                     return;
@@ -29915,7 +30004,7 @@ static int parse_parenthesized_deref_subscript_statement (void) {
     }
     
     emit_load_deref_reg_now ("eax", DATA_PTR & 0x1f);
-    emit_handle_subscript_after_loaded_pointer_to_reg_now ("eax", pointer_depth - 1, pointed_size, src ? src->pointed_is_unsigned : get_global_symbol_pointed_is_unsigned (name));
+    emit_handle_subscript_after_loaded_pointer_to_reg_now ("eax", pointer_depth - 1, pointed_size, src ? src->pointed_is_unsigned : get_global_symbol_pointed_is_unsigned (name), src ? src->pointed_tag_name : get_global_symbol_tag_name (name));
     
     free (name);
     return 1;
