@@ -13874,7 +13874,9 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
                     subscript_count = emit_parse_postfix_subscript_scaled_address_to_reg_now (reg, subscript_elem_size);
                 }
                 
-                postfix_member_seen = 1;
+                if (tok.kind != TOK_RPAREN) {
+                    postfix_member_seen = 1;
+                }
                 
                 if (tok.kind == TOK_ARROW && subscript_elem_size <= (DATA_PTR & 0x1f)) {
                 
