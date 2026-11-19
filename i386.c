@@ -10144,7 +10144,7 @@ static int emit_parse_postfix_subscripts_to_reg_dims_now (const char *reg, int e
         
         } else {
         
-            if (tok.kind == TOK_ARROW || tok.kind == TOK_DOT) {
+            if (tok.kind == TOK_ASSIGN || tok.kind == TOK_ARROW || tok.kind == TOK_DOT) {
             
                 /*
                  * A following member access needs the address of the selected
@@ -14365,6 +14365,35 @@ static int rhs_text_is_plain_aggregate_lvalue_now (const char *p) {
 
 static int emit_aggregate_copy_from_current_rhs_to_addr_reg_now (const char *addr_reg, int offset, int size);
 static int emit_parse_postfix_copy_source_address_now (const char *reg, struct local_symbol *src, const char *src_name, const char *name_start, const char *name_caret, unsigned long name_line);
+
+static int emit_store_assignment_to_subscript_now (const char *reg, int size, int is_unsigned, int pointer_depth, int pointed_size) {
+
+    const char *addr_reg;
+    size = index_step_size (size);
+    
+    if (tok.kind != TOK_ASSIGN || size > (DATA_PTR & 0x1f)) {
+        return 0;
+    }
+    
+    addr_reg = strcmp (reg, "edx") == 0 ? "ecx" : "edx";
+    get_token ();
+    
+    emit_push_reg_now (reg);
+    
+    emit_load_assignment_rhs_expression_to_reg (reg);
+    emit_pop_reg_now (addr_reg);
+    
+    emit_apply_integer_cast_to_reg_now (reg, size, is_unsigned);
+    emit_store_reg_to_deref_reg_now (addr_reg, reg, size);
+    
+    postfix_member_seen = 0;
+    
+    set_rhs_last_pointer_info (pointer_depth > 0 ? pointer_depth : 0, pointed_size);
+    rhs_last_scalar_is_unsigned = is_unsigned;
+    
+    return 1;
+
+}
 
 static int emit_store_assignment_to_aggregate_address_now (const char *addr_reg, int size, const char *name_start, const char *name_caret, unsigned long name_line) {
 
@@ -21151,6 +21180,13 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                     postfix_value_is_array = 1;
                 }
                 
+                if (!postfix_member_seen && saw_subscript && emit_store_assignment_to_subscript_now (reg, final_subscript_elem_size, src->pointer_depth > 0 ? src->pointed_is_unsigned : src->is_unsigned, src->pointer_depth - saw_subscript + src->array_dimensions, src->pointed_size)) {
+                
+                    free (name);
+                    return;
+                
+                }
+                
                 if (!postfix_member_seen && emit_store_assignment_to_aggregate_address_now (reg, elem_size, name_start, name_caret, name_line)) {
                 
                     free (name);
@@ -21240,6 +21276,13 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                 
                 if (!postfix_member_seen && get_global_symbol_array (name) && get_global_symbol_array_dimensions (name) > saw_subscript) {
                     postfix_value_is_array = 1;
+                }
+                
+                if (!postfix_member_seen && saw_subscript && emit_store_assignment_to_subscript_now (reg, final_subscript_elem_size, get_global_symbol_pointer_depth (name) > 0 ? get_global_symbol_pointed_is_unsigned (name) : get_global_symbol_unsigned (name), get_global_symbol_pointer_depth (name) - saw_subscript + get_global_symbol_array_dimensions (name), get_global_symbol_pointed_size (name))) {
+                
+                    free (name);
+                    return;
+                
                 }
                 
                 if (!postfix_member_seen && emit_store_assignment_to_aggregate_address_now (reg, elem_size, name_start, name_caret, name_line)) {
@@ -34705,7 +34748,12 @@ static void parse_for_header_expression_until (enum token_kind end_token) {
                     emit_load_global_to_reg ("eax", name, lhs_size);
                 }
                 
-                emit_load_assignment_rhs_to_reg ("edx");
+                emit_push_reg_now ("eax");
+                emit_load_assignment_rhs_expression_to_reg ("edx");
+                
+                emit_scale_reg_for_pointer_compound_assignment_now ("edx", lhs, name, op);
+                emit_pop_reg_now ("eax");
+                
                 emit_assignment_binary_op (op, lhs ? lhs->is_unsigned : get_global_symbol_unsigned (name));
             
             }
