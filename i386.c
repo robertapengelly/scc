@@ -28844,7 +28844,7 @@ static int parse_indirect_assignment_statement (void) {
     int deref_size = DATA_INT & 0x1f;
     int deref_is_floating = 0;
     
-    enum token_kind op;
+    enum token_kind op, prefix_op = TOK_EOF;
     int global_index;
     
     if (tok.kind != TOK_STAR) {
@@ -28981,9 +28981,16 @@ static int parse_indirect_assignment_statement (void) {
     
     }
     
+    if (tok.kind == TOK_INCR || tok.kind == TOK_DECR) {
+    
+        prefix_op = tok.kind;
+        get_token ();
+    
+    }
+    
     if (tok.kind != TOK_IDENT) {
     
-        if (tok.kind == TOK_LPAREN) {
+        if (prefix_op == TOK_EOF && tok.kind == TOK_LPAREN) {
         
             if (paren_text_starts_type_name_now ()) {
                 return parse_cast_indirect_assignment_statement (0);
@@ -29011,7 +29018,7 @@ static int parse_indirect_assignment_statement (void) {
     
     get_token ();
     
-    if (tok.kind == TOK_INCR || tok.kind == TOK_DECR) {
+    if (prefix_op == TOK_EOF && (tok.kind == TOK_INCR || tok.kind == TOK_DECR)) {
     
         enum token_kind postfix_op = tok.kind;
         int step = 1;
@@ -29164,7 +29171,7 @@ static int parse_indirect_assignment_statement (void) {
     
     }
     
-    if (tok.kind == TOK_ARROW || tok.kind == TOK_DOT) {
+    if (prefix_op == TOK_EOF && (tok.kind == TOK_ARROW || tok.kind == TOK_DOT)) {
     
         enum token_kind member_op = tok.kind;
         enum token_kind postfix_op = TOK_EOF;
@@ -29419,6 +29426,10 @@ static int parse_indirect_assignment_statement (void) {
     
     if (state->ofp) {
     
+        if (prefix_op != TOK_EOF) {
+            emit_incdec_pointer_symbol_now (lhs, name, prefix_op, deref_size);
+        }
+        
         if (lhs) {
         
             if (lhs->is_static && lhs->static_label) {
