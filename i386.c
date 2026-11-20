@@ -24811,7 +24811,7 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
     
     int arg_is_floating, ch, i;
     int arg_starts_address_of;
-    int arg_bytes;
+    int arg_bytes, arg_narrows_wide_integer;
     
     int saved_arg_assignment32_stop_before_condition_operator;
     int saved_arg_assignment64_stop_before_condition_operator;
@@ -25013,6 +25013,7 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
             
             } else {
             
+                arg_narrows_wide_integer = 0;
                 arg_is_floating = rhs_current_operand_is_floating_now ();
                 arg_bytes = arg_is_floating ? (DATA_DOUBLE & 0x1f) : DATA_PTR;
                 
@@ -25041,9 +25042,8 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                 } else if (!use_inline && current_argument_starts_64bit_integer_now ()) {
                 
                     /*
-                     * No prototype does not make a 64-bit expression a 32-bit
-                     * argument.  Calls such as kprintf ("%lld", (uint64_t)x)
-                     * still have to pass the full edx:eax pair.
+                     * Evaluate the full 64-bit expression before narrowing
+                     * it to a fixed 32-bit parameter, if necessary.
                      */
                     arg_is_floating = 0;
                     arg_bytes = DATA_LLONG & 0x1f;
@@ -25052,6 +25052,13 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                     
                     if (!rhs_last_expression_is_wide) {
                         arg_bytes = DATA_PTR;
+                    } else if (get_global_symbol_has_prototype (name) && argc < get_global_symbol_param_count (name) &&
+                        get_global_symbol_param_size (name, argc) == (DATA_PTR & 0x1f) &&
+                            !get_global_symbol_param_floating (name, argc) && !get_global_symbol_param_pointer_depth (name, argc)) {
+                    
+                        arg_bytes = DATA_PTR;
+                        arg_narrows_wide_integer = 1;
+                    
                     }
                 
                 } else if (arg_is_floating) {
@@ -25073,6 +25080,8 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                         emit_push_reg_now ("edx");
                         emit_push_reg_now ("eax");
                     
+                    } else if (arg_narrows_wide_integer) {
+                        emit_push_reg_now ("eax");
                     } else if (!use_inline && !arg_is_floating && !arg_starts_address_of && !rhs_last_pointer_depth && postfix_member_seen && postfix_member_pointer_depth == 0 && !postfix_value_is_array && postfix_member_size > (DATA_PTR & 0x1f)) {
                     
                         arg_bytes = postfix_member_size;
