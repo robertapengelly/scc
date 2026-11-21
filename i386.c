@@ -11866,11 +11866,24 @@ static int source_starts_double_deref_at_now (const char *p);
 static int emit_load_deref_assignment_expression_to_reg_now (const char *reg);
 static int emit_statement_rhs_const32_to_edx_if_possible (void);
 
+static int emit_load_parenthesized_deref_postfix_incdec_subscript_to_reg_now (const char *reg, const char *hi);
+static int source_starts_lparen_deref_postfix_incdec_at (const char *p);
+
 static void emit_floating_stack_to_int_pair_now (const char *lo, const char *hi);
 static void emit_integer_pair_to_floating_stack_now (const char *lo, const char *hi, int size);
 
 static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
 
+    if (tok.kind == TOK_LPAREN && source_starts_lparen_deref_postfix_incdec_at (tok.caret)) {
+    
+        get_token ();
+        
+        if (emit_load_parenthesized_deref_postfix_incdec_subscript_to_reg_now (lo, hi)) {
+            return;
+        }
+    
+    }
+    
     if (_accept (TOK_LPAREN)) {
     
         if (token_starts_type_name ()) {
@@ -17541,7 +17554,7 @@ static int source_starts_lparen_deref_postfix_incdec_at (const char *p) {
 
 }
 
-static int emit_load_parenthesized_deref_postfix_incdec_subscript_to_reg_now (const char *reg) {
+static int emit_load_parenthesized_deref_postfix_incdec_subscript_to_reg_now (const char *reg, const char *hi) {
 
     enum token_kind op;
     char *name;
@@ -17554,6 +17567,7 @@ static int emit_load_parenthesized_deref_postfix_incdec_subscript_to_reg_now (co
     
     int global_index;
     int pointer_depth = 0;
+    int pointed_is_unsigned = 0;
     int pointed_size = DATA_INT & 0x1f;
     int elem_size = DATA_INT & 0x1f;
     int lvalue_size = DATA_INT & 0x1f;
@@ -17611,11 +17625,13 @@ static int emit_load_parenthesized_deref_postfix_incdec_subscript_to_reg_now (co
     
         pointer_depth = src->pointer_depth;
         pointed_size = src->pointed_size;
+        pointed_is_unsigned = src->pointed_is_unsigned;
     
     } else if (global_index >= 0) {
     
         pointer_depth = get_global_symbol_pointer_depth (name);
         pointed_size = get_global_symbol_pointed_size (name);
+        pointed_is_unsigned = get_global_symbol_pointed_is_unsigned (name);
     
     } else {
     
@@ -17659,7 +17675,7 @@ static int emit_load_parenthesized_deref_postfix_incdec_subscript_to_reg_now (co
         reg = "eax";
     }
     
-    addr_reg = (strcmp (reg, "edx") == 0) ? "ecx" : "edx";
+    addr_reg = hi ? "ecx" : ((strcmp (reg, "edx") == 0) ? "ecx" : "edx");
     
     if (src) {
     
@@ -17673,21 +17689,57 @@ static int emit_load_parenthesized_deref_postfix_incdec_subscript_to_reg_now (co
         emit_load_global_to_reg (addr_reg, name, DATA_PTR);
     }
     
-    emit_load_member_from_addr_reg_now (reg, addr_reg, 0, lvalue_size);
-    emit_push_reg_now (reg);
+    if (hi && lvalue_size == (DATA_LLONG & 0x1f)) {
     
-    if (state->ofp) {
+        emit_load_pair_from_deref_reg_now (reg, hi, addr_reg);
+        
+        emit_push_reg_now (reg);
+        emit_push_reg_now (hi);
+        
+        if (state->ofp) {
+        
+            if (state->syntax & ASM_SYNTAX_INTEL) {
+            
+                fprintf (state->ofp, op == TOK_INCR ? "    add %s, 1\n" : "    sub %s, 1\n", reg);
+                fprintf (state->ofp, op == TOK_INCR ? "    adc %s, 0\n" : "    sbb %s, 0\n", hi);
+            
+            } else {
+            
+                fprintf (state->ofp, op == TOK_INCR ? "    addl $1, %%%s\n" : "    subl $1, %%%s\n", reg);
+                fprintf (state->ofp, op == TOK_INCR ? "    adcl $0, %%%s\n" : "    sbbl $0, %%%s\n", hi);
+            
+            }
+        
+        }
+        
+        emit_store_pair_to_deref_reg_now (addr_reg, reg, hi);
+        
+        emit_pop_reg_now (hi);
+        emit_pop_reg_now (reg);
     
-        if (state->syntax & ASM_SYNTAX_INTEL) {
-            fprintf (state->ofp, op == TOK_INCR ? "    add %s, %d\n" : "    sub %s, %d\n", reg, step);
-        } else {
-            fprintf (state->ofp, op == TOK_INCR ? "    addl $%d, %%%s\n" : "    subl $%d, %%%s\n", step, reg);
+    } else {
+    
+        emit_load_member_from_addr_reg_now (reg, addr_reg, 0, lvalue_size);
+        emit_push_reg_now (reg);
+        
+        if (state->ofp) {
+        
+            if (state->syntax & ASM_SYNTAX_INTEL) {
+                fprintf (state->ofp, op == TOK_INCR ? "    add %s, %d\n" : "    sub %s, %d\n", reg, step);
+            } else {
+                fprintf (state->ofp, op == TOK_INCR ? "    addl $%d, %%%s\n" : "    subl $%d, %%%s\n", step, reg);
+            }
+        
+        }
+        
+        emit_store_reg_to_deref_reg_now (addr_reg, reg, lvalue_size);
+        emit_pop_reg_now (reg);
+        
+        if (hi) {
+            emit_extend_pair_high_from_low (reg, hi, lvalue_size, pointer_depth > 1 || pointed_is_unsigned);
         }
     
     }
-    
-    emit_store_reg_to_deref_reg_now (addr_reg, reg, lvalue_size);
-    emit_pop_reg_now (reg);
     
     if (tok.kind == TOK_LBRACK) {
         emit_parse_postfix_subscripts_to_reg_now (reg, elem_size, pointer_depth - 1, pointed_size);
@@ -18639,7 +18691,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
     
         get_token ();
         
-        if (emit_load_parenthesized_deref_postfix_incdec_subscript_to_reg_now (reg)) {
+        if (emit_load_parenthesized_deref_postfix_incdec_subscript_to_reg_now (reg, 0)) {
             return;
         }
     
@@ -18702,7 +18754,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             int global_index;
             int looks_like_call = 0;
             
-            if (emit_load_parenthesized_deref_postfix_incdec_subscript_to_reg_now (reg)) {
+            if (emit_load_parenthesized_deref_postfix_incdec_subscript_to_reg_now (reg, 0)) {
                 return;
             }
             
@@ -37908,12 +37960,11 @@ static void parse_statement (void) {
         return;
     }
     
-    
     if (tok.kind == TOK_LPAREN && source_starts_lparen_deref_postfix_incdec_at (tok.caret)) {
     
         get_token ();
         
-        if (emit_load_parenthesized_deref_postfix_incdec_subscript_to_reg_now ("eax")) {
+        if (emit_load_parenthesized_deref_postfix_incdec_subscript_to_reg_now ("eax", 0)) {
         
             expect_semi_or_recover ();
             return;
