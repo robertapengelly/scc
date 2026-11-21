@@ -26432,6 +26432,8 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
             }
             
             emit_compare_eax_edx_to_reg (op, reg, is_unsigned);
+            rhs_last_scalar_is_unsigned = 0;
+            
             return;
         
         }
@@ -26452,18 +26454,22 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
                 rhs_signedness = rhs_last_explicit_integer_cast_signedness;
             } else if (postfix_member_seen) {
                 rhs_signedness = postfix_member_is_unsigned ? 1 : 0;
+            } else if (rhs_signedness < 0) {
+                rhs_signedness = rhs_last_scalar_is_unsigned;
             }
         
         }
         
         warn_signedness_comparison_values_now (lhs_signedness, rhs_signedness, rhs_report_start, rhs_report_caret);
         
-        if (lhs_pointer_depth > 0 || rhs_last_pointer_depth > 0) {
+        if (rhs_signedness == 1 || lhs_pointer_depth > 0 || rhs_last_pointer_depth > 0) {
             is_unsigned = 1;
         }
         
         emit_pop_reg_now ("eax");
+        
         emit_compare_eax_edx_to_reg (op, reg, is_unsigned);
+        rhs_last_scalar_is_unsigned = 0;
     
     }
 
@@ -26772,6 +26778,7 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
             emit_mov_imm_to_reg_now (reg, 0);
             emit_statement_label (end_label);
             
+            rhs_last_scalar_is_unsigned = 0;
             continue;
         
         }
@@ -27088,6 +27095,7 @@ static void emit_load_assignment_rhs_expression_to_pair_prec_internal (const cha
 
     enum token_kind op;
     int prec;
+    int result_unsigned = is_unsigned;
     
     int result_pair_is_eax_edx = (strcmp (lo, "eax") == 0 && strcmp (hi, "edx") == 0);
     int current_pair_is_eax_edx = result_pair_is_eax_edx;
@@ -27097,6 +27105,7 @@ static void emit_load_assignment_rhs_expression_to_pair_prec_internal (const cha
         int64_s v = const64_from_current_foldable_expr ();
         emit_load_const64_to_pair_now (lo, hi, v);
         
+        rhs_last_scalar_is_unsigned = is_unsigned;
         return;
     
     }
@@ -27188,11 +27197,13 @@ static void emit_load_assignment_rhs_expression_to_pair_prec_internal (const cha
         if (op == TOK_LOGAND || op == TOK_LOGOR) {
         
             emit_assignment64_logical_op_to_pair_now (op, lo, hi);
+            result_unsigned = 0;
             current_pair_is_eax_edx = result_pair_is_eax_edx;
         
         } else if (is_value_compare_operator (op)) {
         
             emit_assignment64_compare_op_to_pair_now (op, lo, hi, is_unsigned);
+            result_unsigned = 0;
             current_pair_is_eax_edx = result_pair_is_eax_edx;
         
         } else {
@@ -27296,7 +27307,10 @@ static void emit_load_assignment_rhs_expression_to_pair_prec_internal (const cha
         rhs_last_expression_is_wide = true_is_wide || false_is_wide;
     
     } else {
+    
         rhs_last_expression_is_wide = 1;
+        rhs_last_scalar_is_unsigned = result_unsigned;
+    
     }
 
 }

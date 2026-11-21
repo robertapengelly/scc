@@ -82,6 +82,7 @@ static int rhs_last_pointer_depth = 0;
 static int rhs_last_pointed_size = 0;
 static int rhs_deref_cast_operand = 0;
 
+static int rhs_last_scalar_is_unsigned = -1;
 static int rhs_last_expression_is_void = 0;
 static int rhs_allow_void_function_value = 0;
 
@@ -19740,6 +19741,7 @@ static int current_floating_token_is_nonzero_now (void) {
 
 static void emit_load_assignment_rhs_to_reg (const char *reg) {
 
+    rhs_last_scalar_is_unsigned = -1;
     clear_rhs_last_pointer_info ();
     
     if (tok.kind == TOK_STAR && source_starts_double_deref_at_now (tok.caret)) {
@@ -28599,6 +28601,8 @@ static int emit_load_assignment_binary_expression_prec_to_reg (const char *reg, 
     
     if (rhs_last_explicit_integer_cast_signedness >= 0) {
         is_unsigned = rhs_last_explicit_integer_cast_signedness;
+    } else if (rhs_last_scalar_is_unsigned >= 0) {
+        is_unsigned = rhs_last_scalar_is_unsigned;
     }
     
     /*
@@ -28736,6 +28740,8 @@ static int emit_load_assignment_binary_expression_prec_to_reg (const char *reg, 
     }
     
     set_rhs_last_pointer_info (expr_pointer_depth, expr_pointed_size);
+    rhs_last_scalar_is_unsigned = is_unsigned;
+    
     return is_unsigned;
 
 }
@@ -28885,6 +28891,8 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
             }
             
             emit_compare_rax_rdx_to_reg (op, reg, is_unsigned);
+            rhs_last_scalar_is_unsigned = 0;
+            
             return;
         
         }
@@ -28905,18 +28913,22 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
                 rhs_signedness = rhs_last_explicit_integer_cast_signedness;
             } else if (postfix_member_seen) {
                 rhs_signedness = postfix_member_is_unsigned ? 1 : 0;
+            } else if (rhs_signedness < 0) {
+                rhs_signedness = rhs_last_scalar_is_unsigned;
             }
         
         }
         
         warn_signedness_comparison_values_now (lhs_signedness, rhs_signedness, rhs_report_start, rhs_report_caret);
         
-        if (lhs_pointer_depth > 0 || rhs_last_pointer_depth > 0) {
+        if (rhs_signedness == 1 || lhs_pointer_depth > 0 || rhs_last_pointer_depth > 0) {
             is_unsigned = 1;
         }
         
         emit_pop_reg_now ("rax");
+        
         emit_compare_rax_rdx_to_reg (op, reg, is_unsigned);
+        rhs_last_scalar_is_unsigned = 0;
     
     }
 
@@ -29176,6 +29188,7 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
             emit_mov_imm_to_reg_now (reg, 0);
             emit_statement_label (end_label);
             
+            rhs_last_scalar_is_unsigned = 0;
             continue;
         
         }
@@ -29197,6 +29210,7 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
             emit_mov_imm_to_reg_now (reg, 1);
             emit_statement_label (end_label);
             
+            rhs_last_scalar_is_unsigned = 0;
             continue;
         
         }
