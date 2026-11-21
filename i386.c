@@ -12859,7 +12859,7 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
                     emit_load_local_to_reg_ex (lo, src->offset, src->size, src->is_unsigned);
                 }
                 
-                emit_extend_pair_high_from_low (lo, hi, src->size, src->is_unsigned);
+                emit_extend_pair_high_from_low (lo, hi, src->size, src->pointer_depth > 0 || src->is_unsigned);
             
             }
             
@@ -12913,7 +12913,7 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
             } else {
             
                 emit_load_global_to_reg_ex (lo, name, get_global_symbol_size (name), get_global_symbol_unsigned (name));
-                emit_extend_pair_high_from_low (lo, hi, get_global_symbol_size (name), get_global_symbol_unsigned (name));
+                emit_extend_pair_high_from_low (lo, hi, get_global_symbol_size (name), get_global_symbol_pointer_depth (name) > 0 || get_global_symbol_unsigned (name));
             
             }
             
