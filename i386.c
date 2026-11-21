@@ -11886,6 +11886,8 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
     
     if (_accept (TOK_LPAREN)) {
     
+        int old_assignment64_stop_before_condition_operator;
+        
         if (token_starts_type_name ()) {
         
             int cast_size = 0;
@@ -12018,8 +12020,13 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
         
         }
         
+        old_assignment64_stop_before_condition_operator = assignment64_stop_before_condition_operator;
+        assignment64_stop_before_condition_operator = 0;
+        
         emit_load_assignment_rhs_expression_to_pair (lo, hi, 1);
         expect (TOK_RPAREN, ")");
+        
+        assignment64_stop_before_condition_operator = old_assignment64_stop_before_condition_operator;
         
         {
         
@@ -18739,6 +18746,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         const char *paren_call_start = 0;
         const char *paren_call_caret = 0;
         
+        int old_assignment32_stop_before_condition_operator;
         unsigned long paren_call_line = 0;
         
         if (emit_load_deref_assignment_expression_to_reg_now (reg)) {
@@ -19081,6 +19089,9 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         
         }
         
+        old_assignment32_stop_before_condition_operator = assignment32_stop_before_condition_operator;
+        assignment32_stop_before_condition_operator = 0;
+        
         emit_load_assignment_rhs_expression_to_reg (reg);
         
         if (postfix_member_seen && (tok.kind == TOK_INCR || tok.kind == TOK_DECR)) {
@@ -19104,6 +19115,8 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             emit_load_assignment_rhs_expression_to_reg (reg);
         
         }
+        
+        assignment32_stop_before_condition_operator = old_assignment32_stop_before_condition_operator;
         
         if (paren_call_name && tok.kind == TOK_RPAREN) {
         
