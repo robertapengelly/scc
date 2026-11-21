@@ -29555,6 +29555,32 @@ static int parse_indirect_assignment_statement (void) {
             emit_load_global_to_reg ("edx", name, DATA_PTR);
         }
         
+        if (deref_size == (DATA_LLONG & 0x1f) && !deref_is_floating && (op == TOK_PLUSEQ || op == TOK_MINUSEQ)) {
+        
+            emit_push_reg_now ("edx");
+            
+            emit_load_assignment_rhs_expression_to_pair ("eax", "edx", 0);
+            emit_pop_reg_now ("ecx");
+            
+            if (state->syntax & ASM_SYNTAX_INTEL) {
+            
+                fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    %s dword [ecx], eax\n" : "    %s dword ptr [ecx], eax\n", op == TOK_PLUSEQ ? "add" : "sub");
+                fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    %s dword [ecx + 4], edx\n" : "    %s dword ptr [ecx + 4], edx\n", op == TOK_PLUSEQ ? "adc" : "sbb");
+            
+            } else {
+            
+                fprintf (state->ofp, "    %sl %%eax, (%%ecx)\n", op == TOK_PLUSEQ ? "add" : "sub");
+                fprintf (state->ofp, "    %sl %%edx, 4(%%ecx)\n", op == TOK_PLUSEQ ? "adc" : "sbb");
+            
+            }
+            
+            expect_semi_or_recover ();
+            
+            free (name);
+            return 1;
+        
+        }
+        
         if (op == TOK_ASSIGN) {
         
             if (deref_is_floating) {
