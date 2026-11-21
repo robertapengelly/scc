@@ -12944,6 +12944,15 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
     
     }
     
+    if (is_string_token ()) {
+    
+        emit_load_assignment_rhs_to_reg (lo);
+        emit_extend_pair_high_from_low (lo, hi, DATA_PTR & 0x1f, 1);
+        
+        return;
+    
+    }
+    
     if (recover_unknown_rhs_identifier ()) {
     
         if (state->ofp) {
