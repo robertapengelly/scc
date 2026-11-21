@@ -13248,8 +13248,8 @@ static int source_starts_double_deref_at_now (const char *p);
 static int emit_load_deref_assignment_expression_to_reg_now (const char *reg);
 static int emit_statement_rhs_const32_to_rdx_if_possible (void);
 
-static void emit_floating_stack_to_int_pair_now (const char *lo, const char *hi);
-static void emit_integer_pair_to_floating_stack_now (const char *lo, const char *hi, int size);
+static void emit_floating_stack_to_int_pair_now (const char *lo, const char *hi, int is_unsigned);
+static void emit_integer_pair_to_floating_stack_now (const char *lo, const char *hi, int size, int is_unsigned);
 
 static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
 
@@ -13267,7 +13267,7 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
             
                 if (!cast_is_pointer && !last_cast_type_is_floating && rhs_current_operand_is_floating_now ()) {
                 
-                    emit_load_floating_rhs_expression_now (DATA_DOUBLE & 0x1f);
+                    emit_load_floating_rhs_operand_now (DATA_DOUBLE & 0x1f);
                     
                     if (floating_rhs_result_in_eax_bool) {
                     
@@ -13286,7 +13286,7 @@ static void emit_load_assignment_rhs_to_pair (const char *lo, const char *hi) {
                     
                     } else {
                     
-                        emit_floating_stack_to_int_pair_now (lo, hi);
+                        emit_floating_stack_to_int_pair_now (lo, hi, cast_is_unsigned);
                         
                         if ((cast_size & 0x1f) != (DATA_LLONG & 0x1f)) {
                             emit_extend_pair_high_from_low (lo, hi, cast_size, cast_is_unsigned);
@@ -20057,6 +20057,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             
             int cast_base_size;
             int cast_is_unsigned = 0;
+            int cast_is_floating = 0;
             int cast_pointer_depth = 0;
             int cast_pointed_size = 0;
             
@@ -20078,6 +20079,7 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             
             cast_base_size = parsed_type_size & 0x1f;
             cast_is_unsigned = parsed_type_is_unsigned;
+            cast_is_floating = parsed_type_is_floating;
             
             if (parsed_type_tag_name[0]) {
                 cast_tag_name = xstrdup (parsed_type_tag_name);
@@ -20130,7 +20132,22 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
             declarator_first_array_count = saved_declarator_first_array_count;
             declarator_array_dimensions = saved_declarator_array_dimensions;
             
-            emit_load_assignment_rhs_to_reg (reg);
+            if (!cast_pointer_depth && !cast_is_floating && cast_base_size == (DATA_LLONG & 0x1f) && rhs_current_operand_is_floating_now ()) {
+            
+                emit_load_floating_rhs_operand_now (DATA_DOUBLE & 0x1f);
+                
+                if (floating_rhs_result_in_eax_bool) {
+                
+                    emit_mov_reg_to_reg_now (reg, "rax");
+                    floating_rhs_result_in_eax_bool = 0;
+                
+                } else {
+                    emit_floating_stack_to_int_pair_now (reg, "rdx", cast_is_unsigned);
+                }
+            
+            } else {
+                emit_load_assignment_rhs_to_reg (reg);
+            }
             
             if (cast_pointer_depth > 0) {
             
@@ -24437,7 +24454,7 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
                             floating_rhs_result_in_eax_bool = 0;
                         
                         } else {
-                            emit_floating_stack_to_int_pair_now ("rax", "rdx");
+                            emit_floating_stack_to_int_pair_now ("rax", "rdx", cast_is_unsigned);
                         }
                         
                         if ((cast_size & 0x1f) != (DATA_LLONG & 0x1f)) {
@@ -24448,7 +24465,7 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
                         emit_load_assignment_rhs_to_pair ("rax", "rdx");
                     }
                     
-                    emit_integer_pair_to_floating_stack_now ("rax", "rdx", cast_size);
+                    emit_integer_pair_to_floating_stack_now ("rax", "rdx", cast_size, cast_is_unsigned);
                     return;
                 
                 }
@@ -24960,6 +24977,16 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
         
             if (src->is_floating) {
                 emit_load_floating_symbol_now (src, name, src->size);
+            } else if (src->size == (DATA_LLONG & 0x1f) && !src->pointer_depth) {
+            
+                if (src->is_static && src->static_label) {
+                    emit_load_global64_to_pair ("rax", "rdx", src->static_label);
+                } else {
+                    emit_load_local64_to_pair (src->offset, "rax", "rdx");
+                }
+                
+                emit_integer_pair_to_floating_stack_now ("rax", "rdx", src->size, src->is_unsigned);
+            
             } else {
             
                 if (src->is_static && src->static_label) {
@@ -25015,6 +25042,11 @@ static void emit_load_floating_rhs_operand_now (int result_size) {
         
             if (get_global_symbol_floating (name)) {
                 emit_load_floating_symbol_now (0, name, get_global_symbol_size (name));
+            } else if (get_global_symbol_size (name) == (DATA_LLONG & 0x1f) && !get_global_symbol_pointer_depth (name)) {
+            
+                emit_load_global64_to_pair ("rax", "rdx", name);
+                emit_integer_pair_to_floating_stack_now ("rax", "rdx", DATA_LLONG & 0x1f, get_global_symbol_unsigned (name));
+            
             } else {
             
                 emit_load_global_to_reg_ex ("rax", name, get_global_symbol_size (name), get_global_symbol_unsigned (name));
@@ -25148,7 +25180,7 @@ static void emit_floating_binary_now (enum token_kind k) {
         
         case TOK_BSLASH:    case TOK_SLASHEQ:
         
-            fprintf (state->ofp, "    fdivrp\n");
+            fprintf (state->ofp, state->syntax & ASM_SYNTAX_INTEL ? "    fdivp\n" : "    fdivrp\n");
             break;
         
         default:
@@ -29199,15 +29231,36 @@ static void emit_floating_stack_to_int_reg_now (const char *reg) {
 
 }
 
-static void emit_floating_stack_to_int_pair_now (const char *lo, const char *hi) {
+static void emit_floating_stack_to_int_pair_now (const char *lo, const char *hi, int is_unsigned) {
 
+    int label;
+    
     if (!state->ofp) {
         return;
     }
     
+    (void) hi;
+    label = anon_label++;
+    
     if (state->syntax & ASM_SYNTAX_INTEL) {
     
-        fprintf (state->ofp, "    sub rsp, 12\n");
+        fprintf (state->ofp, "    sub rsp, %d\n", is_unsigned ? 24 : 12);
+        
+        if (is_unsigned) {
+        
+            fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov dword [rsp + 12], 0\n" : "    mov dword ptr [rsp + 12], 0\n");
+            fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov dword [rsp + 16], 0\n" : "    mov dword ptr [rsp + 16], 0\n");
+            fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov dword [rsp + 20], 1138753536\n" : "    mov dword ptr [rsp + 20], 1138753536\n");
+            fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    fcom qword [rsp + 16]\n" : "    fcom qword ptr [rsp + 16]\n");
+            fprintf (state->ofp, "    fnstsw ax\n");
+            fprintf (state->ofp, "    sahf\n");
+            fprintf (state->ofp, ((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jb L%d\n" : "    jb .L%d\n", label);
+            fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    fsub qword [rsp + 16]\n" : "    fsub qword ptr [rsp + 16]\n");
+            fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov dword [rsp + 12], 2147483648\n" : "    mov dword ptr [rsp + 12], 2147483648\n");
+            fprintf (state->ofp, ((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "L%d:\n" : ".L%d:\n", label);
+        
+        }
+        
         fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    fnstcw word [rsp + 8]\n" : "    fnstcw word ptr [rsp + 8]\n");
         fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov ax, word [rsp + 8]\n" : "    mov ax, word ptr [rsp + 8]\n");
         fprintf (state->ofp, "    or ah, 12\n");
@@ -29215,13 +29268,36 @@ static void emit_floating_stack_to_int_pair_now (const char *lo, const char *hi)
         fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    fldcw word [rsp + 10]\n" : "    fldcw word ptr [rsp + 10]\n");
         fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    fistp qword [rsp]\n" : "    fistp qword ptr [rsp]\n");
         fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    fldcw word [rsp + 8]\n" : "    fldcw word ptr [rsp + 8]\n");
-        fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov %s, dword [rsp]\n" : "    mov %s, dword ptr [rsp]\n", amd64_dword_reg_name_from_any (lo));
-        fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov %s, dword [rsp + 4]\n" : "    mov %s, dword ptr [rsp + 4]\n", amd64_dword_reg_name_from_any (hi));
-        fprintf (state->ofp, "    add rsp, 12\n");
+        
+        if (is_unsigned) {
+        
+            fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov eax, dword [rsp + 12]\n" : "    mov eax, dword ptr [rsp + 12]\n");
+            fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    or dword [rsp + 4], eax\n" : "    or dword ptr [rsp + 4], eax\n");
+        
+        }
+        
+        fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov %s, qword [rsp]\n" : "    mov %s, qword ptr [rsp]\n", lo);
+        fprintf (state->ofp, "    add rsp, %d\n", is_unsigned ? 24 : 12);
     
     } else {
     
-        fprintf (state->ofp, "    subq $12, %%rsp\n");
+        fprintf (state->ofp, "    subq $%d, %%rsp\n", is_unsigned ? 24 : 12);
+        
+        if (is_unsigned) {
+        
+            fprintf (state->ofp, "    movl $0, 12(%%rsp)\n");
+            fprintf (state->ofp, "    movl $0, 16(%%rsp)\n");
+            fprintf (state->ofp, "    movl $1138753536, 20(%%rsp)\n");
+            fprintf (state->ofp, "    fcoml 16(%%rsp)\n");
+            fprintf (state->ofp, "    fnstsw %%ax\n");
+            fprintf (state->ofp, "    sahf\n");
+            fprintf (state->ofp, "    jb .L%d\n", label);
+            fprintf (state->ofp, "    fsubl 16(%%rsp)\n");
+            fprintf (state->ofp, "    movl $2147483648, 12(%%rsp)\n");
+            fprintf (state->ofp, ".L%d:\n", label);
+        
+        }
+        
         fprintf (state->ofp, "    fnstcw 8(%%rsp)\n");
         fprintf (state->ofp, "    movw 8(%%rsp), %%ax\n");
         fprintf (state->ofp, "    orb $12, %%ah\n");
@@ -29229,37 +29305,72 @@ static void emit_floating_stack_to_int_pair_now (const char *lo, const char *hi)
         fprintf (state->ofp, "    fldcw 10(%%rsp)\n");
         fprintf (state->ofp, "    fistpll (%%rsp)\n");
         fprintf (state->ofp, "    fldcw 8(%%rsp)\n");
-        fprintf (state->ofp, "    movl (%%rsp), %%%s\n", amd64_dword_reg_name_from_any (lo));
-        fprintf (state->ofp, "    movl 4(%%rsp), %%%s\n", amd64_dword_reg_name_from_any (hi));
-        fprintf (state->ofp, "    addq $12, %%rsp\n");
+        
+        if (is_unsigned) {
+        
+            fprintf (state->ofp, "    movl 12(%%rsp), %%eax\n");
+            fprintf (state->ofp, "    orl %%eax, 4(%%rsp)\n");
+        
+        }
+        
+        fprintf (state->ofp, "    movq (%%rsp), %%%s\n", lo);
+        fprintf (state->ofp, "    addq $%d, %%rsp\n", is_unsigned ? 24 : 12);
     
     }
 
 }
 
-static void emit_integer_pair_to_floating_stack_now (const char *lo, const char *hi, int size) {
+static void emit_integer_pair_to_floating_stack_now (const char *lo, const char *hi, int size, int is_unsigned) {
 
+    int label;
+    
     if (!state->ofp) {
         return;
     }
     
+    (void) hi;
+    
     if ((size & 0x1f) == (DATA_LLONG & 0x1f)) {
     
+        label = anon_label++;
+        
         if (state->syntax & ASM_SYNTAX_INTEL) {
         
-            fprintf (state->ofp, "    sub rsp, 8\n");
-            fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov dword [rsp], %s\n" : "    mov dword ptr [rsp], %s\n", amd64_dword_reg_name_from_any (lo));
-            fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov dword [rsp + 4], %s\n" : "    mov dword ptr [rsp + 4], %s\n", amd64_dword_reg_name_from_any (hi));
+            fprintf (state->ofp, "    sub rsp, %d\n", is_unsigned ? 16 : 8);
+            fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov qword [rsp], %s\n" : "    mov qword ptr [rsp], %s\n", lo);
             fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    fild qword [rsp]\n" : "    fild qword ptr [rsp]\n");
-            fprintf (state->ofp, "    add rsp, 8\n");
+            
+            if (is_unsigned) {
+            
+                fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    test dword [rsp + 4], 2147483648\n" : "    test dword ptr [rsp + 4], 2147483648\n");
+                fprintf (state->ofp, ((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "    jz L%d\n" : "    jz .L%d\n", label);
+                fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov dword [rsp + 8], 0\n" : "    mov dword ptr [rsp + 8], 0\n");
+                fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    mov dword [rsp + 12], 1139802112\n" : "    mov dword ptr [rsp + 12], 1139802112\n");
+                fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    fadd qword [rsp + 8]\n" : "    fadd qword ptr [rsp + 8]\n");
+                fprintf (state->ofp, ((state->syntax & ASM_SYNTAX_MASM) || (state->syntax & ASM_SYNTAX_NASM)) ? "L%d:\n" : ".L%d:\n", label);
+            
+            }
+            
+            fprintf (state->ofp, "    add rsp, %d\n", is_unsigned ? 16 : 8);
         
         } else {
         
-            fprintf (state->ofp, "    subq $8, %%rsp\n");
-            fprintf (state->ofp, "    movl %%%s, (%%rsp)\n", amd64_dword_reg_name_from_any (lo));
-            fprintf (state->ofp, "    movl %%%s, 4(%%rsp)\n", amd64_dword_reg_name_from_any (hi));
+            fprintf (state->ofp, "    subq $%d, %%rsp\n", is_unsigned ? 16 : 8);
+            fprintf (state->ofp, "    movq %%%s, (%%rsp)\n", lo);
             fprintf (state->ofp, "    fildll (%%rsp)\n");
-            fprintf (state->ofp, "    addq $8, %%rsp\n");
+            
+            if (is_unsigned) {
+            
+                fprintf (state->ofp, "    testl $2147483648, 4(%%rsp)\n");
+                fprintf (state->ofp, "    jz .L%d\n", label);
+                fprintf (state->ofp, "    movl $0, 8(%%rsp)\n");
+                fprintf (state->ofp, "    movl $1139802112, 12(%%rsp)\n");
+                fprintf (state->ofp, "    faddl 8(%%rsp)\n");
+                fprintf (state->ofp, ".L%d:\n", label);
+            
+            }
+            
+            fprintf (state->ofp, "    addq $%d, %%rsp\n", is_unsigned ? 16 : 8);
         
         }
         
@@ -34975,6 +35086,10 @@ static int source_parenthesized_floating_condition_now (const char *p) {
     
     while (*p == ' ' || *p == '\t') {
         p++;
+    }
+    
+    if (*p == ')' && (strcmp (name, "float") == 0 || strcmp (name, "double") == 0)) {
+        return 1;
     }
     
     if (*p == '.') {
