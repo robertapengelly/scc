@@ -11469,8 +11469,8 @@ static int emit_parse_postfix_subscripts_to_reg_dims_now (const char *reg, int e
     while (tok.kind == TOK_LBRACK) {
     
         int dims_before = array_dimensions;
+        saw_subscript++;
         
-        saw_subscript = 1;
         get_token ();
         
         emit_push_reg_now (reg);
@@ -12915,7 +12915,7 @@ static int current_integer_expr_is_foldable_now (void) {
     enum token_kind first_kind;
     enum token_kind next_kind;
     
-    if (!const_integer_expr_text_is_foldable_now (tok.start)) {
+    if (tok.kind == TOK_LPAREN || !const_integer_expr_text_is_foldable_now (tok.start)) {
         return 0;
     }
     
@@ -17538,6 +17538,7 @@ static int emit_parse_postfix_copy_source_address_now (const char *reg, struct l
             int elem_size = last_elem_size;
             int member_seen = postfix_member_seen;
             int pointer_depth = 0, scalar_size = 0;
+            int array_dimensions = 0;
             
             if (!have_address) {
             
@@ -17556,6 +17557,8 @@ static int emit_parse_postfix_copy_source_address_now (const char *reg, struct l
                 
                     elem_size = src->is_array ? (src->pointer_depth ? DATA_PTR : (src->array_element_size > 0 ? src->array_element_size : src->pointed_size)) :
                         (src->pointer_depth > 1 ? DATA_PTR : src->pointed_size);
+                    
+                    array_dimensions = src->array_dimensions;
                     
                     if (src->is_array && !src->pointer_depth) {
                         current_object_tag_name = src->tag_name;
@@ -17578,6 +17581,8 @@ static int emit_parse_postfix_copy_source_address_now (const char *reg, struct l
                         (get_global_symbol_pointer_depth (src_name) ? DATA_PTR : (get_global_symbol_array_element_size (src_name) > 0 ? get_global_symbol_array_element_size (src_name) : get_global_symbol_pointed_size (src_name))) :
                             (get_global_symbol_pointer_depth (src_name) > 1 ? DATA_PTR : get_global_symbol_pointed_size (src_name));
                     
+                    array_dimensions = get_global_symbol_array_dimensions (src_name);
+                    
                     if (get_global_symbol_array (src_name) && !get_global_symbol_pointer_depth (src_name)) {
                         current_object_tag_name = get_global_symbol_tag_name (src_name);
                     } else if (!get_global_symbol_array (src_name) && get_global_symbol_pointer_depth (src_name) > 0) {
@@ -17594,7 +17599,15 @@ static int emit_parse_postfix_copy_source_address_now (const char *reg, struct l
             
             }
             
-            if (pointer_depth > 0 && scalar_size > 0) {
+            if (array_dimensions > 1 && pointer_depth == 0) {
+            
+                int row_size = elem_size;
+                
+                if (emit_parse_postfix_subscripts_to_reg_dims_now (reg, elem_size, scalar_size, 0, scalar_size, array_dimensions, 1, &elem_size) < array_dimensions) {
+                    elem_size = row_size;
+                }
+            
+            } else if (pointer_depth > 0 && scalar_size > 0) {
                 emit_parse_postfix_subscript_scaled_address_ex_to_reg_now (reg, elem_size, pointer_depth, scalar_size, &elem_size);
             } else {
                 emit_parse_postfix_subscript_scaled_address_to_reg_now (reg, elem_size);
@@ -29496,7 +29509,7 @@ static void emit_load_assignment_rhs_expression_to_pair (const char *lo, const c
              */
             emit_push_reg_now ("rax");
             
-            emit_load_assignment_rhs_to_pair ("rbx", "rcx");
+            emit_load_assignment64_binary_expression_prec_to_pair ("rbx", "rcx", is_unsigned, 1);
             emit_pop_reg_now ("rax");
         
         }
