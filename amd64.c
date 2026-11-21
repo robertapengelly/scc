@@ -6609,6 +6609,8 @@ static int parse_deref_cast_type_name (int *out_size) {
 
 }
 
+static void emit_load_floating_rhs_operand_now (int result_size);
+static void emit_floating_compare_to_rax_now (enum token_kind op);
 static void emit_load_assignment_rhs_expression_to_reg (const char *reg);
 static void emit_load_floating_rhs_expression_now (int result_size);
 static void emit_store_floating_to_local_now (long offset, int size);
@@ -14775,6 +14777,52 @@ static void amd64_emit_load_xmm0_to_floating_stack_now (int size) {
 
 }
 
+static void amd64_emit_store_floating_stack_to_xmm0_now (int size) {
+
+    if (!state->ofp) {
+        return;
+    }
+    
+    if (size == (DATA_FLOAT & 0x1f)) {
+    
+        if (state->syntax & ASM_SYNTAX_INTEL) {
+        
+            fprintf (state->ofp, "    sub rsp, 8\n");
+            fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    fstp dword [rsp]\n" : "    fstp dword ptr [rsp]\n"));
+            fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    movss xmm0, dword [rsp]\n" : "    movss xmm0, dword ptr [rsp]\n"));
+            fprintf (state->ofp, "    add rsp, 8\n");
+        
+        } else {
+        
+            fprintf (state->ofp, "    subq $8, %%rsp\n");
+            fprintf (state->ofp, "    fstps (%%rsp)\n");
+            fprintf (state->ofp, "    movss (%%rsp), %%xmm0\n");
+            fprintf (state->ofp, "    addq $8, %%rsp\n");
+        
+        }
+        
+        return;
+    
+    }
+    
+    if (state->syntax & ASM_SYNTAX_INTEL) {
+    
+        fprintf (state->ofp, "    sub rsp, 8\n");
+        fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    fstp qword [rsp]\n" : "    fstp qword ptr [rsp]\n"));
+        fprintf (state->ofp, (state->syntax & ASM_SYNTAX_NASM ? "    movsd xmm0, qword [rsp]\n" : "    movsd xmm0, qword ptr [rsp]\n"));
+        fprintf (state->ofp, "    add rsp, 8\n");
+    
+    } else {
+    
+        fprintf (state->ofp, "    subq $8, %%rsp\n");
+        fprintf (state->ofp, "    fstpl (%%rsp)\n");
+        fprintf (state->ofp, "    movsd (%%rsp), %%xmm0\n");
+        fprintf (state->ofp, "    addq $8, %%rsp\n");
+    
+    }
+
+}
+
 static void emit_call_identifier_to_reg_now (const char *name, const char *reg, const char *name_start, const char *name_caret, unsigned long name_line);
 static void emit_assignment_binary_op (enum token_kind op, int is_unsigned);
 static void emit_store_member_to_addr_reg_now (const char *addr_reg, int offset, const char *value_reg, int size);
@@ -21909,7 +21957,23 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
     } else if (tok.kind == TOK_XMARK) {
     
         get_token ();
-        emit_load_assignment_rhs_to_reg (reg);
+        
+        if (rhs_current_operand_is_floating_now ()) {
+        
+            emit_load_floating_rhs_operand_now (DATA_DOUBLE & 0x1f);
+            
+            if (state->ofp) {
+                fprintf (state->ofp, "    fldz\n");
+            }
+            
+            emit_floating_compare_to_rax_now (TOK_NOTEQ);
+            floating_rhs_result_in_eax_bool = 0;
+            
+            emit_mov_reg_to_reg_now (reg, "rax");
+        
+        } else {
+            emit_load_assignment_rhs_to_reg (reg);
+        }
         
         if (state->ofp) {
         
@@ -24144,6 +24208,19 @@ static void emit_floating_compare_to_rax_now (enum token_kind op) {
         fprintf (state->ofp, "    fnstsw ax\n");
         fprintf (state->ofp, "    sahf\n");
         fprintf (state->ofp, "    %s al\n", setcc);
+        
+        if (op == TOK_NOTEQ) {
+        
+            fprintf (state->ofp, "    setp ah\n");
+            fprintf (state->ofp, "    or al, ah\n");
+        
+        } else if (op == TOK_EQEQ || op == TOK_LESS || op == TOK_LTEQ) {
+        
+            fprintf (state->ofp, "    setnp ah\n");
+            fprintf (state->ofp, "    and al, ah\n");
+        
+        }
+        
         fprintf (state->ofp, "    movzx eax, al\n");
     
     } else if (state->syntax & ASM_SYNTAX_INTEL) {
@@ -24153,6 +24230,19 @@ static void emit_floating_compare_to_rax_now (enum token_kind op) {
         fprintf (state->ofp, "    fnstsw ax\n");
         fprintf (state->ofp, "    sahf\n");
         fprintf (state->ofp, "    %s al\n", setcc);
+        
+        if (op == TOK_NOTEQ) {
+        
+            fprintf (state->ofp, "    setp ah\n");
+            fprintf (state->ofp, "    or al, ah\n");
+        
+        } else if (op == TOK_EQEQ || op == TOK_LESS || op == TOK_LTEQ) {
+        
+            fprintf (state->ofp, "    setnp ah\n");
+            fprintf (state->ofp, "    and al, ah\n");
+        
+        }
+        
         fprintf (state->ofp, "    movzx eax, al\n");
     
     } else {
@@ -24162,6 +24252,19 @@ static void emit_floating_compare_to_rax_now (enum token_kind op) {
         fprintf (state->ofp, "    fnstsw %%ax\n");
         fprintf (state->ofp, "    sahf\n");
         fprintf (state->ofp, "    %s %%al\n", setcc);
+        
+        if (op == TOK_NOTEQ) {
+        
+            fprintf (state->ofp, "    setp %%ah\n");
+            fprintf (state->ofp, "    orb %%ah, %%al\n");
+        
+        } else if (op == TOK_EQEQ || op == TOK_LESS || op == TOK_LTEQ) {
+        
+            fprintf (state->ofp, "    setnp %%ah\n");
+            fprintf (state->ofp, "    andb %%ah, %%al\n");
+        
+        }
+        
         fprintf (state->ofp, "    movzbl %%al, %%eax\n");
     
     }
@@ -28795,6 +28898,61 @@ static int is_assignment32_condition_stop_operator (enum token_kind k) {
 
 }
 
+static void emit_floating_stack_to_int_reg_now (const char *reg);
+
+static int emit_load_floating_comparison_to_reg_now (const char *reg, int logical_operand) {
+
+    if (rhs_current_operand_is_floating_now ()) {
+    
+        emit_load_floating_rhs_expression_now (DATA_DOUBLE & 0x1f);
+        
+        /*
+         * Floating comparisons leave their boolean result in rax.
+         * Do not run that through fistp: emit_floating_compare_to_rax_now()
+         * has already consumed both x87 operands with fcompp, so the x87
+         * stack no longer contains a value to convert.
+         */
+        if (!floating_rhs_result_in_eax_bool && (logical_operand || tok.kind == TOK_LOGAND || tok.kind == TOK_LOGOR)) {
+        
+            if (state->ofp) {
+                fprintf (state->ofp, "    fldz\n");
+            }
+            
+            emit_floating_compare_to_rax_now (TOK_NOTEQ);
+        
+        }
+        
+        if (floating_rhs_result_in_eax_bool) {
+        
+            if (state->ofp && strcmp (reg, "rax") != 0) {
+            
+                if (state->syntax & ASM_SYNTAX_INTEL) {
+                    fprintf (state->ofp, "    mov %s, rax\n", reg);
+                } else {
+                    fprintf (state->ofp, "    movq %%rax, %%%s\n", reg);
+                }
+            
+            }
+            
+            floating_rhs_result_in_eax_bool = 0;
+            
+            clear_rhs_last_pointer_info ();
+            clear_postfix_member_info ();
+            
+            rhs_last_scalar_is_unsigned = 0;
+            return 1;
+        
+        }
+        
+        emit_floating_stack_to_int_reg_now (reg);
+        return 1;
+    
+    }
+    
+    return 0;
+
+}
+
 static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
 
     int64_s rhs_enum_value;
@@ -28810,6 +28968,10 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
     
     const char *rhs_report_start;
     const char *rhs_report_caret;
+    
+    if (emit_load_floating_comparison_to_reg_now (reg, 0)) {
+        return;
+    }
     
     rhs_last_explicit_integer_cast_signedness = -1;
     
@@ -29130,39 +29292,6 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
     int end_label;
     
     postfix_member_seen = 0;
-    
-    if (rhs_current_operand_is_floating_now ()) {
-    
-        emit_load_floating_rhs_expression_now (DATA_DOUBLE & 0x1f);
-        
-        /*
-         * Floating comparisons leave their boolean result in rax.
-         * Do not run that through fistp: emit_floating_compare_to_rax_now()
-         * has already consumed both x87 operands with fcompp, so the x87
-         * stack no longer contains a value to convert.
-         */
-        if (floating_rhs_result_in_eax_bool) {
-        
-            if (state->ofp && strcmp (reg, "rax") != 0) {
-            
-                if (state->syntax & ASM_SYNTAX_INTEL) {
-                    fprintf (state->ofp, "    mov %s, rax\n", reg);
-                } else {
-                    fprintf (state->ofp, "    movq %%rax, %%%s\n", reg);
-                }
-            
-            }
-            
-            floating_rhs_result_in_eax_bool = 0;
-            return;
-        
-        }
-        
-        emit_floating_stack_to_int_reg_now (reg);
-        return;
-    
-    }
-    
     emit_load_assignment_compare_expression_to_reg (reg);
     
     for (;;) {
@@ -29180,7 +29309,11 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
             get_token ();
             
             emit_test_reg_jump_zero_now (reg, false_label);
-            emit_load_assignment_compare_expression_to_reg (reg);
+            
+            if (!emit_load_floating_comparison_to_reg_now (reg, 1)) {
+                emit_load_assignment_compare_expression_to_reg (reg);
+            }
+            
             emit_test_reg_jump_zero_now (reg, false_label);
             emit_mov_imm_to_reg_now (reg, 1);
             emit_statement_jump (end_label);
@@ -29202,7 +29335,11 @@ static void emit_load_assignment_rhs_expression_to_reg (const char *reg) {
             get_token ();
             
             emit_test_reg_jump_nonzero_now (reg, true_label);
-            emit_load_assignment_compare_expression_to_reg (reg);
+            
+            if (!emit_load_floating_comparison_to_reg_now (reg, 1)) {
+                emit_load_assignment_compare_expression_to_reg (reg);
+            }
+            
             emit_test_reg_jump_nonzero_now (reg, true_label);
             emit_mov_imm_to_reg_now (reg, 0);
             emit_statement_jump (end_label);
@@ -34797,6 +34934,33 @@ static int source_parenthesized_floating_condition_now (const char *p) {
         p++;
     }
     
+    {
+    
+        const char *q = p;
+        int depth = 0;
+        
+        while (*q) {
+        
+            if (*q == '(') {
+                depth++;
+            } else if (*q == ')') {
+            
+                if (!depth) {
+                    break;
+                }
+                
+                depth--;
+            
+            } else if (!depth && ((q[0] == '&' && q[1] == '&') || (q[0] == '|' && q[1] == '|'))) {
+                return 0;
+            }
+            
+            q++;
+        
+        }
+    
+    }
+    
     if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_')) {
         return 0;
     }
@@ -38223,6 +38387,27 @@ static void emit_statement_jump_if_false (int label) {
     statement_condition_constant_known = 0;
     statement_condition_constant_value = 0;
     
+    if (rhs_current_operand_is_floating_now () && !token_is_const_floating_condition_operand_now ()) {
+    
+        emit_load_floating_rhs_expression_now (DATA_DOUBLE & 0x1f);
+        
+        if (!floating_rhs_result_in_eax_bool) {
+        
+            if (state->ofp) {
+                fprintf (state->ofp, "    fldz\n");
+            }
+            
+            emit_floating_compare_to_rax_now (TOK_NOTEQ);
+        
+        }
+        
+        floating_rhs_result_in_eax_bool = 0;
+        
+        emit_statement_rax_truth_jump_if_false_and_tail (label);
+        return;
+    
+    }
+    
     if (emit_statement_ident_immediate_compare_jump_if_false_now (label)) {
         return;
     }
@@ -39779,6 +39964,12 @@ static void parse_statement (void) {
                 }
                 
                 emit_load_floating_rhs_expression_now (current_function_return_size);
+                
+                if (floating_rhs_result_in_eax_bool) {
+                    emit_rax_bool_to_floating_stack_now ();
+                }
+                
+                amd64_emit_store_floating_stack_to_xmm0_now (current_function_return_size);
             
             } else {
             
