@@ -27149,6 +27149,9 @@ static int assignment64_operator_precedence_now (enum token_kind op) {
 
 static void emit_assignment64_bool_result_to_pair_now (const char *lo, const char *hi) {
 
+    postfix_member_seen = 0;
+    clear_rhs_last_pointer_info ();
+    
     if (!state->ofp) {
         return;
     }
