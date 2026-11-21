@@ -1222,7 +1222,7 @@ static int parse_sizeof_member_expr_size (int leading_stars, int consume_inner_r
                 final_pointed_size = member_pointed_size;
                 
                 final_is_array = member_is_array;
-                final_array_element_size = member_is_array ? member_size : 0;
+                final_array_element_size = member_is_array ? member_pointed_size : 0;
                 
                 if (member_tag_name) {
                 
