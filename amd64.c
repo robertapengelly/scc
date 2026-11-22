@@ -15032,7 +15032,7 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
                     emit_parse_postfix_subscript_scaled_address_to_reg_now (reg, subscript_elem_size);
                 }
                 
-                if (tok.kind != TOK_RPAREN) {
+                if (tok.kind != TOK_RPAREN || (pointer_depth == 0 && !current_object_tag_name && subscript_elem_size <= (DATA_PTR & 0x1f))) {
                     postfix_member_seen = 1;
                 }
                 
@@ -36231,7 +36231,12 @@ static int emit_statement_ident_enum_compare_jump_if_false_now (int label) {
      * directly so the following cmp/jcc sequence is structurally fixed.
      */
     if (!emit_statement_rhs_const32_or_enum_to_rdx_if_possible ()) {
-        return 0;
+    
+        emit_push_reg_now ("rax");
+        
+        emit_load_assignment_compare_expression_to_reg ("rdx");
+        emit_pop_reg_now ("rax");
+    
     }
     
     emit_statement_cmp_rax_rdx_jump_if_false_and_tail (op, is_unsigned, label);
@@ -36367,7 +36372,12 @@ static int emit_statement_member_enum_compare_jump_if_false_now (int label) {
     }
     
     if (!emit_statement_rhs_const32_or_enum_to_rdx_if_possible ()) {
-        return 0;
+    
+        emit_push_reg_now ("rax");
+        
+        emit_load_assignment_compare_expression_to_reg ("rdx");
+        emit_pop_reg_now ("rax");
+    
     }
     
     emit_statement_cmp_rax_rdx_jump_if_false_and_tail (op, is_unsigned, label);
