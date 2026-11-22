@@ -11336,12 +11336,14 @@ static int emit_parse_postfix_subscript_scaled_address_ex_to_reg_now (const char
     
     while (tok.kind == TOK_LBRACK) {
     
-        saw_subscript = 1;
+        saw_subscript++;
         get_token ();
         
         emit_push_reg_now (reg);
+        
         emit_load_subscript_index_to_reg_now (index_reg);
         expect (TOK_RBRACK, "]");
+        
         emit_pop_reg_now (reg);
         
         if (tok.kind == TOK_LBRACK) {
@@ -17595,6 +17597,7 @@ static int emit_parse_postfix_copy_source_address_now (const char *reg, struct l
             int member_seen = postfix_member_seen;
             int pointer_depth = 0, scalar_size = 0;
             int array_dimensions = 0;
+            int subscript_count = 0;
             
             if (!have_address) {
             
@@ -17664,9 +17667,9 @@ static int emit_parse_postfix_copy_source_address_now (const char *reg, struct l
                 }
             
             } else if (pointer_depth > 0 && scalar_size > 0) {
-                emit_parse_postfix_subscript_scaled_address_ex_to_reg_now (reg, elem_size, pointer_depth, scalar_size, &elem_size);
+                subscript_count = emit_parse_postfix_subscript_scaled_address_ex_to_reg_now (reg, elem_size, pointer_depth, scalar_size, &elem_size);
             } else {
-                emit_parse_postfix_subscript_scaled_address_to_reg_now (reg, elem_size);
+                subscript_count = emit_parse_postfix_subscript_scaled_address_to_reg_now (reg, elem_size);
             }
             
             last_elem_size = elem_size;
@@ -17687,6 +17690,11 @@ static int emit_parse_postfix_copy_source_address_now (const char *reg, struct l
                 if (postfix_member_pointer_depth > 0) {
                     postfix_member_pointer_depth--;
                 }
+            
+            } else if (pointer_depth > 0 && subscript_count > 0 && pointer_depth + array_dimensions > subscript_count) {
+            
+                postfix_member_pointer_depth = pointer_depth + array_dimensions - subscript_count;
+                postfix_member_pointed_size = scalar_size;
             
             }
             
