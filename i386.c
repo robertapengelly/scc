@@ -25247,6 +25247,14 @@ static void emit_call_identifier_to_reg_now (const char *name, const char *reg, 
                     
                     } else if (arg_narrows_wide_integer) {
                         emit_push_reg_now ("eax");
+                    } else if (!use_inline && !arg_is_floating && !arg_starts_address_of && !rhs_last_pointer_depth && postfix_member_seen && postfix_member_pointer_depth == 0 && !postfix_value_is_array && postfix_member_size == (DATA_LLONG & 0x1f) && !postfix_member_is_floating &&
+                        get_global_symbol_has_prototype (name) && argc < get_global_symbol_param_count (name) &&
+                            get_global_symbol_param_size (name, argc) == (DATA_PTR & 0x1f) &&
+                                !get_global_symbol_param_floating (name, argc) && !get_global_symbol_param_pointer_depth (name, argc)) {
+                    
+                        emit_load_deref_reg_now ("eax", DATA_INT & 0x1f);
+                        emit_push_reg_now ("eax");
+                    
                     } else if (!use_inline && !arg_is_floating && !arg_starts_address_of && !rhs_last_pointer_depth && postfix_member_seen && postfix_member_pointer_depth == 0 && !postfix_value_is_array && postfix_member_size > (DATA_PTR & 0x1f)) {
                     
                         arg_bytes = postfix_member_size;
