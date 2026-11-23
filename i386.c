@@ -16324,6 +16324,9 @@ static int emit_parse_postfix_copy_source_address_now (const char *reg, struct l
         ensure_global_function_symbol (src_name, name_start, name_caret, name_line);
         emit_call_identifier_to_reg_now (src_name, reg, name_start, name_caret, name_line);
         
+        last_elem_size = get_global_symbol_pointer_depth (src_name) > 1 ? (DATA_PTR & 0x1f) : get_global_symbol_pointed_size (src_name);
+        last_lvalue_size = last_elem_size;
+        
         have_address = 1;
         have_direct_object_pointer = 1;
     
@@ -38844,7 +38847,7 @@ static void parse_statement (void) {
 
 }
 
-static void parse_function_body (const char *name, int storage_class, int is_inline, int is_noreturn, int is_naked, int return_is_void, int return_is_floating, int return_is_unsigned, int return_size, unsigned long function_line, const char *function_start, const char *function_caret) {
+static void parse_function_body (const char *name, int storage_class, int is_inline, int is_noreturn, int is_naked, int return_is_void, int return_is_floating, int return_is_unsigned, int return_size, int return_pointer_depth, unsigned long function_line, const char *function_start, const char *function_caret) {
 
     int old_return_label = current_return_label;
     int should_emit = 1;
@@ -38947,6 +38950,11 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
         }
         
         set_global_symbol_size (name, return_is_void ? DATA_VOID : return_size);
+        
+        if (return_pointer_depth > 0) {
+            set_global_symbol_pointer_info (name, return_pointer_depth, declarator_pointed_size_now ());
+        }
+        
         set_global_symbol_unsigned (name, return_is_unsigned);
         set_global_symbol_floating (name, return_is_floating);
         set_global_symbol_returns_void (name, return_is_void);
@@ -39281,7 +39289,7 @@ static int parse_possible_knr_function (void) {
     
     if (is_type_start (tok.kind) || tok.kind == TOK_LBRACE) {
     
-        parse_function_body (name, STORAGE_NONE, 0, 0, 0, 0, 0, 0, DATA_INT & 0x1f, name_line, name_start, name_caret);
+        parse_function_body (name, STORAGE_NONE, 0, 0, 0, 0, 0, 0, DATA_INT & 0x1f, 0, name_line, name_start, name_caret);
         
         if (parsed_dllexport || declarator_dllexport) {
         
@@ -40869,7 +40877,8 @@ static void parse_external_after_type (void) {
                     (declarator_is_pointer ? 0 : parsed_type_is_floating),
                         (declarator_is_pointer ? 0 : parsed_type_is_unsigned),
                             (declarator_is_pointer ? DATA_PTR : parsed_type_size),
-                                name_line, name_start, name_caret);
+                                (declarator_is_pointer ? (declarator_pointer_depth > 0 ? declarator_pointer_depth : 1) : 0),
+                                    name_line, name_start, name_caret);
             
             free (name);
             return;

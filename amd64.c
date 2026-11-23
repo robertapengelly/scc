@@ -17530,6 +17530,9 @@ static int emit_parse_postfix_copy_source_address_now (const char *reg, struct l
         ensure_global_function_symbol (src_name, name_start, name_caret, name_line);
         emit_call_identifier_to_reg_now (src_name, reg, name_start, name_caret, name_line);
         
+        last_elem_size = get_global_symbol_pointer_depth (src_name) > 1 ? (DATA_PTR & 0x1f) : get_global_symbol_pointed_size (src_name);
+        last_lvalue_size = last_elem_size;
+        
         have_address = 1;
         have_direct_object_pointer = 1;
     
@@ -40700,6 +40703,11 @@ static void parse_function_body (const char *name, int storage_class, int is_inl
         }
         
         set_global_symbol_size (name, return_is_void ? DATA_VOID : return_size);
+        
+        if (return_pointer_depth > 0) {
+            set_global_symbol_pointer_info (name, return_pointer_depth, declarator_pointed_size_now (), parsed_type_size);
+        }
+        
         set_global_symbol_unsigned (name, return_pointer_depth > 0 ? 0 : return_is_unsigned);
         set_global_symbol_floating (name, return_is_floating);
         set_global_symbol_returns_void (name, return_is_void);
