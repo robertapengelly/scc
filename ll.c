@@ -270,9 +270,6 @@ int load_line (char **line_p, char **line_end_p, char **real_line_p, unsigned lo
                 
                 } else if (ll_data->line[pos_in_line] == '\\') {
                 
-                    /*ll_data->line[pos_in_line] = ' ';*/
-                    /*pos_in_line--;*/
-                    
                     while (pos_in_real_line < ll_data->read_size) {
                     
                         if (ll_data->real_line[pos_in_real_line] == '\r' || ll_data->real_line[pos_in_real_line] == '\n') {

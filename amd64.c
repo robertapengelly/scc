@@ -9738,6 +9738,13 @@ static void parse_block (void) {
                         
                         }
                         
+                        while (elem_index < object_size / elem_size) {
+                        
+                            append_local_zero_initializer (inits, &init_count, MAX_LOCAL_INITS, object_offset + (elem_index * elem_size), elem_size);
+                            elem_index++;
+                        
+                        }
+                        
                         expect (TOK_RBRACE, "}");
                     
                     } else if (object_is_auto && declarator_has_array && !declarator_is_pointer && (parsed_type_size & 0x1f) == (DATA_CHAR & 0x1f) && is_string_token ()) {
