@@ -158,6 +158,7 @@ static int postfix_member_pointer_depth = 0;
 static int postfix_member_pointed_size = 0;
 static int postfix_member_seen = 0;
 static int postfix_copy_lvalue_size = 0;
+static int postfix_member_address_saved = 0;
 
 static const char *postfix_copy_lvalue_tag_name = 0;
 
@@ -13756,6 +13757,7 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
     postfix_member_size = 0;
     postfix_member_is_floating = 0;
     postfix_member_is_unsigned = 0;
+    postfix_member_address_saved = 0;
     
     postfix_member_calling_convention = TOK_EOF;
 
@@ -14136,6 +14138,13 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
             
             if (state->ofp) {
             
+                if (tok.kind == TOK_INCR || tok.kind == TOK_DECR) {
+                
+                    emit_push_reg_now (reg);
+                    postfix_member_address_saved = 1;
+                
+                }
+                
                 if (strcmp (reg, "edx") != 0) {
                 
                     if (state->syntax & ASM_SYNTAX_INTEL) {
@@ -14207,7 +14216,25 @@ static void emit_apply_postfix_member_incdec_now (const char *reg, enum token_ki
     if (state->ofp) {
     
         const char *insn = op == TOK_INCR ? "inc" : "dec";
-        (void) reg;
+        int restore = postfix_member_address_saved && strcmp (reg, "edx") == 0;
+        
+        if (postfix_member_address_saved) {
+        
+            if (restore) {
+            
+                if (state->syntax & ASM_SYNTAX_INTEL) {
+                    fprintf (state->ofp, state->syntax & ASM_SYNTAX_NASM ? "    xchg edx, dword [esp]\n" : "    xchg edx, dword ptr [esp]\n");
+                } else {
+                    fprintf (state->ofp, "    xchgl %%edx, (%%esp)\n");
+                }
+            
+            } else {
+                emit_pop_reg_now ("edx");
+            }
+        
+        }
+        
+        postfix_member_address_saved = 0;
         
         if (postfix_member_pointer_depth > 0) {
         
@@ -14228,12 +14255,13 @@ static void emit_apply_postfix_member_incdec_now (const char *reg, enum token_ki
                     fprintf (state->ofp, "    %s dword ptr [edx + %d], %d\n", arith, postfix_member_offset, step);
                 }
                 
-                return;
+                goto finish;
             
             } else {
             
                 fprintf (state->ofp, "    %sl $%d, %d(%%edx)\n", arith, step, postfix_member_offset);
-                return;
+                goto finish;
+            
             }
         
         }
@@ -14282,6 +14310,12 @@ static void emit_apply_postfix_member_incdec_now (const char *reg, enum token_ki
                 fprintf (state->ofp, "    %sl %d(%%edx)\n", insn, postfix_member_offset);
             }
         
+        }
+        
+    finish:
+        
+        if (restore) {
+            emit_pop_reg_now ("edx");
         }
     
     }
