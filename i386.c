@@ -10187,6 +10187,10 @@ static int emit_parse_postfix_subscripts_to_reg_dims_now (const char *reg, int e
     if (final_elem_size) {
         *final_elem_size = elem_size;
     }
+    
+    if (saw_subscript) {
+        rhs_last_scalar_is_unsigned = is_unsigned && elem_size >= (DATA_INT & 0x1f) ? 1 : 0;
+    }
 
     return saw_subscript;
 
@@ -14029,6 +14033,7 @@ static void emit_apply_postfix_member_access_to_reg_now (const char *reg) {
                  * instruction.types[instruction.operands].
                  */
                 postfix_member_size = subscript_elem_size;
+                postfix_member_is_unsigned = is_unsigned && subscript_elem_size >= (DATA_INT & 0x1f);
                 
                 if (is_array && array_dimensions > subscript_count) {
                     postfix_value_is_array = 1;
