@@ -78,6 +78,7 @@ static int index_step_size (int size) {
 
 }
 
+static int rhs_last_narrow_unsigned_for_warning = 0;
 static int rhs_last_pointer_depth = 0;
 static int rhs_last_pointed_size = 0;
 static int rhs_deref_cast_operand = 0;
@@ -19847,7 +19848,9 @@ static int current_floating_token_is_nonzero_now (void) {
 
 static void emit_load_assignment_rhs_to_reg (const char *reg) {
 
+    rhs_last_narrow_unsigned_for_warning = 0;
     rhs_last_scalar_is_unsigned = -1;
+    
     clear_rhs_last_pointer_info ();
     
     if (tok.kind == TOK_STAR && source_starts_double_deref_at_now (tok.caret)) {
@@ -22019,7 +22022,9 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
     } else if (tok.kind == TOK_TILDE) {
     
         get_token ();
+        
         emit_load_assignment_rhs_to_reg (reg);
+        rhs_last_narrow_unsigned_for_warning = 0;
         
         if (state->ofp) {
         
@@ -22126,6 +22131,10 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
         }
         
         emit_load_assignment_rhs_to_reg (reg);
+        
+        if (negate) {
+            rhs_last_narrow_unsigned_for_warning = 0;
+        }
         
         if (negate && state->ofp) {
         
@@ -22508,6 +22517,12 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                     set_rhs_last_pointer_info (src->pointer_depth > 0 ? src->pointer_depth - 1 : 0, src->pointed_size);
                 }
                 
+                if (saw_subscript && !postfix_member_seen && !postfix_value_is_array && !rhs_last_pointer_depth &&
+                    final_subscript_elem_size > 0 && final_subscript_elem_size < (DATA_INT & 0x1f) &&
+                        (src->pointer_depth > 0 ? src->pointed_is_unsigned : src->is_unsigned)) {
+                    rhs_last_narrow_unsigned_for_warning = 1;
+                }
+                
                 free (name);
                 return;
             
@@ -22575,6 +22590,12 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                     postfix_member_is_floating = get_global_symbol_floating (name);
                     postfix_member_is_unsigned = get_global_symbol_unsigned (name);
                 
+                }
+                
+                if (saw_subscript && !postfix_member_seen && final_subscript_elem_size > 0 &&
+                    final_subscript_elem_size < (DATA_INT & 0x1f) &&
+                        (get_global_symbol_pointer_depth (name) > 0 ? get_global_symbol_pointed_is_unsigned (name) : get_global_symbol_unsigned (name))) {
+                    rhs_last_narrow_unsigned_for_warning = 1;
                 }
                 
                 free (name);
@@ -28902,6 +28923,7 @@ static int emit_load_assignment_binary_expression_prec_to_reg (const char *reg, 
         }
         
         emit_assignment_binary_op (op, is_unsigned);
+        rhs_last_narrow_unsigned_for_warning = 0;
         
         if (op == TOK_MINUS && lhs_pointer_depth > 0 && rhs_pointer_depth > 0 && index_step_size (lhs_pointed_size) > 1) {
             emit_divide_rax_by_const_now (index_step_size (lhs_pointed_size));
@@ -29082,6 +29104,8 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
         lhs_signedness = -1;
     } else if (postfix_member_seen) {
         lhs_signedness = promoted_integer_signedness_for_warning_now (postfix_member_is_unsigned, postfix_member_size);
+    } else if (rhs_last_narrow_unsigned_for_warning) {
+        lhs_signedness = 2;
     } else if (lhs_signedness < 0) {
         lhs_signedness = is_unsigned ? 1 : 0;
     }
@@ -29169,6 +29193,8 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
                 rhs_signedness = rhs_last_explicit_integer_cast_signedness;
             } else if (postfix_member_seen) {
                 rhs_signedness = promoted_integer_signedness_for_warning_now (postfix_member_is_unsigned, postfix_member_size);
+            } else if (rhs_last_narrow_unsigned_for_warning) {
+                rhs_signedness = 2;
             } else if (rhs_signedness != 2 && rhs_last_scalar_is_unsigned >= 0) {
                 rhs_signedness = rhs_last_scalar_is_unsigned;
             }
