@@ -19117,8 +19117,8 @@ static void emit_load_assignment_rhs_to_reg (const char *reg) {
                 emit_apply_integer_cast_to_reg_now (reg, cast_base_size, cast_is_unsigned);
                 clear_rhs_last_pointer_info ();
                 
-                rhs_last_scalar_is_unsigned = cast_is_unsigned ? 1 : 0;
-                rhs_last_explicit_integer_cast_signedness = cast_is_unsigned ? 1 : 0;
+                rhs_last_scalar_is_unsigned = cast_is_unsigned && cast_base_size >= (DATA_INT & 0x1f) ? 1 : 0;
+                rhs_last_explicit_integer_cast_signedness = cast_is_unsigned && cast_base_size >= (DATA_INT & 0x1f) ? 1 : 0;
             
             }
             
@@ -26304,7 +26304,7 @@ static int emit_load_assignment_binary_expression_prec_to_reg (const char *reg, 
     }
     
     if (postfix_member_seen) {
-        is_unsigned = postfix_member_is_unsigned ? 1 : 0;
+        is_unsigned = postfix_member_is_unsigned && postfix_member_size >= (DATA_INT & 0x1f) ? 1 : 0;
     }
     
     expr_pointer_depth = rhs_last_pointer_depth;
@@ -26552,7 +26552,7 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
     if (lhs_pointer_depth > 0) {
         lhs_signedness = -1;
     } else if (postfix_member_seen) {
-        lhs_signedness = postfix_member_is_unsigned ? 1 : 0;
+        lhs_signedness = postfix_member_is_unsigned && postfix_member_size >= (DATA_INT & 0x1f) ? 1 : 0;
     } else if (lhs_signedness < 0) {
         lhs_signedness = is_unsigned ? 1 : 0;
     }
@@ -26639,8 +26639,8 @@ static void emit_load_assignment_compare_expression_to_reg (const char *reg) {
             } else if (rhs_last_explicit_integer_cast_signedness >= 0) {
                 rhs_signedness = rhs_last_explicit_integer_cast_signedness;
             } else if (postfix_member_seen) {
-                rhs_signedness = postfix_member_is_unsigned ? 1 : 0;
-            } else if (rhs_signedness < 0) {
+                rhs_signedness = postfix_member_is_unsigned && postfix_member_size >= (DATA_INT & 0x1f) ? 1 : 0;
+            } else if (rhs_signedness != 2 && rhs_last_scalar_is_unsigned >= 0) {
                 rhs_signedness = rhs_last_scalar_is_unsigned;
             }
         
@@ -33303,7 +33303,7 @@ static int rhs_current_operand_signedness_for_warning_now (void) {
                 return -1;
             }
             
-            return src->is_unsigned ? 1 : 0;
+            return src->is_unsigned && src->size >= (DATA_INT & 0x1f) ? 1 : 0;
         
         }
         
@@ -33313,7 +33313,7 @@ static int rhs_current_operand_signedness_for_warning_now (void) {
                 return -1;
             }
             
-            return get_global_symbol_unsigned (tok.ident) ? 1 : 0;
+            return get_global_symbol_unsigned (tok.ident) && get_global_symbol_size (tok.ident) >= (DATA_INT & 0x1f) ? 1 : 0;
         
         }
     
@@ -33384,7 +33384,7 @@ static int rhs_current_operand_is_unsigned_now (void) {
                 return 1;
             }
             
-            return src->is_unsigned ? 1 : 0;
+            return src->is_unsigned && src->size >= (DATA_INT & 0x1f) ? 1 : 0;
         
         }
         
@@ -33394,7 +33394,7 @@ static int rhs_current_operand_is_unsigned_now (void) {
                 return 1;
             }
             
-            return get_global_symbol_unsigned (tok.ident) ? 1 : 0;
+            return get_global_symbol_unsigned (tok.ident) && get_global_symbol_size (tok.ident) >= (DATA_INT & 0x1f) ? 1 : 0;
         
         }
     
@@ -34033,7 +34033,7 @@ static int emit_statement_ident_immediate_compare_jump_if_false_now (int label) 
         if (rhs_last_pointer_depth > 0) {
             rhs_signedness = -1;
         } else if (postfix_member_seen) {
-            rhs_signedness = postfix_member_is_unsigned ? 1 : 0;
+            rhs_signedness = postfix_member_is_unsigned && postfix_member_size >= (DATA_INT & 0x1f) ? 1 : 0;
         }
         
         warn_signedness_comparison_values_now (lhs_signedness, rhs_signedness, rhs_report_start, rhs_report_caret);
@@ -34071,7 +34071,7 @@ static int emit_statement_ident_immediate_compare_jump_if_false_now (int label) 
     
     if (postfix_member_seen) {
     
-        is_unsigned = postfix_member_is_unsigned ? 1 : 0;
+        is_unsigned = postfix_member_is_unsigned && postfix_member_size >= (DATA_INT & 0x1f) ? 1 : 0;
         lhs_signedness = is_unsigned ? 1 : 0;
     
     }
@@ -34157,7 +34157,7 @@ static int emit_statement_ident_immediate_compare_jump_if_false_now (int label) 
     } else if (rhs_last_explicit_integer_cast_signedness >= 0) {
         rhs_signedness = rhs_last_explicit_integer_cast_signedness;
     } else if (postfix_member_seen) {
-        rhs_signedness = postfix_member_is_unsigned ? 1 : 0;
+        rhs_signedness = postfix_member_is_unsigned && postfix_member_size >= (DATA_INT & 0x1f) ? 1 : 0;
     }
     
     warn_signedness_comparison_values_now (lhs_signedness, rhs_signedness, rhs_report_start, rhs_report_caret);
